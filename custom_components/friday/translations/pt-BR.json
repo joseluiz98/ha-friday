@@ -1,0 +1,40 @@
+{
+  "issues": {
+    "protocol_mismatch": {
+      "title": "Protocolo do agente F.R.I.D.A.Y. incompatível",
+      "description": "O agente F.R.I.D.A.Y. fala uma versão do protocolo que esta integração não suporta. Atualize a integração ou o agente."
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "F.R.I.D.A.Y.",
+        "description": "Adicione a integração F.R.I.D.A.Y. O servidor e os satélites entram depois, como dispositivos desta entrada."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "A F.R.I.D.A.Y. já está configurada."
+    }
+  },
+  "config_subentries": {
+    "server": {
+      "entry_type": "Servidor F.R.I.D.A.Y.",
+      "initiate_flow": {
+        "user": "Adicionar servidor"
+      },
+      "step": {
+        "user": {
+          "title": "Servidor F.R.I.D.A.Y.",
+          "data": {
+            "host": "Endereço",
+            "port": "Porta",
+            "token": "Token"
+          },
+          "data_description": {
+            "token": "O token do agente, no servidor."
+          }
+        }
+      }
+    }
+  }
+}

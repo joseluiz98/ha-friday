@@ -4,5 +4,37 @@
       "title": "F.R.I.D.A.Y. agent protocol mismatch",
       "description": "The F.R.I.D.A.Y. agent speaks a protocol version this integration does not support. Update the integration or the agent so both use the same protocol."
     }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "F.R.I.D.A.Y.",
+        "description": "Add the F.R.I.D.A.Y. integration. Add the server and satellites afterwards as devices of this entry."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "F.R.I.D.A.Y. is already configured."
+    }
+  },
+  "config_subentries": {
+    "server": {
+      "entry_type": "F.R.I.D.A.Y. Server",
+      "initiate_flow": {
+        "user": "Add server"
+      },
+      "step": {
+        "user": {
+          "title": "F.R.I.D.A.Y. Server",
+          "data": {
+            "host": "Host",
+            "port": "Port",
+            "token": "Token"
+          },
+          "data_description": {
+            "token": "The agent token from the server (never shared outside Home Assistant)."
+          }
+        }
+      }
+    }
   }
 }
