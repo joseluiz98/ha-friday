@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
+from .voice_switch import DESCRIPTOR
+
 VERSION = "0.1.0"
 
 
@@ -92,6 +94,9 @@ def proxmox_metrics(node_status: dict, smart: dict, last_vzdump: dict) -> dict:
             "last_backup": backup}
 
 
+VOICE_DESCRIPTOR = DESCRIPTOR
+
+
 def capabilities(proxmox: bool) -> list[dict]:
     def s(key, name, **kw):
         return {"key": key, "platform": kw.pop("platform", "sensor"), "name": name,
@@ -115,4 +120,5 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("nvme_temperature", "Proxmox NVMe temperature", unit="°C", device_class="temperature",
           available=proxmox, **m),
         s("last_backup", "Proxmox last backup", device_class="timestamp", available=proxmox),
+        {**VOICE_DESCRIPTOR, "available": True},
     ]

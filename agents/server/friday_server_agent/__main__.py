@@ -15,6 +15,7 @@ from aiohttp import web
 from friday_agent_core.server import AgentCore
 
 from . import collectors as c
+from . import voice_switch as vsw
 
 LOG = logging.getLogger("friday_server_agent")
 SECRETS = os.environ.get("FRIDAY_SECRETS_DIR", "/srv/friday/secrets")
@@ -80,10 +81,12 @@ async def main() -> None:
         raise SystemExit("missing agent token")
     status_token = _read(f"{SECRETS}/status_token")
     pve = _read(f"{SECRETS}/proxmox_ro")
-    state: dict = {}
+    switch = vsw.VoiceSwitch(os.environ.get("FRIDAY_VOICE_ENABLED_FILE", vsw.DEFAULT_PATH))
+    state: dict = {"voice": switch.enabled}
     device = {"id": "server", "kind": "server", "name": "F.R.I.D.A.Y. Server",
               "model": "Proxmox VM", "sw_version": c.VERSION}
-    core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state), {})
+    core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
+                     {"set": vsw.make_set_handler(switch)})
 
     async def loop(fn, arg, period, label, src):
         while True:
