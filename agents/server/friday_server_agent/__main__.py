@@ -19,8 +19,8 @@ from . import collectors as c
 LOG = logging.getLogger("friday_server_agent")
 SECRETS = os.environ.get("FRIDAY_SECRETS_DIR", "/srv/friday/secrets")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8801"))
-# Proxmox read-only token file /srv/friday/secrets/proxmox_ro: one line,
-# `PVEAPIToken=<user>@<realm>!<tokenid>=<secret>` (PVEAuditor role), sent verbatim as the Authorization header.
+# Proxmox read-only token file /srv/friday/secrets/proxmox_ro: ONE line, "PVEAPIToken=" + user@realm + "!" + tokenid + "=" + secret;
+# the PVE API token string (PVEAuditor role) for the Authorization header, sent verbatim; format: see docs/protocol.md/README.
 PVE = "https://192.0.2.252:8006/api2/json/nodes/hypervisor"
 
 
