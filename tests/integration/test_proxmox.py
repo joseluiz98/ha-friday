@@ -191,3 +191,43 @@ async def test_reconfigure_fills_proxmox_fields(hass, monkeypatch):
     data = entry.subentries["sub1"].data
     assert data["token"] == "t0k"  # blank token keeps the stored one
     assert data["proxmox_vmid"] == 101 and data["proxmox_token_secret"] == "s3cr3t"
+
+
+async def test_reboot_button_unique_id_from_subentry(hass):
+    from homeassistant.helpers import device_registry as dr
+    agent = FakeAgent(_hello("server", "vm-x", []))
+    entry = await _setup(hass, agent, CFG)
+    await wait_for(lambda: entry.runtime_data["sub1"].hello is not None)
+    await hass.async_block_till_done()
+    ent = er.async_get(hass).async_get_entity_id("button", DOMAIN, "sub1_reboot_vm")
+    assert ent is not None
+    reg = er.async_get(hass).async_get(ent)
+    dev = dr.async_get(hass).async_get(reg.device_id)
+    assert (DOMAIN, "vm-x") in dev.identifiers or (DOMAIN, "server") in dev.identifiers
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_reconfigure_blank_secret_keeps_stored(hass, monkeypatch):
+    from custom_components.friday import connection as c
+
+    async def noop(self):
+        return None
+
+    monkeypatch.setattr(c.FridayConnection, "start", noop)
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=DOMAIN, title="F.R.I.D.A.Y.",
+        subentries_data=[ConfigSubentryData(
+            data={"host": "10.0.0.5", "port": 8801, "token": "t0k", **CFG},
+            subentry_type="server", title="Server", unique_id=None, subentry_id="sub1")])
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    r = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, "server"), context={"source": "reconfigure", "subentry_id": "sub1"})
+    r = await hass.config_entries.subentries.async_configure(
+        r["flow_id"], {"host": "10.0.0.5", "port": 8801, "proxmox_url": "https://pve:8006",
+                       "proxmox_node": "hypervisor", "proxmox_vmid": 101,
+                       "proxmox_token_id": "ha@pve!friday-reboot"})
+    assert r["type"] == FlowResultType.ABORT
+    await hass.async_block_till_done()
+    assert entry.subentries["sub1"].data["proxmox_token_secret"] == "s3cr3t"

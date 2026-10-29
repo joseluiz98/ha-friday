@@ -55,7 +55,8 @@ def sample_vm() -> dict:
 
 def _log_tail() -> str:
     r = subprocess.run(["docker", "logs", "--since", "6h", "friday"], stdout=subprocess.PIPE,
-                       stderr=subprocess.STDOUT, timeout=15, text=True, errors="replace")
+                       stderr=subprocess.STDOUT, timeout=15, text=True, errors="replace",
+                       check=True)  # raises on docker failure: callers fail closed
     return r.stdout
 
 

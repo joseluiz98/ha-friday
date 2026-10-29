@@ -8,6 +8,7 @@ Voice Gateway / Brain have no separate restart: see README ("Process restarts").
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 
 COMPOSE = "/opt/friday/image/docker-compose.yml"
@@ -32,14 +33,21 @@ def make_handlers(log_tail, restart, push_log):
         if cmd.get("key") != "restart_friday":
             return {"ok": False, "error": "unknown_key"}
         try:
-            busy = conversation_open(log_tail())
+            text = await asyncio.to_thread(log_tail)
+            if text is None:
+                raise OSError("no log")
+            busy = conversation_open(text)
         except (OSError, subprocess.SubprocessError):
             await push_log("Restart F.R.I.D.A.Y. refused: container log unavailable", {})
             return {"ok": False, "error": "log_unavailable"}
         if busy:
             await push_log("Restart F.R.I.D.A.Y. refused: a conversation is open", {})
             return {"ok": False, "error": "conversation_open"}
-        restart()
+        try:
+            restart()
+        except (OSError, subprocess.SubprocessError):
+            await push_log("Restart F.R.I.D.A.Y. failed to start", {})
+            return {"ok": False, "error": "restart_failed"}
         await push_log("Restart F.R.I.D.A.Y. started", {})
         return {}
 

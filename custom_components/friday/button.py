@@ -6,6 +6,7 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.util import slugify
 
 from .const import DEVICE_KIND_SATELLITE, DOMAIN
 from .entity import FridayEntity, setup_platform
@@ -77,10 +78,18 @@ class RebootVmButton(ButtonEntity):
         self._entry = entry
         self._cfg = cfg
         self._subentry_id = subentry_id
-        self._attr_unique_id = "server_reboot_vm"
-        self.entity_id = "button.friday_server_reboot_vm"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, "server")}, manufacturer="F.R.I.D.A.Y.")
+        self._attr_unique_id = f"{subentry_id}_reboot_vm"
+        self.entity_id = f"button.friday_{slugify(self._device_id)}_reboot_vm"
+
+    @property
+    def _device_id(self) -> str:
+        conn = self._entry.runtime_data.get(self._subentry_id)
+        hello = getattr(conn, "hello", None)
+        return str(hello.device["id"]) if hello else "server"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self._device_id)}, manufacturer="F.R.I.D.A.Y.")
 
     async def async_press(self) -> None:
         conn = self._entry.runtime_data.get(self._subentry_id)
