@@ -28,12 +28,38 @@
           "data": {
             "host": "Endereço",
             "port": "Porta",
-            "token": "Token"
+            "token": "Token",
+            "proxmox_url": "URL do Proxmox",
+            "proxmox_node": "Nó do Proxmox",
+            "proxmox_vmid": "ID da VM no Proxmox",
+            "proxmox_token_id": "ID do token do Proxmox",
+            "proxmox_token_secret": "Segredo do token do Proxmox"
           },
           "data_description": {
-            "token": "O token do agente, no servidor."
+            "token": "O token do agente, no servidor.",
+            "proxmox_token_secret": "Deixe em branco para manter o valor guardado. O botão Reiniciar VM só aparece com todos os campos do Proxmox preenchidos."
+          }
+        },
+        "reconfigure": {
+          "title": "Servidor F.R.I.D.A.Y.",
+          "data": {
+            "host": "Host",
+            "port": "Porta",
+            "token": "Token",
+            "proxmox_url": "URL do Proxmox",
+            "proxmox_node": "Nó do Proxmox",
+            "proxmox_vmid": "ID da VM no Proxmox",
+            "proxmox_token_id": "ID do token do Proxmox",
+            "proxmox_token_secret": "Segredo do token do Proxmox"
+          },
+          "data_description": {
+            "token": "Deixe em branco para manter o token guardado.",
+            "proxmox_token_secret": "Deixe em branco para manter o valor guardado. O botão Reiniciar VM só aparece com todos os campos do Proxmox preenchidos."
           }
         }
+      },
+      "abort": {
+        "reconfigure_successful": "Servidor atualizado."
       }
     }
   }

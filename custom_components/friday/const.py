@@ -18,3 +18,15 @@ DEVICE_KIND_SATELLITE = "satellite"
 
 ORIGINS = ("voice", "button", "ha", "agent", "system")
 ORIGIN_HA = "ha"
+
+CONF_PROXMOX_URL = "proxmox_url"
+CONF_PROXMOX_NODE = "proxmox_node"
+CONF_PROXMOX_VMID = "proxmox_vmid"
+CONF_PROXMOX_TOKEN_ID = "proxmox_token_id"
+CONF_PROXMOX_TOKEN_SECRET = "proxmox_token_secret"
+PROXMOX_FIELDS = (
+    CONF_PROXMOX_URL, CONF_PROXMOX_NODE, CONF_PROXMOX_VMID,
+    CONF_PROXMOX_TOKEN_ID, CONF_PROXMOX_TOKEN_SECRET,
+)
+DEFAULT_PROXMOX_URL = "https://192.0.2.252:8006"
+DEFAULT_PROXMOX_NODE = "hypervisor"

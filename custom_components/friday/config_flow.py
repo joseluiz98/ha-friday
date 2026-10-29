@@ -20,7 +20,37 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from .const import CONF_HOST, CONF_PORT, CONF_TOKEN, DEFAULT_PORT_SERVER, DOMAIN
+from .const import (
+    CONF_HOST, CONF_PORT, CONF_PROXMOX_NODE, CONF_PROXMOX_TOKEN_ID,
+    CONF_PROXMOX_TOKEN_SECRET, CONF_PROXMOX_URL, CONF_PROXMOX_VMID, CONF_TOKEN,
+    DEFAULT_PORT_SERVER, DEFAULT_PROXMOX_NODE, DEFAULT_PROXMOX_URL, DOMAIN,
+)
+
+_PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
+
+
+def _proxmox_schema(defaults: dict[str, Any]) -> dict:
+    """Optional Proxmox fields (the Reboot VM button exists only when all are filled)."""
+    def d(key: str, fallback: Any = None) -> dict:
+        value = defaults.get(key, fallback)
+        return {"suggested_value": value} if value not in (None, "") else {}
+
+    return {
+        vol.Optional(CONF_PROXMOX_URL, description=d(CONF_PROXMOX_URL, DEFAULT_PROXMOX_URL)): str,
+        vol.Optional(CONF_PROXMOX_NODE, description=d(CONF_PROXMOX_NODE, DEFAULT_PROXMOX_NODE)): str,
+        vol.Optional(CONF_PROXMOX_VMID, description=d(CONF_PROXMOX_VMID)): int,
+        vol.Optional(CONF_PROXMOX_TOKEN_ID, description=d(CONF_PROXMOX_TOKEN_ID)): str,
+        vol.Optional(CONF_PROXMOX_TOKEN_SECRET): _PASSWORD,
+    }
+
+
+def _proxmox_data(user_input: dict[str, Any], old: dict[str, Any]) -> dict[str, Any]:
+    """Filled Proxmox fields; a blank secret keeps the stored one."""
+    out = {k: v for k, v in user_input.items()
+           if k.startswith("proxmox_") and v not in (None, "")}
+    if CONF_PROXMOX_TOKEN_SECRET not in out and old.get(CONF_PROXMOX_TOKEN_SECRET):
+        out[CONF_PROXMOX_TOKEN_SECRET] = old[CONF_PROXMOX_TOKEN_SECRET]
+    return out
 
 
 class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -58,6 +88,7 @@ class ServerSubentryFlow(ConfigSubentryFlow):
                     CONF_HOST: user_input[CONF_HOST],
                     CONF_PORT: user_input[CONF_PORT],
                     CONF_TOKEN: user_input[CONF_TOKEN],
+                    **_proxmox_data(user_input, {}),
                 },
                 unique_id=f"{user_input[CONF_HOST]}:{user_input[CONF_PORT]}",
             )
@@ -67,9 +98,36 @@ class ServerSubentryFlow(ConfigSubentryFlow):
                 {
                     vol.Required(CONF_HOST): str,
                     vol.Required(CONF_PORT, default=DEFAULT_PORT_SERVER): int,
-                    vol.Required(CONF_TOKEN): TextSelector(
-                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
-                    ),
+                    vol.Required(CONF_TOKEN): _PASSWORD,
+                    **_proxmox_schema({}),
+                }
+            ),
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Fill or change the connection and Proxmox fields of an existing Server."""
+        subentry = self._get_reconfigure_subentry()
+        old = dict(subentry.data)
+        if user_input is not None:
+            data = {
+                CONF_HOST: user_input[CONF_HOST],
+                CONF_PORT: user_input[CONF_PORT],
+                CONF_TOKEN: user_input.get(CONF_TOKEN) or old[CONF_TOKEN],
+                **_proxmox_data(user_input, old),
+            }
+            return self.async_update_and_abort(
+                self._get_entry(), subentry, data=data,
+            )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HOST, default=old[CONF_HOST]): str,
+                    vol.Required(CONF_PORT, default=old[CONF_PORT]): int,
+                    vol.Optional(CONF_TOKEN): _PASSWORD,
+                    **_proxmox_schema(old),
                 }
             ),
         )

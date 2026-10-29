@@ -15,6 +15,7 @@ from aiohttp import web
 from friday_agent_core.server import AgentCore
 
 from . import collectors as c
+from . import commands as cmds
 from . import voice_switch as vsw
 
 LOG = logging.getLogger("friday_server_agent")
@@ -86,8 +87,9 @@ async def main() -> None:
     device = {"id": "server", "kind": "server", "name": "F.R.I.D.A.Y. Server",
               "model": "Proxmox VM", "sw_version": c.VERSION}
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
-                     {"set": vsw.make_set_handler(
-                         switch, state, lambda ch: core.push_state(ch, "ha"))})
+                     {"set": vsw.make_set_handler(switch, state, lambda ch: core.push_state(ch, "ha")),
+                      **cmds.make_handlers(_log_tail, cmds.compose_restart,
+                                           lambda m, d: core.push_log(m, d))})
 
     async def loop(fn, arg, period, label, src):
         while True:

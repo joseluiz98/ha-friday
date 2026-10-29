@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
+from .commands import RESTART_DESCRIPTOR
 from .voice_switch import DESCRIPTOR
 
 VERSION = "0.1.0"
@@ -121,4 +122,5 @@ def capabilities(proxmox: bool) -> list[dict]:
           available=proxmox, **m),
         s("last_backup", "Proxmox last backup", device_class="timestamp", available=proxmox),
         {**VOICE_DESCRIPTOR, "available": True},
+        {**RESTART_DESCRIPTOR, "available": True},
     ]

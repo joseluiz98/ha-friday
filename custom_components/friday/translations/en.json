@@ -28,12 +28,38 @@
           "data": {
             "host": "Host",
             "port": "Port",
-            "token": "Token"
+            "token": "Token",
+            "proxmox_url": "Proxmox URL",
+            "proxmox_node": "Proxmox node",
+            "proxmox_vmid": "Proxmox VM id",
+            "proxmox_token_id": "Proxmox token id",
+            "proxmox_token_secret": "Proxmox token secret"
           },
           "data_description": {
-            "token": "The agent token from the server (never shared outside Home Assistant)."
+            "token": "The agent token from the server (never shared outside Home Assistant).",
+            "proxmox_token_secret": "Leave blank to keep the stored value. The Reboot VM button appears only when all Proxmox fields are filled."
+          }
+        },
+        "reconfigure": {
+          "title": "F.R.I.D.A.Y. Server",
+          "data": {
+            "host": "Host",
+            "port": "Port",
+            "token": "Token",
+            "proxmox_url": "Proxmox URL",
+            "proxmox_node": "Proxmox node",
+            "proxmox_vmid": "Proxmox VM id",
+            "proxmox_token_id": "Proxmox token id",
+            "proxmox_token_secret": "Proxmox token secret"
+          },
+          "data_description": {
+            "token": "Leave blank to keep the stored token.",
+            "proxmox_token_secret": "Leave blank to keep the stored value. The Reboot VM button appears only when all Proxmox fields are filled."
           }
         }
+      },
+      "abort": {
+        "reconfigure_successful": "Server updated."
       }
     }
   }
