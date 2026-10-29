@@ -16,6 +16,7 @@ from friday_agent_core.server import AgentCore
 
 from . import collectors as c
 from . import commands as cmds
+from . import cost as costmod
 from . import voice_switch as vsw
 
 LOG = logging.getLogger("friday_server_agent")
@@ -87,8 +88,23 @@ async def main() -> None:
     state: dict = {"voice": switch.enabled}
     device = {"id": "server", "kind": "server", "name": "F.R.I.D.A.Y. Server",
               "model": "Proxmox VM", "sw_version": c.VERSION}
+    try:
+        tracker = costmod.CostTracker()
+    except ImportError:  # /opt/friday/cost missing: the other sensors keep working
+        LOG.warning("cost modules not found; Gemini cost sensors disabled")
+        tracker = None
+    else:
+        state["budget_brl"] = tracker.budget
+    voice_set = vsw.make_set_handler(switch, state, lambda ch: core.push_state(ch, "ha"))
+    budget_set = costmod.make_set_handler(tracker, state, lambda ch: core.push_state(ch, "ha")) if tracker else None
+
+    async def set_dispatch(cmd: dict) -> dict:
+        if cmd.get("key") == "budget_brl" and budget_set:
+            return await budget_set(cmd)
+        return await voice_set(cmd)
+
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
-                     {"set": vsw.make_set_handler(switch, state, lambda ch: core.push_state(ch, "ha")),
+                     {"set": set_dispatch,
                       **cmds.make_handlers(_log_tail, cmds.compose_restart,
                                            lambda m, d: core.push_log(m, d))})
 
@@ -109,6 +125,8 @@ async def main() -> None:
     tasks = [loop(sample_vm, None, 30, "vm", c.Source(c.vm_metrics(
                  "MemTotal: 1 kB\n", "0", (1, 1, 1, 1), "1", 1))),
              loop(sample_status, status_token, 30, "status", c.Source(c.status_metrics({})))]
+    if tracker:
+        tasks.append(loop(lambda: tracker.refresh(), None, 60, "cost", c.Source(["cost_today_brl"], 3)))
     if pve:
         tasks.append(loop(sample_proxmox, pve, 300, "proxmox", c.Source(PVE_KEYS)))
     runner = web.AppRunner(core.app())

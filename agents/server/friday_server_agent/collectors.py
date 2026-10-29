@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
+from . import cost
 from .commands import RESTART_DESCRIPTOR
 from .voice_switch import DESCRIPTOR
 
@@ -121,6 +122,8 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("nvme_temperature", "Proxmox NVMe temperature", unit="°C", device_class="temperature",
           available=proxmox, **m),
         s("last_backup", "Proxmox last backup", device_class="timestamp", available=proxmox),
+        *cost.descriptors(),
+        cost.BUDGET_DESCRIPTOR,
         {**VOICE_DESCRIPTOR, "available": True},
         {**RESTART_DESCRIPTOR, "available": True},
     ]
