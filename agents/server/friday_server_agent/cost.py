@@ -5,19 +5,24 @@ usage records, pricing.list_cost_usd for the list-price maths) instead of recomp
 Those modules are imported at runtime from COST_DIR; the pure functions below take the
 records and a `cost_usd(record)` callable, so they are testable without the VM.
 
-BRL_PER_USD: list price x 7.4 (memory "Cobranca do Gemini API"; same as DEFAULT_FACTOR in
-/opt/friday/cost/official.py). cost_report.py may show a slightly different factor (it
-derives one from the official monthly bill when available); the sensors deliberately use the
-documented constant.
+The sensors AGREE with cost_report.py: they use its Ctx (bill-calibrated R$/US$ factor per
+month, official figures for closed days) and fall back to BRL_PER_USD = 7.4 (list price x 7.4,
+memory "Cobranca do Gemini API"; = DEFAULT_FACTOR in official.py) only when no calibrated
+factor exists (Ctx.factor does that itself).
 """
 
 from __future__ import annotations
 
+import asyncio
 import calendar
+import logging
 import os
 import sys
-from datetime import date, datetime
+import threading
+from datetime import date, datetime, timedelta
 from pathlib import Path
+
+LOG = logging.getLogger(__name__)
 
 BRL_PER_USD = 7.4
 COST_DIR = os.environ.get("FRIDAY_COST_DIR", "/opt/friday/cost")
@@ -75,76 +80,108 @@ def _group(record: dict) -> str:
     return record.get("source", "")
 
 
-def compute(records, today: date, cost_usd, day_of, budget: float) -> dict:
-    """records: ledger records; cost_usd(record) -> USD or None (unpriced, skipped);
-    day_of(record) -> local date."""
-    today_by = dict.fromkeys((*SOURCES, "embeddings"), 0.0)
-    month = 0.0
-    for r in records:
+STATE_KEYS = ["cost_today_brl", "cost_month_brl", "cost_month_projection_brl", "cost_month_over_budget",
+              *(f"cost_today_{g}_brl" for g in (*SOURCES, "embeddings"))]
+FAIL_LIMIT = 3
+_warned_sources: set = set()
+
+
+def compute(ctx, today: date, budget: float, day_of) -> dict:
+    """ctx: a cost_report.Ctx (or look-alike: records, official, est(), total()).
+    Unknown ledger sources count only in the totals (logged once at debug)."""
+    today_recs = [r for r in ctx.records if day_of(r) == today]
+    groups = dict.fromkeys((*SOURCES, "embeddings"), 0.0)
+    for r in today_recs:
+        g = _group(r)
+        v = ctx.est(r)
+        if g in groups:
+            groups[g] += v or 0.0
+        elif g not in _warned_sources:
+            _warned_sources.add(g)
+            LOG.debug("cost: unknown ledger source %r counted in totals only", g)
+    # Same method as cost_report.cmd_month (inline there, so it cannot be imported): official
+    # figure for closed days, estimate otherwise.
+    first = today.replace(day=1)
+    by_day: dict = {}
+    for r in ctx.records:
         d = day_of(r)
-        if (d.year, d.month) != (today.year, today.month) or d > today:
-            continue
-        usd = cost_usd(r)
-        if usd is None:
-            continue
-        brl = usd * BRL_PER_USD
-        month += brl
-        if d == today:
-            today_by[_group(r)] = today_by.get(_group(r), 0.0) + brl
+        if first <= d <= today:
+            by_day.setdefault(d, []).append(r)
+    month, d = 0.0, first
+    while d <= today:
+        o = ctx.official.get(d)
+        if o and o["closed"]:
+            month += o["total_brl"]
+        elif by_day.get(d):
+            month += ctx.total(by_day[d], track_unpriced=False)
+        d += timedelta(days=1)
     days_in_month = calendar.monthrange(today.year, today.month)[1]
-    projection = month / today.day * days_in_month
     r2 = lambda x: round(x, 2)  # noqa: E731
-    out = {"cost_today_brl": r2(sum(today_by.values())), "cost_month_brl": r2(month),
-           "cost_month_projection_brl": r2(projection),
+    out = {"cost_today_brl": r2(ctx.total(today_recs, track_unpriced=False)),
+           "cost_month_brl": r2(month),
+           "cost_month_projection_brl": r2(month / today.day * days_in_month),
            "cost_month_over_budget": month > budget}
-    for src, v in today_by.items():
-        out[f"cost_today_{src}_brl"] = r2(v)
+    for g, v in groups.items():
+        out[f"cost_today_{g}_brl"] = r2(v)
     return out
 
 
 class CostTracker:
-    """Recomputes when today's usage file changes (mtime) or the date rolls over."""
+    """Recomputes when today's usage file changes (mtime), the date rolls over or the budget
+    changes. Thread-safe (the sampling loop and the set handler run in worker threads)."""
 
     def __init__(self, budget_path: str = BUDGET_PATH, state_dir: str = STATE_DIR,
                  cost_dir: str = COST_DIR, now=None) -> None:
         self.budget_path, self.state_dir, self.cost_dir = budget_path, state_dir, cost_dir
         self.budget = read_budget(budget_path)
-        self._now = now or (lambda: datetime.now(self._ledger.BRT))
-        self._key = None
-        self.last: dict = {}
+        self._lock = threading.Lock()
         if cost_dir not in sys.path:
             sys.path.insert(0, cost_dir)
-        import ledger  # noqa: PLC0415 - /opt/friday/cost
-        import pricing  # noqa: PLC0415
-        self._ledger, self._pricing = ledger, pricing
-        self._prices = None
-
-    def set_budget(self, value: float) -> dict:
-        self.budget = write_budget(value, self.budget_path)
+        import cost_report  # noqa: PLC0415 - /opt/friday/cost
+        import ledger  # noqa: PLC0415
+        self._report, self._ledger = cost_report, ledger
+        self._now = now or (lambda: datetime.now(ledger.BRT))
         self._key = None
+        self._failures = 0
+        self.last: dict = {}
+
+    def set_budget(self, value) -> dict:
+        with self._lock:
+            self.budget = write_budget(value, self.budget_path)
         return {"budget_brl": self.budget}
 
+    def _day_of(self, r):
+        return datetime.fromisoformat(r["ts"]).astimezone(self._ledger.BRT).date()
+
     def refresh(self) -> dict:
-        """Returns the changed state keys (all of them when the inputs changed)."""
-        today = self._now().date()
-        f = Path(self.state_dir) / "usage" / f"{today.isoformat()}.ndjson"
-        try:
-            mtime = f.stat().st_mtime
-        except OSError:
-            mtime = None
-        key = (today, mtime, self.budget)
-        if key == self._key:
-            return {}
-        if self._prices is None:
-            self._prices = self._pricing.load_prices()
-        records, _ = self._ledger.read(today.replace(day=1), today, self.state_dir)
-        state = compute(records, today, lambda r: self._pricing.list_cost_usd(r, self._prices),
-                        lambda r: datetime.fromisoformat(r["ts"]).astimezone(self._ledger.BRT).date(),
-                        self.budget)
-        self._key = key
-        changes = {k: v for k, v in state.items() if self.last.get(k) != v}
-        self.last = state
-        return changes
+        """Returns the changed state keys. After FAIL_LIMIT consecutive failures every cost key
+        goes to None (and is re-pushed when a value returns, even an equal one). Never raises."""
+        with self._lock:
+            try:
+                today = self._now().date()
+                f = Path(self.state_dir) / "usage" / f"{today.isoformat()}.ndjson"
+                try:
+                    mtime = f.stat().st_mtime
+                except OSError:
+                    mtime = None
+                key = (today, mtime, self.budget)
+                if key == self._key:
+                    return {}
+                ctx = self._report.Ctx(self.state_dir, today, None)
+                state = compute(ctx, today, self.budget, self._day_of)
+            except Exception as err:  # noqa: BLE001
+                self._failures += 1
+                LOG.warning("cost recompute failed: %s", type(err).__name__)
+                if self._failures == FAIL_LIMIT:
+                    self.last = dict.fromkeys(STATE_KEYS)
+                    self._key = None
+                    return dict(self.last)
+                return {}
+            self._failures = 0
+            self._key = key
+            changes = {k: v for k, v in state.items() if self.last.get(k) != v}
+            self.last = state
+            return changes
 
 
 def make_set_handler(tracker: CostTracker, state: dict, push):
@@ -153,10 +190,15 @@ def make_set_handler(tracker: CostTracker, state: dict, push):
         if cmd.get("key") != "budget_brl":
             return {"ok": False, "error": "unknown_key"}
         try:
-            changes = tracker.set_budget(cmd.get("value"))
-        except (OSError, ValueError, TypeError):
+            changes = await asyncio.to_thread(tracker.set_budget, cmd.get("value"))
+        except (ValueError, TypeError):
             return {"ok": False, "error": "invalid_value"}
-        changes.update(tracker.refresh())
+        except OSError:
+            return {"ok": False, "error": "write_failed"}
+        try:
+            changes.update(await asyncio.to_thread(tracker.refresh))
+        except Exception as err:  # noqa: BLE001 - budget is saved; the next sample catches up
+            LOG.warning("cost refresh after budget change failed: %s", type(err).__name__)
         state.update(changes)
         await push(changes)
         return {"data": {"budget_brl": tracker.budget}}

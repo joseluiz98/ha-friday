@@ -126,7 +126,7 @@ async def main() -> None:
                  "MemTotal: 1 kB\n", "0", (1, 1, 1, 1), "1", 1))),
              loop(sample_status, status_token, 30, "status", c.Source(c.status_metrics({})))]
     if tracker:
-        tasks.append(loop(lambda: tracker.refresh(), None, 60, "cost", c.Source(["cost_today_brl"], 3)))
+        tasks.append(loop(lambda: tracker.refresh(), None, 60, "cost", c.Source([])))
     if pve:
         tasks.append(loop(sample_proxmox, pve, 300, "proxmox", c.Source(PVE_KEYS)))
     runner = web.AppRunner(core.app())

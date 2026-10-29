@@ -1,0 +1,9 @@
+{
+  "gemini-3.8-flash": [
+    {"effective_from": "2026-01-01", "input_text": 0.75, "input_audio": null, "cache_read": 0.075, "output_text": 3.75, "output_audio": null},
+    {"effective_from": "2027-01-01", "input_text": 1.50, "input_audio": null, "cache_read": 0.15, "output_text": 7.50, "output_audio": null}
+  ],
+  "gemini-3.8-live": [
+    {"effective_from": "2026-01-01", "input_text": 0.75, "input_audio": 3.00, "cache_read": null, "output_text": 4.50, "output_audio": 12.00}
+  ]
+}
