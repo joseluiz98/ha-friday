@@ -53,7 +53,6 @@ class AgentCore:
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
         state = dict(self._state_fn())
-        self._last.update(state)
         await ws.send_json(
             {
                 "type": "hello",

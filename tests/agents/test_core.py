@@ -101,3 +101,23 @@ async def test_multiple_clients_and_event_log_caps(aiohttp_client):
         assert (await w.receive_json())["type"] == "event"
         assert (await w.receive_json())["type"] == "log"
         assert (await w.receive_json())["type"] == "capabilities"
+
+
+async def test_late_client_hello_does_not_suppress_push_for_existing(aiohttp_client):
+    current = {"volume": 3}
+    core = AgentCore(
+        token=TOKEN,
+        device={"id": "d1", "kind": "satellite", "name": "Sat"},
+        capabilities_fn=lambda: [],
+        state_fn=lambda: dict(current),
+        handlers={},
+    )
+    client = await aiohttp_client(core.app())
+    a = await client.ws_connect("/v1/ws", headers=HDR)
+    await a.receive_json()
+    current["volume"] = 5
+    b = await client.ws_connect("/v1/ws", headers=HDR)
+    assert (await b.receive_json())["state"] == {"volume": 5}
+    await core.push_state({"volume": 5}, "agent")
+    msg = await a.receive_json(timeout=1)
+    assert msg["changes"] == {"volume": 5}
