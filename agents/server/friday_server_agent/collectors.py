@@ -54,6 +54,32 @@ def status_metrics(status: dict) -> dict:
     }
 
 
+def status_changes(status: dict) -> dict:
+    """Like status_metrics, but omits conversation_open when the agent could not compute it
+    (transient docker logs failure), so a valid value is not overwritten by None."""
+    out = status_metrics(status)
+    if "conversation_open" not in status:
+        out.pop("conversation_open")
+    return out
+
+
+class Source:
+    """Tracks consecutive failures of one sample source; after `limit` failures its keys go to None."""
+
+    def __init__(self, keys, limit: int = 3) -> None:
+        self.keys = list(keys)
+        self.limit = limit
+        self.failures = 0
+
+    def ok(self, changes: dict) -> dict:
+        self.failures = 0
+        return changes
+
+    def failed(self) -> dict:
+        self.failures += 1
+        return {k: None for k in self.keys} if self.failures == self.limit else {}
+
+
 def proxmox_metrics(node_status: dict, smart: dict, last_vzdump: dict) -> dict:
     mem = (node_status.get("data") or {}).get("memory") or {}
     avail = mem.get("available", mem.get("free"))

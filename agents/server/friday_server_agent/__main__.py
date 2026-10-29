@@ -19,6 +19,8 @@ from . import collectors as c
 LOG = logging.getLogger("friday_server_agent")
 SECRETS = os.environ.get("FRIDAY_SECRETS_DIR", "/srv/friday/secrets")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8801"))
+# Proxmox read-only token file /srv/friday/secrets/proxmox_ro: one line,
+# `PVEAPIToken=<user>@<realm>!<tokenid>=<secret>` (PVEAuditor role), sent verbatim as the Authorization header.
 PVE = "https://192.0.2.252:8006/api2/json/nodes/hypervisor"
 
 
@@ -61,7 +63,7 @@ def sample_status(token: str) -> dict:
         status["conversation_open"] = c.conversation_open(_log_tail())
     except (OSError, subprocess.SubprocessError):
         pass
-    return c.status_metrics(status)
+    return c.status_changes(status)
 
 
 def sample_proxmox(header: str) -> dict:
@@ -83,19 +85,25 @@ async def main() -> None:
               "model": "Proxmox VM", "sw_version": c.VERSION}
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state), {})
 
-    async def loop(fn, arg, period, label):
+    async def loop(fn, arg, period, label, src):
         while True:
             try:
                 changes = await asyncio.to_thread(fn, arg) if arg is not None else await asyncio.to_thread(fn)
-                state.update(changes)
-                await core.push_state(changes, "agent")
+                changes = src.ok(changes)
             except Exception as err:  # noqa: BLE001 - never log URLs/headers
                 LOG.warning("%s sample failed: %s", label, type(err).__name__)
+                changes = src.failed()
+            if changes:
+                state.update(changes)
+                await core.push_state(changes, "agent")
             await asyncio.sleep(period)
 
-    tasks = [loop(sample_vm, None, 30, "vm"), loop(sample_status, status_token, 30, "status")]
+    PVE_KEYS = ["host_available_mb", "nvme_temperature", "last_backup"]
+    tasks = [loop(sample_vm, None, 30, "vm", c.Source(c.vm_metrics(
+                 "MemTotal: 1 kB\n", "0", (1, 1, 1, 1), "1", 1))),
+             loop(sample_status, status_token, 30, "status", c.Source(c.status_metrics({})))]
     if pve:
-        tasks.append(loop(sample_proxmox, pve, 300, "proxmox"))
+        tasks.append(loop(sample_proxmox, pve, 300, "proxmox", c.Source(PVE_KEYS)))
     runner = web.AppRunner(core.app())
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()

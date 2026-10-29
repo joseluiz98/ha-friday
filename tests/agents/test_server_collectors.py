@@ -58,3 +58,25 @@ def test_proxmox_unavailable_without_token():
     assert caps["vm_memory_pct"]["available"] is True
     caps = {d["key"]: d for d in c.capabilities(proxmox=True)}
     assert caps["nvme_temperature"]["available"] is True
+
+
+def test_source_nulls_keys_after_three_failures_and_recovers():
+    src = c.Source(["a", "b"])
+    assert src.failed() == {} and src.failed() == {}
+    assert src.failed() == {"a": None, "b": None}
+    assert src.failed() == {}  # pushed once, not repeated
+    assert src.ok({"a": 1}) == {"a": 1}
+    assert src.failed() == {} and src.failed() == {}
+    assert src.failed() == {"a": None, "b": None}
+
+
+def test_success_resets_failure_count():
+    src = c.Source(["a"])
+    src.failed(); src.failed(); src.ok({"a": 1})
+    assert src.failed() == {}
+
+
+def test_conversation_open_not_overwritten_when_not_computed():
+    s = {"ready": True}
+    assert "conversation_open" not in c.status_changes(s)
+    assert c.status_changes({**s, "conversation_open": False})["conversation_open"] is False
