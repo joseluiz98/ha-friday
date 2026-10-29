@@ -1,0 +1,13 @@
+{
+  "domain": "friday",
+  "name": "F.R.I.D.A.Y.",
+  "codeowners": ["@joseluiz98"],
+  "config_flow": true,
+  "documentation": "https://github.com/joseluiz98/ha-friday",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/joseluiz98/ha-friday/issues",
+  "requirements": [],
+  "version": "0.1.0",
+  "zeroconf": ["_friday._tcp.local."]
+}
