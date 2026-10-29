@@ -30,6 +30,7 @@ _LOGGER = logging.getLogger(__name__)
 BACKOFF_START = 1.0
 BACKOFF_MAX = 60.0
 HELLO_TIMEOUT = 10.0
+HEARTBEAT = 30.0
 
 
 def _remover(listeners: list, cb: Callable) -> Callable[[], None]:
@@ -156,7 +157,8 @@ class FridayConnection:
         session = async_get_clientsession(self.hass)
         url = f"ws://{self._host}:{self._port}{WS_PATH}"
         async with session.ws_connect(
-            url, headers={"Authorization": f"Bearer {self._token}"}
+            url, headers={"Authorization": f"Bearer {self._token}"},
+            heartbeat=HEARTBEAT,
         ) as ws:
             self._ws = ws
             async with asyncio.timeout(HELLO_TIMEOUT):
@@ -168,10 +170,12 @@ class FridayConnection:
                 and (isinstance(proto, bool) or not isinstance(proto, int)
                      or proto != PROTOCOL_VERSION)
             ):
-                self._protocol_mismatch()
-                await ws.close()
-                await asyncio.sleep(0)
                 self._mismatch = True
+                await ws.close()
+                # aiohttp can re-arm its heartbeat timer after close() when
+                # the last frame was just received; cancel it explicitly.
+                getattr(ws, "_cancel_heartbeat", lambda: None)()
+                self._protocol_mismatch()
                 return
             hello = parse_hello(msg)
             ir.async_delete_issue(self.hass, DOMAIN, f"protocol_{self._subentry_id}")

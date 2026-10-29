@@ -213,3 +213,28 @@ async def test_capabilities_listener(hass):
     await wait_for(lambda: seen)
     await c.stop()
     await agent.stop()
+
+
+async def test_silent_peer_detected_by_heartbeat(hass, monkeypatch):
+    monkeypatch.setattr(conn_mod, "HEARTBEAT", 0.2)
+
+    class Mute(FakeAgent):
+        async def handle(self, request):
+            ws = web.WebSocketResponse(autoping=False)
+            await ws.prepare(request)
+            self.connections += 1
+            self.sockets.append(ws)
+            await ws.send_json(self.hello)
+            await asyncio.sleep(1.5)  # never reads: pings go unanswered
+            return ws
+
+    agent = Mute()
+    c = await make(hass, agent)
+    avail = []
+    c.add_availability_listener(avail.append)
+    await c.start()
+    await wait_for(lambda: c.connected)
+    await wait_for(lambda: False in avail, timeout=3)
+    assert not c.connected
+    await c.stop()
+    await agent.stop()

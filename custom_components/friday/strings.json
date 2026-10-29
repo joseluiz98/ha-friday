@@ -1,0 +1,8 @@
+{
+  "issues": {
+    "protocol_mismatch": {
+      "title": "F.R.I.D.A.Y. agent protocol mismatch",
+      "description": "The F.R.I.D.A.Y. agent speaks a protocol version this integration does not support. Update the integration or the agent so both use the same protocol."
+    }
+  }
+}
