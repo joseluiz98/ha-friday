@@ -86,7 +86,8 @@ async def main() -> None:
     device = {"id": "server", "kind": "server", "name": "F.R.I.D.A.Y. Server",
               "model": "Proxmox VM", "sw_version": c.VERSION}
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
-                     {"set": vsw.make_set_handler(switch)})
+                     {"set": vsw.make_set_handler(
+                         switch, state, lambda ch: core.push_state(ch, "ha"))})
 
     async def loop(fn, arg, period, label, src):
         while True:

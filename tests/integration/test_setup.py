@@ -59,7 +59,7 @@ async def test_entities_created_from_hello(hass):
     assert dev.name == "Friday" and dev.manufacturer == "F.R.I.D.A.Y."
     assert all(e.device_id == dev.id and e.config_subentry_id == "sub1" for e in ents)
     assert {e.unique_id for e in ents} == {"dev1_temp", "dev1_vol", "dev1_dnd"}
-    assert hass.states.get("sensor.friday_temp").state == "20.5"
+    assert hass.states.get("sensor.friday_dev1_temp").state == "20.5"
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
 
@@ -75,10 +75,10 @@ async def test_number_set_sends_command(hass):
     entry = await setup(hass, agent)
     await entities(hass, 3)
     await hass.services.async_call(
-        "number", "set_value", {"entity_id": "number.friday_volume", "value": 7}, blocking=True)
+        "number", "set_value", {"entity_id": "number.friday_dev1_vol", "value": 7}, blocking=True)
     assert got[0]["name"] == "set" and got[0]["key"] == "vol" and got[0]["value"] == 7
     # no optimistic write: state still the agent's
-    assert float(hass.states.get("number.friday_volume").state) == 3
+    assert float(hass.states.get("number.friday_dev1_vol").state) == 3
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
 
@@ -88,7 +88,7 @@ async def test_state_push_updates_entity(hass):
     entry = await setup(hass, agent)
     await entities(hass, 3)
     await agent.sockets[0].send_json({"type": "state", "changes": {"temp": 22.0}, "origin": "agent"})
-    await wait_for(lambda: hass.states.get("sensor.friday_temp").state == "22.0")
+    await wait_for(lambda: hass.states.get("sensor.friday_dev1_temp").state == "22.0")
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
 
@@ -140,5 +140,24 @@ async def test_capabilities_message_reloads_entry(hass):
     await agent.sockets[0].send_json({"type": "capabilities", "capabilities": CAPS[:1]})
     await wait_for(lambda: agent.connections > before)
     await hass.async_block_till_done()
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_entity_id_pattern_and_timestamp_sensors(hass):
+    caps = CAPS + [
+        {"key": "t_off", "platform": "sensor", "name": "A", "device_class": "timestamp"},
+        {"key": "t_naive", "platform": "sensor", "name": "B", "device_class": "timestamp"},
+        {"key": "t_bad", "platform": "sensor", "name": "C", "device_class": "timestamp"},
+    ]
+    state = dict(STATE, t_off="2026-10-29T10:00:00-03:00", t_naive="2026-10-29T10:00:00",
+                 t_bad="garbage")
+    agent = FakeAgent(hello(caps, state))
+    entry = await setup(hass, agent)
+    await entities(hass, 6)
+    assert hass.states.get("sensor.friday_dev1_t_off").state == "2026-10-29T13:00:00+00:00"
+    assert hass.states.get("sensor.friday_dev1_t_naive").state == "2026-10-29T10:00:00+00:00"
+    assert hass.states.get("sensor.friday_dev1_t_bad").state == "unknown"
+    assert hass.states.get("switch.friday_dev1_dnd") is not None
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()

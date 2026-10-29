@@ -13,7 +13,7 @@ def read_enabled(path: str) -> bool:
     try:
         with open(path, encoding="utf-8") as f:
             return f.read().strip().lower() != "off"
-    except OSError:
+    except (OSError, ValueError):  # ValueError covers UnicodeDecodeError: fail open
         return True
 
 
@@ -31,9 +31,18 @@ class VoiceSwitch:
         return {"voice": self.enabled}
 
 
-def make_set_handler(sw: VoiceSwitch):
+def make_set_handler(sw: VoiceSwitch, state: dict | None = None, push=None):
+    """`push` is an async callable(changes: dict) that tells connected clients the new state."""
     async def handle(cmd: dict) -> dict:
         if cmd.get("key") != "voice":
             return {"ok": False, "error": "unknown_key"}
-        return {"data": sw.set(bool(cmd.get("value")))}
+        try:
+            changes = sw.set(bool(cmd.get("value")))
+        except OSError:
+            return {"ok": False, "error": "write_failed"}
+        if state is not None:
+            state.update(changes)
+        if push is not None:
+            await push(changes)
+        return {"data": changes}
     return handle

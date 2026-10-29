@@ -49,3 +49,33 @@ def test_capabilities_include_voice_switch():
     from friday_server_agent import collectors as c
     caps = {x["key"]: x for x in c.capabilities(False)}
     assert caps["voice"]["platform"] == "switch" and caps["voice"]["icon"] == "mdi:account-voice"
+
+
+def test_read_enabled_fails_open_on_corrupt_bytes(tmp_path):
+    p = tmp_path / "voice-enabled"
+    p.write_bytes(b"\xff\xfe\x80off")
+    assert vs.read_enabled(str(p)) is True
+
+
+async def test_set_updates_state_hello_and_pushes(aiohttp_client, tmp_path):
+    sw = vs.VoiceSwitch(str(tmp_path / "voice-enabled"))
+    state = {"voice": True}
+    holder = {}
+    core = AgentCore("t", {"id": "server", "kind": "server", "name": "S"}, lambda: [], lambda: state,
+                     {"set": vs.make_set_handler(sw, state, lambda ch: holder["core"].push_state(ch, "ha"))})
+    holder["core"] = core
+    client = await aiohttp_client(core.app())
+    ws = await client.ws_connect("/v1/ws", headers=HDR)
+    await ws.receive_json()
+    await ws.send_json({"type": "command", "id": 1, "name": "set", "key": "voice", "value": False})
+    msgs = [await ws.receive_json(), await ws.receive_json()]
+    assert any(m["type"] == "state" and m["changes"] == {"voice": False} and m["origin"] == "ha" for m in msgs)
+    assert any(m["type"] == "result" and m["ok"] for m in msgs)
+    ws2 = await client.ws_connect("/v1/ws", headers=HDR)
+    assert (await ws2.receive_json())["state"]["voice"] is False
+
+
+async def test_write_failure_returns_not_ok(tmp_path):
+    sw = vs.VoiceSwitch(str(tmp_path / "nodir" / "voice-enabled"))
+    r = await vs.make_set_handler(sw, {})({"key": "voice", "value": False})
+    assert r == {"ok": False, "error": "write_failed"}
