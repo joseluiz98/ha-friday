@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity, EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import slugify
 
 from .connection import FridayConnection
 from .const import DOMAIN
@@ -30,6 +31,9 @@ class FridayEntity(Entity):
         device = connection.hello.device
         self._attr_unique_id = f"{device['id']}_{descriptor.key}"
         self._attr_name = descriptor.name
+        self.entity_id = (
+            f"{descriptor.platform}.friday_{slugify(device['id'])}_{slugify(descriptor.key)}"
+        )
         self._attr_entity_category = _CATEGORIES.get(descriptor.category)
         if descriptor.icon:
             self._attr_icon = descriptor.icon

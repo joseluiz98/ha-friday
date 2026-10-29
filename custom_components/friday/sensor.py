@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.util import dt as dt_util
 
 from .entity import FridayEntity, setup_platform
 
@@ -20,4 +21,16 @@ class FridaySensor(FridayEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return self._value
+        value = self._value
+        kind = self.descriptor.device_class
+        if kind not in ("timestamp", "date") or value is None:
+            return value
+        try:
+            if kind == "date":
+                return dt_util.parse_date(str(value))
+            parsed = dt_util.parse_datetime(str(value))
+        except (ValueError, TypeError):
+            return None
+        if parsed is None:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt_util.UTC)
