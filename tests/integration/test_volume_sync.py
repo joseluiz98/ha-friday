@@ -62,3 +62,47 @@ async def test_server_voice_switch_propagates_to_satellites(hass):
     await hass.config_entries.async_unload(entry.entry_id)
     await server.stop()
     await sat.stop()
+
+
+async def _late_join(hass, server_voice):
+    from homeassistant.config_entries import ConfigSubentryData
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.friday.const import DOMAIN
+
+    from .test_setup import DEVICE
+
+    got = []
+
+    async def on_sat(ws, cmd):
+        got.append(cmd)
+        await ws.send_json({"type": "result", "id": cmd["id"], "ok": True})
+
+    server = FakeAgent(hello([{"key": "voice", "platform": "switch", "name": "F"}], {"voice": server_voice}))
+    sat_hello = hello([{"key": "voice_enabled", "platform": "switch", "name": "Voice"}], {"voice_enabled": True})
+    sat_hello["device"] = dict(DEVICE, id="sat1", kind="satellite")
+    sat = FakeAgent(sat_hello, on_sat)
+    await server.start()
+    await sat.start()
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="F", subentries_data=[
+        ConfigSubentryData(data={"host": "127.0.0.1", "port": server.port, "token": "t"},
+                           subentry_type="server", title="S", unique_id=None, subentry_id="s1"),
+        ConfigSubentryData(data={"host": "127.0.0.1", "port": sat.port, "token": "t"},
+                           subentry_type="satellite", title="Sat", unique_id=None, subentry_id="s2")])
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await wait_for(lambda: all(c.connected for c in entry.runtime_data.values()))
+    await asyncio.sleep(0.4)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await server.stop()
+    await sat.stop()
+    return got
+
+
+async def test_late_joining_satellite_gets_voice_off(hass):
+    got = await _late_join(hass, False)
+    assert [(c["key"], c["value"]) for c in got] == [("voice_enabled", False)]
+
+
+async def test_late_joining_satellite_untouched_when_voice_on(hass):
+    assert await _late_join(hass, True) == []

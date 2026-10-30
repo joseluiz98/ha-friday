@@ -69,7 +69,7 @@ async def main() -> None:
         if enabled:
             await power.set_voice(True)
         else:
-            power._persist(False)  # noqa: SLF001 - durable before the (up to 120 s) wait
+            power.persist(False)  # durable before the (up to 120 s) wait
             off_task.append(asyncio.create_task(voice_off()))
         return {"ok": True}
 

@@ -41,7 +41,7 @@ class Power:
         self._log = log
         self.enabled = read_enabled(path)
 
-    def _persist(self, enabled: bool) -> None:
+    def persist(self, enabled: bool) -> None:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as f:
             f.write("on\n" if enabled else "off\n")
@@ -50,10 +50,13 @@ class Power:
     async def startup(self) -> None:
         """Agent boot: if voice is off, make sure the service is stopped."""
         if not self.enabled:
-            await self._run(STOP)
+            try:
+                await self._run(STOP)
+            except Exception as err:  # noqa: BLE001 - the agent must still start
+                LOG.warning("startup stop failed: %s", type(err).__name__)
 
     async def set_voice(self, enabled: bool) -> int:
-        self._persist(enabled)  # first, so an agent restart mid-wait still ends up off
+        self.persist(enabled)  # first, so an agent restart mid-wait still ends up off
         if enabled:
             return await self._run(START)
         for _ in range(WAIT_MAX_S):
@@ -64,16 +67,21 @@ class Power:
             LOG.warning("voice off: conversation still open after %ss, stopping anyway", WAIT_MAX_S)
         return await self._run(STOP)
 
+    @staticmethod
+    def _result(code) -> dict:
+        return {"ok": True} if code == 0 else {"ok": False, "error": "command_failed"}
+
     async def reboot(self) -> dict:
         if self._state() == "conversation":
             return {"ok": False, "error": "conversation_open"}
         if self._log:
-            await self._log("Reboot requested")
-        await self._run(REBOOT)
-        return {"ok": True}
+            try:
+                await self._log("Reboot requested")
+            except Exception as err:  # noqa: BLE001 - logging never blocks the action
+                LOG.warning("reboot log failed: %s", type(err).__name__)
+        return self._result(await self._run(REBOOT))
 
     async def restart_program(self) -> dict:
         if self._state() == "conversation":
             return {"ok": False, "error": "conversation_open"}
-        await self._run(RESTART)
-        return {"ok": True}
+        return self._result(await self._run(RESTART))

@@ -56,6 +56,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
         entry.async_on_unload(connection.add_capabilities_listener(_reload))
         entry.async_on_unload(connection.add_listener(_change_listener(hass, connection)))
         entry.async_on_unload(connection.add_listener(_voice_propagation_listener(hass, entry, connection)))
+        entry.async_on_unload(connection.add_availability_listener(_late_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
         area_id = entry.subentries[subentry_id].data.get(CONF_AREA_ID)
         if area_id:
@@ -114,6 +115,31 @@ def _voice_propagation_listener(hass, entry, connection):
         hass.async_create_background_task(_push(), "friday voice propagation")
 
     return _on_changes
+
+
+def _late_join_listener(hass, entry, connection):
+    """A satellite that (re)connects while the server voice is known off is told to turn off."""
+
+    def _on_up(up: bool) -> None:
+        hello = connection.hello
+        if not up or hello is None or hello.device.get("kind") != DEVICE_KIND_SATELLITE:
+            return
+        if not any(c is not connection and c.hello is not None
+                   and c.hello.device.get("kind") == DEVICE_KIND_SERVER
+                   and c.state.get(SERVER_VOICE_KEY) is False
+                   for c in entry.runtime_data.values()):
+            return
+
+        async def _push() -> None:
+            try:
+                await connection.send("set", key=SATELLITE_VOICE_KEY, value=False)
+            except HomeAssistantError as err:
+                _LOGGER.warning("Voice switch not applied on satellite %s: %s",
+                                hello.device.get("id"), err)
+
+        hass.async_create_background_task(_push(), "friday voice late join")
+
+    return _on_up
 
 
 def _log_listener(hass, connection):

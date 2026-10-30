@@ -63,8 +63,7 @@ async def test_off_persists_across_agent_restart(tmp_path):
     assert p2.enabled is False
     await p2.startup()
     assert runner2.calls == [pw.STOP]
-    p3, runner3, _, _ = make(tmp_path / "other")  # no file = enabled, nothing touched
-    (tmp_path / "other").mkdir(exist_ok=True)
+    (tmp_path / "other").mkdir()
     p3, runner3, _, _ = make(tmp_path / "other")
     await p3.startup()
     assert p3.enabled is True and runner3.calls == []
@@ -113,3 +112,33 @@ def test_sudoers_file_is_exact():
     cmds = [c.strip() for c in rules[0].split("NOPASSWD:")[1].split(",")]
     assert cmds == ["/usr/bin/systemctl start friday-satelite", "/usr/bin/systemctl stop friday-satelite",
                     "/usr/bin/systemctl restart friday-satelite", "/usr/sbin/reboot"]
+
+
+async def test_startup_stop_failure_does_not_raise(tmp_path):
+    p, runner, _, _ = make(tmp_path)
+    p.persist(False)
+
+    async def boom(argv):
+        raise OSError("x")
+
+    p._run = boom
+    await p.startup()
+
+
+async def test_reboot_log_failure_does_not_block(tmp_path):
+    async def bad(msg):
+        raise RuntimeError("x")
+
+    p, runner, _, _ = make(tmp_path, log=bad)
+    assert (await p.reboot())["ok"] is True and runner.calls == [pw.REBOOT]
+
+
+async def test_nonzero_exit_is_command_failed(tmp_path):
+    p, runner, _, _ = make(tmp_path)
+
+    async def fail(argv):
+        return 1
+
+    p._run = fail
+    assert await p.reboot() == {"ok": False, "error": "command_failed"}
+    assert await p.restart_program() == {"ok": False, "error": "command_failed"}
