@@ -13,6 +13,7 @@ from aiohttp import web
 from friday_agent_core.server import AgentCore
 
 from . import capabilities as cap
+from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
 from . import local
@@ -197,7 +198,8 @@ async def main() -> None:
         if out.get("event"):
             await core.push_event(*out["event"])
 
-    core = AgentCore(token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi})
+    core = AgentCore(token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi,
+                      "diagnostics": diagmod.make_handler(CONFIG, lambda: dict(memo["state"]))})
 
     async def poll() -> None:
         while True:

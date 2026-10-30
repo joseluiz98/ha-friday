@@ -95,3 +95,10 @@ The agent replies with the same `id`:
 When a `set` came from Home Assistant, the agent confirms it with a `state`
 message whose `origin` is `ha`. The integration re-emits nothing in that case
 (no duplicate event or logbook entry).
+
+## Command `diagnostics`
+
+`{"type":"command","id":4,"name":"diagnostics"}` returns, in `data`, the agent's
+redacted state and the tail of its logs (`logs`: unit/container to text, capped at
+200 KB each; satellite also returns the redacted `config`). Secrets are masked by key
+and by regex (Bearer, `PVEAPIToken=`, psk/password) and never leave the agent.

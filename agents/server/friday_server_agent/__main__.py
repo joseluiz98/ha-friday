@@ -17,6 +17,7 @@ from friday_agent_core.server import AgentCore
 from . import collectors as c
 from . import commands as cmds
 from . import cost as costmod
+from . import diagnostics as diagmod
 from . import embeddings as embmod
 from . import models as modelsmod
 from . import voice_switch as vsw
@@ -115,6 +116,7 @@ async def main() -> None:
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,
+                      "diagnostics": diagmod.make_handler(lambda: dict(state), tuple(x for x in (token, status_token, pve) if x)),
                       **modelsmod.make_handlers(store),
                       **cmds.make_handlers(_log_tail, cmds.compose_restart,
                                            lambda m, d: core.push_log(m, d))})
