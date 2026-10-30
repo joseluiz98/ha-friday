@@ -1,0 +1,22 @@
+# PROPOSED (not installed). Insert the `equal` plugin AFTER dmix's inputs, in front of the dmix, so voice and
+# music both pass through it. Needs: apt install libasound2-plugin-equal caps (LADSPA, /usr/lib/ladspa/caps.so).
+# Flat (all 66) must be bit-transparent in the spike. Everything else in /etc/asound.conf stays as is.
+# Change: the two slave.pcm "mixer_out" references (voice, music_vol) become "eq_out".
+
+ctl.equal {
+    type equal
+    controls "/var/lib/friday/alsaequal.bin"   # writable by the agent user; created by the first cset
+    library "/usr/lib/ladspa/caps.so"
+    module "Eq10X2"
+}
+
+pcm.eq_out {
+    type equal
+    slave.pcm "plug:mixer_out"
+    controls "/var/lib/friday/alsaequal.bin"
+    library "/usr/lib/ladspa/caps.so"
+    module "Eq10X2"
+}
+
+# pcm.voice      { type plug; slave.pcm "eq_out" }
+# pcm.music_vol  { type softvol; slave.pcm "eq_out"; control { name "Music"; card USB }; min_dB -40.0; max_dB 0.0; resolution 101 }
