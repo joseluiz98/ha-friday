@@ -53,3 +53,11 @@ ends the container, so the Voice Gateway (bot) is **not** restartable on its own
 whole container, the same as Restart F.R.I.D.A.Y. The gateway (brain) has a loop, but a kill costs the
 15 s+ backoff and counts as a failure for the escalating wait. There are therefore no *Restart Voice Gateway*
 or *Restart Brain* buttons (the spec allows omitting unsupported actions).
+
+## Satellite agent
+
+`agents/satellite` runs on the Pi next to the voice program (`sudo bash satellite/install.sh` from `agents/`; it never
+restarts `friday-satelite`). It announces `_friday._tcp` over zeroconf; Home Assistant offers the satellite on the
+integrations page, asks for the local-port password and the area, and adds it as a `satellite` subentry
+(`async_add_subentry`, available in HA 2026.10). `single_config_entry` is deliberately not set in the manifest, since it
+would abort discovery once the main entry exists; the user flow still allows a single entry.

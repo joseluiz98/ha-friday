@@ -10,10 +10,22 @@
       "user": {
         "title": "F.R.I.D.A.Y.",
         "description": "Add the F.R.I.D.A.Y. integration. Add the server and satellites afterwards as devices of this entry."
+      },
+      "zeroconf_confirm": {
+        "title": "F.R.I.D.A.Y. satellite found",
+        "description": "Satellite at {host}. Enter its local-port password and, optionally, the area.",
+        "data": {
+          "token": "Token",
+          "area_id": "Area"
+        }
       }
     },
     "abort": {
-      "single_instance_allowed": "F.R.I.D.A.Y. is already configured."
+      "single_instance_allowed": "F.R.I.D.A.Y. is already configured.",
+      "satellite_added": "Satellite added.",
+      "no_entry": "Add the F.R.I.D.A.Y. integration first.",
+      "not_supported": "Device not supported.",
+      "already_configured": "Already configured."
     }
   },
   "config_subentries": {
@@ -60,6 +72,41 @@
       },
       "abort": {
         "reconfigure_successful": "Server updated."
+      }
+    },
+    "satellite": {
+      "entry_type": "F.R.I.D.A.Y. Satellite",
+      "initiate_flow": {
+        "user": "Add satellite"
+      },
+      "step": {
+        "user": {
+          "title": "F.R.I.D.A.Y. Satellite",
+          "data": {
+            "host": "Host",
+            "port": "Port",
+            "token": "Token",
+            "area_id": "Area"
+          },
+          "data_description": {
+            "token": "The satellite's local-port password (never shared outside Home Assistant)."
+          }
+        },
+        "reconfigure": {
+          "title": "F.R.I.D.A.Y. Satellite",
+          "data": {
+            "host": "Host",
+            "port": "Port",
+            "token": "Token",
+            "area_id": "Area"
+          },
+          "data_description": {
+            "token": "Leave blank to keep the stored token."
+          }
+        }
+      },
+      "abort": {
+        "reconfigure_successful": "Satellite updated."
       }
     }
   }

@@ -10,10 +10,22 @@
       "user": {
         "title": "F.R.I.D.A.Y.",
         "description": "Adicione a integração F.R.I.D.A.Y. O servidor e os satélites entram depois, como dispositivos desta entrada."
+      },
+      "zeroconf_confirm": {
+        "title": "Satélite F.R.I.D.A.Y. encontrado",
+        "description": "Satélite em {host}. Informe a senha da porta local e, se quiser, a área.",
+        "data": {
+          "token": "Senha",
+          "area_id": "Área"
+        }
       }
     },
     "abort": {
-      "single_instance_allowed": "A F.R.I.D.A.Y. já está configurada."
+      "single_instance_allowed": "A F.R.I.D.A.Y. já está configurada.",
+      "satellite_added": "Satélite adicionado.",
+      "no_entry": "Adicione primeiro a integração F.R.I.D.A.Y.",
+      "not_supported": "Dispositivo não suportado.",
+      "already_configured": "Já configurado."
     }
   },
   "config_subentries": {
@@ -60,6 +72,41 @@
       },
       "abort": {
         "reconfigure_successful": "Servidor atualizado."
+      }
+    },
+    "satellite": {
+      "entry_type": "F.R.I.D.A.Y. Satellite",
+      "initiate_flow": {
+        "user": "Adicionar satélite"
+      },
+      "step": {
+        "user": {
+          "title": "F.R.I.D.A.Y. Satellite",
+          "data": {
+            "host": "Endereço",
+            "port": "Porta",
+            "token": "Senha",
+            "area_id": "Área"
+          },
+          "data_description": {
+            "token": "A senha da porta local do satélite (nunca sai do Home Assistant)."
+          }
+        },
+        "reconfigure": {
+          "title": "F.R.I.D.A.Y. Satellite",
+          "data": {
+            "host": "Endereço",
+            "port": "Porta",
+            "token": "Senha",
+            "area_id": "Área"
+          },
+          "data_description": {
+            "token": "Deixe em branco para manter."
+          }
+        }
+      },
+      "abort": {
+        "reconfigure_successful": "Satélite atualizado."
       }
     }
   }

@@ -7,6 +7,7 @@ DOMAIN = "friday"
 CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_TOKEN = "token"
+CONF_AREA_ID = "area_id"
 
 DEFAULT_PORT_SATELLITE = 8701
 DEFAULT_PORT_SERVER = 8801
