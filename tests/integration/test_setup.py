@@ -214,3 +214,35 @@ async def test_enabled_default_false_creates_disabled_entity(hass):
     assert reg.async_get("sensor.friday_dev1_temp").disabled_by is None
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
+
+
+async def test_every_subentry_gets_its_entities(hass):
+    """Regression: the per-subentry `added` flag was shared by all subentries, so the
+    first device to say hello blocked the entities of every other device."""
+    from homeassistant.config_entries import ConfigSubentryData
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.friday.const import DOMAIN
+
+    from .test_connection import wait_for
+
+    server = FakeAgent(hello([{"key": "voice", "platform": "switch", "name": "Voice"}], {"voice": True}))
+    sat_hello = hello([{"key": "voice_enabled", "platform": "switch", "name": "Voice"}], {"voice_enabled": True})
+    sat_hello["device"] = dict(DEVICE, id="sat1", kind="satellite")
+    sat = FakeAgent(sat_hello)
+    await server.start()
+    await sat.start()
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="F", subentries_data=[
+        ConfigSubentryData(data={"host": "127.0.0.1", "port": server.port, "token": "t"},
+                           subentry_type="server", title="S", unique_id=None, subentry_id="s1"),
+        ConfigSubentryData(data={"host": "127.0.0.1", "port": sat.port, "token": "t"},
+                           subentry_type="satellite", title="Sat", unique_id=None, subentry_id="s2")])
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await wait_for(lambda: all(c.connected for c in entry.runtime_data.values()))
+    await hass.async_block_till_done()
+    await wait_for(lambda: hass.states.get("switch.friday_sat1_voice_enabled") is not None
+                   and hass.states.get(f"switch.friday_{DEVICE['id']}_voice") is not None)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await server.stop()
+    await sat.stop()

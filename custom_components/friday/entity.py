@@ -85,18 +85,19 @@ def setup_platform(
     A device that is down never blocks the others: its entities simply appear
     when it first connects. Hidden descriptors are protocol-only commands.
     """
+    # One flag per subentry: a single shared `nonlocal` flag let the first
+    # device's hello block the entities of every other device.
+    added: set[str] = set()
     for subentry_id, connection in entry.runtime_data.items():
-        added = False
 
         def _try_add(
             _up: bool = True,
             connection: FridayConnection = connection,
             subentry_id: str = subentry_id,
         ) -> None:
-            nonlocal added
-            if added or connection.hello is None:
+            if subentry_id in added or connection.hello is None:
                 return
-            added = True
+            added.add(subentry_id)
             entities = [
                 factory(connection, d)
                 for d in connection.hello.capabilities
