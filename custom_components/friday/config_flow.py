@@ -9,6 +9,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import (
     ConfigEntry,
+    OptionsFlow,
     ConfigSubentry,
     ConfigFlow,
     ConfigFlowResult,
@@ -20,6 +21,9 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.helpers.selector import (
     AreaSelector,
+    BooleanSelector,
+    NumberSelector,
+    NumberSelectorConfig,
     EntitySelector,
     EntitySelectorConfig,
     SelectSelector,
@@ -85,6 +89,11 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_create_entry(title="F.R.I.D.A.Y.", data={})
         return self.async_show_form(step_id="user")
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        return FridayOptionsFlow()
+
     @classmethod
     @callback
     def async_get_supported_subentry_types(
@@ -143,6 +152,112 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
         )
+
+
+DEFAULT_BUDGET_BRL = 150
+SPEAKING_RATES = ["slow", "normal", "fast"]
+
+
+def _select(options: list[str], current: str | None, translation_key: str | None = None) -> SelectSelector:
+    opts = list(options)
+    if current and current not in opts:
+        opts.insert(0, current)
+    cfg = {"options": opts, **({"translation_key": translation_key} if translation_key else {})}
+    return SelectSelector(SelectSelectorConfig(**cfg))
+
+
+class FridayOptionsFlow(OptionsFlow):
+    """Global settings of the F.R.I.D.A.Y. server: models per role, voice, monthly budget."""
+
+    _connection = None
+    _listing: dict[str, Any]
+    _models: dict[str, str]
+
+    def _server_connection(self):
+        for sub_id, sub in self.config_entry.subentries.items():
+            if sub.subentry_type == "server":
+                conn = (getattr(self.config_entry, "runtime_data", None) or {}).get(sub_id)
+                if conn is not None and conn.connected:
+                    return conn
+        return None
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> Any:
+        if user_input is None:
+            self._connection = self._server_connection()
+            if self._connection is None:
+                return self.async_abort(reason="server_unavailable")
+            try:
+                self._listing = await self._connection.send("list_models", timeout=20)
+            except HomeAssistantError:
+                return self.async_abort(reason="server_unavailable")
+        current = self._listing.get("current", {})
+        if user_input is not None:
+            self._models = user_input
+            if user_input.get("embeddings") != current.get("embeddings"):
+                return await self.async_step_embeddings_confirm()
+            return await self.async_step_voice()
+        return self.async_show_form(step_id="init", data_schema=vol.Schema({
+            vol.Required("voice", default=current.get("voice")): _select(self._listing["voice"], current.get("voice")),
+            vol.Required("brain", default=current.get("brain")): _select(self._listing["brain"], current.get("brain")),
+            vol.Required("lucid", default=current.get("lucid")): _select(self._listing["lucid"], current.get("lucid")),
+            vol.Required("embeddings", default=current.get("embeddings")): _select(
+                self._listing["embeddings"], current.get("embeddings")),
+        }))
+
+    async def async_step_embeddings_confirm(self, user_input: dict[str, Any] | None = None) -> Any:
+        """Changing the embeddings model re-indexes the memory: show the agent's estimate first."""
+        model = self._models["embeddings"]
+        if user_input is None:
+            try:
+                self._estimate = await self._connection.send("estimate_reindex", args={"model": model}, timeout=30)
+            except HomeAssistantError:
+                return self.async_abort(reason="embeddings_unavailable")
+        elif not user_input.get("confirm"):
+            self._models["embeddings"] = self._listing["current"]["embeddings"]
+            return await self.async_step_voice()
+        else:
+            return await self.async_step_voice()
+        return self.async_show_form(
+            step_id="embeddings_confirm",
+            description_placeholders={"model": model, "estimate": ", ".join(
+                f"{k}: {v}" for k, v in sorted(self._estimate.items()))},
+            data_schema=vol.Schema({vol.Required("confirm", default=False): BooleanSelector()}))
+
+    async def async_step_voice(self, user_input: dict[str, Any] | None = None) -> Any:
+        current = self._listing.get("current", {})
+        if user_input is not None:
+            self._voice = user_input
+            return await self.async_step_budget()
+        return self.async_show_form(step_id="voice", data_schema=vol.Schema({
+            vol.Required("voice", default=current.get("voice_name", "Charon")): _select(
+                self._listing.get("voices", []), current.get("voice_name")),
+            vol.Required("speaking_rate", default=current.get("speaking_rate", "normal")): _select(
+                SPEAKING_RATES, None, "speaking_rate"),
+            vol.Required("brief_mode", default=bool(current.get("brief_mode"))): BooleanSelector(),
+        }))
+
+    async def async_step_budget(self, user_input: dict[str, Any] | None = None) -> Any:
+        if user_input is not None:
+            return await self._apply(user_input["budget_brl"])
+        default = (self._connection.state or {}).get("budget_brl") or DEFAULT_BUDGET_BRL
+        return self.async_show_form(step_id="budget", data_schema=vol.Schema({
+            vol.Required("budget_brl", default=default): NumberSelector(
+                NumberSelectorConfig(min=1, max=100000, step=1, unit_of_measurement="BRL")),
+        }))
+
+    async def _apply(self, budget: float) -> Any:
+        current = self._listing.get("current", {})
+        changed = {role: self._models[role] for role in ("voice", "brain", "lucid", "embeddings")
+                   if self._models.get(role) not in (None, current.get(role))}
+        try:
+            if changed:
+                await self._connection.send("set_models", args=changed)
+            await self._connection.send("set_voice_settings", args=dict(self._voice))
+            await self._connection.send("set", key="budget_brl", value=budget)
+        except HomeAssistantError as err:
+            reason = str(err)
+            return self.async_abort(reason=reason if reason == "embeddings_unavailable" else "apply_failed")
+        return self.async_create_entry(data={})
 
 
 class ServerSubentryFlow(ConfigSubentryFlow):

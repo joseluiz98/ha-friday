@@ -17,6 +17,7 @@ from friday_agent_core.server import AgentCore
 from . import collectors as c
 from . import commands as cmds
 from . import cost as costmod
+from . import models as modelsmod
 from . import voice_switch as vsw
 
 LOG = logging.getLogger("friday_server_agent")
@@ -103,8 +104,15 @@ async def main() -> None:
             return await budget_set(cmd)
         return await voice_set(cmd)
 
+    store = modelsmod.ModelStore(
+        os.environ.get("FRIDAY_STATE_DIR", "/srv/friday/state"),
+        os.environ.get("FRIDAY_OPENCLAW_JSON", "/srv/friday/home/.openclaw/openclaw.json"),
+        modelsmod.google_fetch(f"{SECRETS}/gemini_api_key"), _log_tail, cmds.compose_restart,
+        env_file="/srv/friday/friday.env")
+
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,
+                      **modelsmod.make_handlers(store),
                       **cmds.make_handlers(_log_tail, cmds.compose_restart,
                                            lambda m, d: core.push_log(m, d))})
 
@@ -129,6 +137,17 @@ async def main() -> None:
         tasks.append(loop(lambda: tracker.refresh(), None, 60, "cost", c.Source([])))
     if pve:
         tasks.append(loop(sample_proxmox, pve, 300, "proxmox", c.Source(PVE_KEYS)))
+
+    async def pending_loop():
+        while True:
+            try:
+                if await asyncio.to_thread(store.apply_pending):
+                    await core.push_log("Brain model applied; container restarted", {})
+            except Exception as err:  # noqa: BLE001
+                LOG.warning("pending brain change failed: %s", type(err).__name__)
+            await asyncio.sleep(30)
+
+    tasks.append(pending_loop())
     runner = web.AppRunner(core.app())
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()

@@ -167,6 +167,53 @@
         "satellite": "Satellite sensor",
         "ha_entity": "Home Assistant entity"
       }
+    },
+    "speaking_rate": {
+      "options": {
+        "slow": "Slow",
+        "normal": "Normal",
+        "fast": "Fast"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Models",
+        "description": "Model used by each role. Voice and Lucid apply from the next conversation or run; the brain restarts F.R.I.D.A.Y. only when no conversation is open.",
+        "data": {
+          "voice": "Voice model",
+          "brain": "Brain model",
+          "lucid": "Lucid Dreaming model",
+          "embeddings": "Memory embeddings model"
+        }
+      },
+      "embeddings_confirm": {
+        "title": "Change embeddings model",
+        "description": "Switching to {model} re-indexes the memory. Estimate: {estimate}.",
+        "data": {
+          "confirm": "Confirm the change"
+        }
+      },
+      "voice": {
+        "title": "Voice",
+        "data": {
+          "voice": "Voice",
+          "speaking_rate": "Speaking rate",
+          "brief_mode": "Brief mode"
+        }
+      },
+      "budget": {
+        "title": "Budget",
+        "data": {
+          "budget_brl": "Monthly budget (BRL)"
+        }
+      }
+    },
+    "abort": {
+      "server_unavailable": "The F.R.I.D.A.Y. server is not connected.",
+      "embeddings_unavailable": "The server cannot change the embeddings model yet.",
+      "apply_failed": "The server refused the change."
     }
   }
 }

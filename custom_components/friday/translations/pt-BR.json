@@ -167,6 +167,53 @@
         "satellite": "Sensor do satélite",
         "ha_entity": "Entidade do Home Assistant"
       }
+    },
+    "speaking_rate": {
+      "options": {
+        "slow": "Lenta",
+        "normal": "Normal",
+        "fast": "Rápida"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Modelos",
+        "description": "Modelo de cada papel. Voz e Lucid valem na próxima conversa ou execução; o cérebro só reinicia a F.R.I.D.A.Y. sem conversa aberta.",
+        "data": {
+          "voice": "Modelo da voz",
+          "brain": "Modelo do cérebro",
+          "lucid": "Modelo do Lucid Dreaming",
+          "embeddings": "Modelo de embeddings da memória"
+        }
+      },
+      "embeddings_confirm": {
+        "title": "Trocar o modelo de embeddings",
+        "description": "Trocar para {model} reindexa a memória. Estimativa: {estimate}.",
+        "data": {
+          "confirm": "Confirmar a troca"
+        }
+      },
+      "voice": {
+        "title": "Voz",
+        "data": {
+          "voice": "Voz",
+          "speaking_rate": "Velocidade da fala",
+          "brief_mode": "Modo breve"
+        }
+      },
+      "budget": {
+        "title": "Teto de gasto",
+        "data": {
+          "budget_brl": "Teto mensal (R$)"
+        }
+      }
+    },
+    "abort": {
+      "server_unavailable": "O servidor da F.R.I.D.A.Y. não está conectado.",
+      "embeddings_unavailable": "O servidor ainda não sabe trocar o modelo de embeddings.",
+      "apply_failed": "O servidor recusou a alteração."
     }
   }
 }
