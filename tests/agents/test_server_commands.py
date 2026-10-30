@@ -1,5 +1,6 @@
 """Restart action of the server agent."""
 
+import pytest
 from friday_agent_core import AgentCore
 from friday_server_agent import commands as cm
 
@@ -122,3 +123,24 @@ def test_log_tail_raises_on_docker_failure(monkeypatch):
     import pytest
     with pytest.raises(subprocess.SubprocessError):
         m._log_tail()
+
+
+async def test_server_agent_fails_early_on_empty_status_token(tmp_path, monkeypatch, caplog):
+    import logging
+    from friday_server_agent import __main__ as m
+    (tmp_path / "agent_token").write_text("agent-token\n")
+    (tmp_path / "status_token").write_text("  \n")
+    monkeypatch.setattr(m, "SECRETS", str(tmp_path))
+    monkeypatch.setenv("FRIDAY_AGENT_TOKEN_FILE", str(tmp_path / "agent_token"))
+    with caplog.at_level(logging.ERROR, logger="friday_server_agent"):
+        with pytest.raises(SystemExit):
+            await m.main()
+    assert "status token" in caplog.text and "agent-token" not in caplog.text
+
+
+async def test_server_agent_fails_early_on_blank_agent_token(tmp_path, monkeypatch):
+    from friday_server_agent import __main__ as m
+    (tmp_path / "agent_token").write_text(" \n")
+    monkeypatch.setenv("FRIDAY_AGENT_TOKEN_FILE", str(tmp_path / "agent_token"))
+    with pytest.raises(SystemExit):
+        await m.main()

@@ -26,6 +26,8 @@ class AgentCore:
         state_fn: Callable[[], dict],
         handlers: dict[str, Handler],
     ) -> None:
+        if not isinstance(token, str) or not token.strip():
+            raise ValueError("agent token is empty: refusing to start")  # compare_digest(b"", b"") would accept a bare "Bearer "
         self._token = token
         self._device = device
         self._capabilities_fn = capabilities_fn

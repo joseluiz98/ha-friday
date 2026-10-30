@@ -44,6 +44,9 @@ def _sat_id() -> str:
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     token, program_port = _read_settings()
+    if not isinstance(token, str) or not token.strip():
+        LOG.error("senha_porta_local in %s is empty", CONFIG)
+        raise SystemExit("missing local port password")
     sat_id = _sat_id()
     program = ProgramClient(token, f"http://127.0.0.1:{program_port}")
     mapper, tracker = cap.Mapper(), cap.Tracker()

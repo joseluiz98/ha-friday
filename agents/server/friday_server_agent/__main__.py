@@ -88,6 +88,9 @@ async def main() -> None:
     if not token:
         raise SystemExit("missing agent token")
     status_token = _read(f"{SECRETS}/status_token")
+    if not status_token:
+        LOG.error("status token file %s/status_token is missing or empty", SECRETS)
+        raise SystemExit("missing status token")
     pve = _read(f"{SECRETS}/proxmox_ro")
     switch = vsw.VoiceSwitch(os.environ.get("FRIDAY_VOICE_ENABLED_FILE", vsw.DEFAULT_PATH))
     state: dict = {"voice": switch.enabled}

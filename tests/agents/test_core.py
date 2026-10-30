@@ -121,3 +121,9 @@ async def test_late_client_hello_does_not_suppress_push_for_existing(aiohttp_cli
     await core.push_state({"volume": 5}, "agent")
     msg = await a.receive_json(timeout=1)
     assert msg["changes"] == {"volume": 5}
+
+
+@pytest.mark.parametrize("token", ["", "   ", "\n", None])
+def test_core_refuses_empty_or_blank_token(token):
+    with pytest.raises(ValueError):
+        AgentCore(token=token, device={"id": "d"}, capabilities_fn=list, state_fn=dict, handlers={})
