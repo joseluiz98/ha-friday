@@ -179,9 +179,13 @@ class FridayConnection:
                 return
             hello = parse_hello(msg)
             ir.async_delete_issue(self.hass, DOMAIN, f"protocol_{self._subentry_id}")
-            self.hello = hello
+            previous, self.hello = self.hello, hello
             self.state = dict(hello.state)
             self._set_connected(True)
+            if previous is not None and previous.capabilities != hello.capabilities:
+                # the agent came back with a different capability list (no "capabilities" message): rebuild entities
+                for cb in list(self._capabilities_listeners):
+                    cb()
             async for raw in ws:
                 if raw.type == aiohttp.WSMsgType.TEXT:
                     try:

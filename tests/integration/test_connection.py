@@ -54,7 +54,7 @@ class FakeAgent:
         app.router.add_get("/v1/ws", self.handle)
         self.runner = web.AppRunner(app)
         await self.runner.setup()
-        site = web.TCPSite(self.runner, "127.0.0.1", 0)
+        site = web.TCPSite(self.runner, "127.0.0.1", self.port or 0)
         await site.start()
         self.port = site._server.sockets[0].getsockname()[1]
 

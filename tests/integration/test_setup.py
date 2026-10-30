@@ -137,11 +137,51 @@ async def test_capabilities_message_reloads_entry(hass):
     entry = await setup(hass, agent)
     await entities(hass, 3)
     before = agent.connections
+    old_conn = entry.runtime_data["sub1"]
+    agent.hello = hello(CAPS[:1], STATE)  # what the agent will say after the reload
     await agent.sockets[0].send_json({"type": "capabilities", "capabilities": CAPS[:1]})
     await wait_for(lambda: agent.connections > before)
+    await wait_for(lambda: entry.runtime_data["sub1"] is not old_conn and entry.runtime_data["sub1"].connected)
     await hass.async_block_till_done()
+    assert [d.key for d in entry.runtime_data["sub1"].hello.capabilities] == ["temp"]
+    assert hass.states.get("sensor.friday_dev1_temp").state == "20.5"
+    assert hass.states.get("number.friday_dev1_vol").state == "unavailable"  # no longer built
+    assert hass.states.get("number.friday_dev1_vol").attributes.get("restored") is True
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
+
+
+async def test_second_hello_with_different_capabilities_rebuilds_entities(hass):
+    agent = FakeAgent(hello(CAPS, STATE))
+    entry = await setup(hass, agent)
+    await entities(hass, 3)
+    old_conn = entry.runtime_data["sub1"]
+    agent.hello = hello(CAPS[:1], STATE)
+    await agent.sockets[0].close()  # reconnect: the second hello differs, no capabilities message
+    await wait_for(lambda: entry.runtime_data["sub1"] is not old_conn and entry.runtime_data["sub1"].connected)
+    await hass.async_block_till_done()
+    assert [d.key for d in entry.runtime_data["sub1"].hello.capabilities] == ["temp"]
+    assert hass.states.get("number.friday_dev1_vol").attributes.get("restored") is True
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_entities_unavailable_on_drop_and_recover_on_reconnect(hass):
+    agent = FakeAgent(hello(CAPS, STATE))
+    entry = await setup(hass, agent)
+    await entities(hass, 3)
+    assert hass.states.get("sensor.friday_dev1_temp").state == "20.5"
+    port = agent.port
+    await agent.stop()
+    await wait_for(lambda: hass.states.get("sensor.friday_dev1_temp").state == "unavailable")
+    assert hass.states.get("number.friday_dev1_vol").state == "unavailable"
+    agent2 = FakeAgent(hello(CAPS, dict(STATE, temp=23.0)))
+    agent2.port = port
+    await agent2.start()
+    await wait_for(lambda: hass.states.get("sensor.friday_dev1_temp").state == "23.0")
+    assert float(hass.states.get("number.friday_dev1_vol").state) == 3
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent2.stop()
 
 
 async def test_entity_id_pattern_and_timestamp_sensors(hass):
