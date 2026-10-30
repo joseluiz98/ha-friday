@@ -64,6 +64,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
         entry.async_on_unload(connection.add_listener(_change_listener(hass, connection)))
         entry.async_on_unload(connection.add_listener(_voice_propagation_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_late_join_listener(hass, entry, connection)))
+        entry.async_on_unload(connection.add_availability_listener(_server_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
         area_id = entry.subentries[subentry_id].data.get(CONF_AREA_ID)
         if area_id:
@@ -145,6 +146,32 @@ def _late_join_listener(hass, entry, connection):
                                 hello.device.get("id"), err)
 
         hass.async_create_background_task(_push(), "friday voice late join")
+
+    return _on_up
+
+
+def _server_join_listener(hass, entry, connection):
+    """The server (re)connects after the satellites and its voice is off: turn them off (never force on)."""
+
+    def _on_up(up: bool) -> None:
+        hello = connection.hello
+        if (not up or hello is None or hello.device.get("kind") != DEVICE_KIND_SERVER
+                or connection.state.get(SERVER_VOICE_KEY) is not False):
+            return
+
+        async def _push() -> None:
+            for other in list(entry.runtime_data.values()):
+                h = other.hello
+                if other is connection or not other.connected or h is None \
+                        or h.device.get("kind") != DEVICE_KIND_SATELLITE:
+                    continue
+                try:
+                    await other.send("set", key=SATELLITE_VOICE_KEY, value=False)
+                except HomeAssistantError as err:
+                    _LOGGER.warning("Voice switch not applied on satellite %s: %s",
+                                    h.device.get("id"), err)
+
+        hass.async_create_background_task(_push(), "friday voice server join")
 
     return _on_up
 

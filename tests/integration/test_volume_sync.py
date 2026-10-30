@@ -106,3 +106,57 @@ async def test_late_joining_satellite_gets_voice_off(hass):
 
 async def test_late_joining_satellite_untouched_when_voice_on(hass):
     assert await _late_join(hass, True) == []
+
+
+async def _server_after_satellite(hass, server_voice):
+    from homeassistant.config_entries import ConfigSubentryData
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.friday.const import DOMAIN
+
+    from .test_setup import DEVICE
+
+    got = []
+
+    async def on_sat(ws, cmd):
+        got.append(cmd)
+        await ws.send_json({"type": "result", "id": cmd["id"], "ok": True})
+
+    server = FakeAgent(hello([{"key": "voice", "platform": "switch", "name": "F"}], {"voice": server_voice}))
+    sat_hello = hello([{"key": "voice_enabled", "platform": "switch", "name": "Voice"}], {"voice_enabled": True})
+    sat_hello["device"] = dict(DEVICE, id="sat1", kind="satellite")
+    sat = FakeAgent(sat_hello, on_sat)
+    await sat.start()
+    await server.start()
+    real_port = server.port
+    server.port = 1  # server unreachable until the satellite is up
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=DOMAIN, title="F", subentries_data=[
+        ConfigSubentryData(data={"host": "127.0.0.1", "port": real_port, "token": "t"},
+                           subentry_type="server", title="S", unique_id=None, subentry_id="s1"),
+        ConfigSubentryData(data={"host": "127.0.0.1", "port": sat.port, "token": "t"},
+                           subentry_type="satellite", title="Sat", unique_id=None, subentry_id="s2")])
+    entry.add_to_hass(hass)
+    # the server connects strictly after the satellite: hold the server's connection back
+    conn = None
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    conn = entry.runtime_data["s1"]
+    await conn.stop()
+    await wait_for(lambda: entry.runtime_data["s2"].connected)
+    await asyncio.sleep(0.2)
+    got.clear()
+    await conn.start()
+    await wait_for(lambda: conn.connected)
+    await asyncio.sleep(0.4)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await server.stop()
+    await sat.stop()
+    return got
+
+
+async def test_server_connecting_after_satellite_with_voice_off_turns_satellite_off(hass):
+    got = await _server_after_satellite(hass, False)
+    assert [(c["key"], c["value"]) for c in got] == [("voice_enabled", False)]
+
+
+async def test_server_connecting_after_satellite_with_voice_on_sends_nothing(hass):
+    assert await _server_after_satellite(hass, True) == []
