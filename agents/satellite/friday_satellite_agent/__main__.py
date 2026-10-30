@@ -7,7 +7,6 @@ import datetime
 import json
 import logging
 import os
-import socket
 
 from aiohttp import web
 
@@ -15,6 +14,7 @@ from friday_agent_core.server import AgentCore
 
 from . import capabilities as cap
 from . import local
+from .announce import announce
 from .program import ProgramClient, ProgramError
 
 LOG = logging.getLogger("friday_satellite_agent")
@@ -33,32 +33,6 @@ def _read_settings() -> tuple[str, int]:
 def _sat_id() -> str:
     with open(ID_FILE, encoding="utf-8") as f:
         return f.read().strip()
-
-
-def _announce(sat_id: str):
-    """Zeroconf `_friday._tcp` (TXT id/kind/port). Optional: the agent works without it."""
-    try:
-        from zeroconf import IPVersion, ServiceInfo, Zeroconf
-    except ImportError:
-        LOG.warning("zeroconf not installed; discovery disabled")
-        return None
-    host = socket.gethostname()
-    ip = socket.inet_aton(_lan_ip())
-    info = ServiceInfo("_friday._tcp.local.", f"{sat_id}._friday._tcp.local.", addresses=[ip], port=PORT,
-                       properties={"id": sat_id, "kind": "satellite", "port": str(PORT)},
-                       server=f"{host}.local.")
-    zc = Zeroconf(ip_version=IPVersion.V4Only)
-    zc.register_service(info)
-    return zc
-
-
-def _lan_ip() -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("192.0.2.1", 80))
-        return s.getsockname()[0]
-    finally:
-        s.close()
 
 
 async def main() -> None:
@@ -100,9 +74,11 @@ async def main() -> None:
             return {"ok": False, "error": "unknown_key"}
         try:
             if "config" in plan:
+                tracker.mark_ha(plan["config"])
                 await program.put_config(plan["config"])
             else:
                 name, mode = plan["wakeword"]
+                tracker.mark_ha(["modo_friday", "palavras_extras"])
                 await program.set_wakeword(name, modo=mode)
         except ProgramError as err:
             return {"ok": False, "error": "rejected" if err.status in (400, 409) else "program_error"}
@@ -152,7 +128,7 @@ async def main() -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
-    zc = await asyncio.to_thread(_announce, sat_id)
+    zc = await asyncio.to_thread(announce, sat_id, PORT)
     try:
         await asyncio.gather(poll(), midnight())
     finally:

@@ -7,6 +7,7 @@ program's local events into protocol state, events and counters (idempotent).
 from __future__ import annotations
 
 import re
+import time
 from datetime import datetime, timezone
 
 VERSION = "0.1.0"
@@ -130,11 +131,26 @@ class Mapper:
 class Tracker:
     """Day counters and conversation state from the program's local events."""
 
-    def __init__(self) -> None:
+    PENDING_S = 5.0
+
+    def __init__(self, clock=time.monotonic) -> None:
+        self._clock = clock
+        self._pending: dict[str, float] = {}
         self._act = 0
         self._rej = 0
         self._last = None
         self._conv = False
+
+    def mark_ha(self, keys) -> None:
+        """Keys the agent just wrote for HA: their echo from the program is origin `ha`."""
+        now = self._clock()
+        for k in keys:
+            self._pending[k] = now + self.PENDING_S
+
+    def _echo_of_ha(self, keys) -> bool:
+        now = self._clock()
+        self._pending = {k: t for k, t in self._pending.items() if t > now}
+        return bool(keys) and all(k in self._pending for k in keys)
 
     def counters(self) -> dict:
         return {"activations_today": self._act, "rejected_today": self._rej}
@@ -162,5 +178,9 @@ class Tracker:
             self._conv = dados.get("estado") == "aberta"  # idempotent: last one wins
             return {"state": {"program_state": "conversation" if self._conv else "idle"}}
         if tipo == "config":
-            return {"config": dict(dados.get("mudancas") or {}), "origin": ORIGINS.get(dados.get("origem"), "agent")}
+            changes = dict(dados.get("mudancas") or {})
+            origin = ORIGINS.get(dados.get("origem"), "agent")
+            if dados.get("origem") == "porta" and self._echo_of_ha(changes):
+                origin = "ha"
+            return {"config": changes, "origin": origin}
         return None

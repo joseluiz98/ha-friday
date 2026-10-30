@@ -96,11 +96,12 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
         except ValueError:
             port = DEFAULT_PORT_SATELLITE
         host = str(discovery_info.ip_address)
-        uid = f"{host}:{port}"
+        sat_id = props.get("id") or f"{host}:{port}"
+        await self.async_set_unique_id(f"satellite:{sat_id}")
         for sub in entries[0].subentries.values():
-            if sub.unique_id == uid:
+            if sub.unique_id in (sat_id, f"{host}:{port}"):
                 return self.async_abort(reason="already_configured")
-        self._discovered = {CONF_HOST: host, CONF_PORT: port}
+        self._discovered = {CONF_HOST: host, CONF_PORT: port, "id": sat_id}
         self.context["title_placeholders"] = {"name": props.get("id", host)}
         return await self.async_step_zeroconf_confirm()
 
@@ -117,7 +118,7 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
                 entry,
                 ConfigSubentry(
                     data=MappingProxyType(data), subentry_type="satellite",
-                    title="F.R.I.D.A.Y. Satellite", unique_id=f"{host}:{port}",
+                    title="F.R.I.D.A.Y. Satellite", unique_id=self._discovered["id"],
                 ),
             )
             return self.async_abort(reason="satellite_added")

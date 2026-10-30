@@ -98,6 +98,7 @@ def test_activation_events_idempotent_conversation_state():
     assert cfg_ev["origin"] == "voice" and cfg_ev["config"] == {"volume": 11, "nao_perturbe": True}
     assert t.on_event("config", {"mudancas": {}, "origem": "botao"})["origin"] == "button"
     assert t.on_event("config", {"mudancas": {}, "origem": "porta"})["origin"] == "agent"
+    assert t.on_event("config", {"mudancas": {"volume": 3}, "origem": "porta"})["origin"] == "agent"
     t.reset_day()
     assert t.counters() == {"activations_today": 0, "rejected_today": 0}
 
@@ -118,3 +119,24 @@ async def test_local_event_requires_localhost_and_token(aiohttp_client):
     assert bad.status == 400
     assert local.is_loopback("127.0.0.1") and local.is_loopback("::1")
     assert not local.is_loopback("192.0.2.10") and not local.is_loopback(None)
+
+
+def test_porta_echo_after_agent_set_is_ha():
+    now = [100.0]
+    t = cap.Tracker(clock=lambda: now[0])
+    t.mark_ha({"volume": 6})
+    echo = {"mudancas": {"volume": 6}, "origem": "porta"}
+    assert t.on_event("config", echo)["origin"] == "ha"
+    assert t.on_event("config", {"mudancas": {"nao_perturbe": True}, "origem": "porta"})["origin"] == "agent"
+    now[0] += 6
+    assert t.on_event("config", echo)["origin"] == "agent"  # marker expired
+
+
+async def test_announce_failure_does_not_raise(monkeypatch):
+    from friday_satellite_agent import announce as an
+
+    def boom():
+        raise OSError("no network")
+
+    monkeypatch.setattr(an, "lan_ip", boom)
+    assert an.announce("sat-1", 8701) is None

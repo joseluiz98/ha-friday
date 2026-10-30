@@ -107,9 +107,16 @@ async def test_zeroconf_discovery_offers_satellite(hass, monkeypatch):
     sub = next(iter(entry.subentries.values()))
     assert sub.subentry_type == "satellite"
     assert sub.data["host"] == "10.0.0.9" and sub.data["port"] == 8701
+    assert sub.unique_id == "sat-1"
 
     # already configured -> abort
     r = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": "zeroconf"}, data=info
     )
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
+
+
+async def test_second_user_flow_aborts_single_instance(hass, monkeypatch):
+    await _entry_with_noop(hass, monkeypatch)
+    r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "single_instance_allowed"
