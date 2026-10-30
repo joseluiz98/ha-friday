@@ -16,6 +16,7 @@ from homeassistant.config_entries import (
     SubentryFlowResult,
 )
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.helpers.selector import (
     AreaSelector,
@@ -29,6 +30,10 @@ from .const import (
     CONF_PROXMOX_TOKEN_SECRET, CONF_PROXMOX_URL, CONF_PROXMOX_VMID, CONF_TOKEN,
     DEFAULT_PORT_SATELLITE, DEFAULT_PORT_SERVER, DEFAULT_PROXMOX_NODE, DEFAULT_PROXMOX_URL, DOMAIN,
 )
+from .wifi import async_set_wifi
+
+CONF_SSID = "ssid"  # form field names only; neither value is ever stored
+CONF_WIFI_PASSWORD = "password"
 
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 
@@ -215,6 +220,35 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
+        return self.async_show_menu(step_id="reconfigure", menu_options=["connection", "wifi"])
+
+    async def async_step_wifi(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Change Wi-Fi: the credentials go straight to the agent and are never stored."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            connection = self._get_entry().runtime_data.get(self._get_reconfigure_subentry().subentry_id)
+            try:
+                if connection is None:
+                    raise ServiceValidationError("not connected")
+                await async_set_wifi(connection, user_input[CONF_SSID], user_input[CONF_WIFI_PASSWORD])
+            except HomeAssistantError:
+                errors["base"] = "wifi_failed"
+            else:
+                return self.async_abort(reason="wifi_changed")
+        return self.async_show_form(
+            step_id="wifi",
+            errors=errors,
+            data_schema=vol.Schema({
+                vol.Required(CONF_SSID): str,
+                vol.Required(CONF_WIFI_PASSWORD): _PASSWORD,
+            }),
+        )
+
+    async def async_step_connection(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
         subentry = self._get_reconfigure_subentry()
         old = dict(subentry.data)
         if user_input is not None:
@@ -227,7 +261,7 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
                 data[CONF_AREA_ID] = user_input[CONF_AREA_ID]
             return self.async_update_and_abort(self._get_entry(), subentry, data=data)
         return self.async_show_form(
-            step_id="reconfigure", data_schema=self._schema(old, token_optional=True)
+            step_id="connection", data_schema=self._schema(old, token_optional=True)
         )
 
     @staticmethod

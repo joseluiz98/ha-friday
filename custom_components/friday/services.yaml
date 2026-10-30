@@ -1,0 +1,16 @@
+set_wifi:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: friday
+    ssid:
+      required: true
+      selector:
+        text:
+    password:
+      required: true
+      selector:
+        text:
+          type: password

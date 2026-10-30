@@ -111,7 +111,7 @@ def test_sudoers_file_is_exact():
     assert len(rules) == 1 and rules[0].startswith("jose ALL=(root) NOPASSWD: ")
     cmds = [c.strip() for c in rules[0].split("NOPASSWD:")[1].split(",")]
     assert cmds == ["/usr/bin/systemctl start friday-satelite", "/usr/bin/systemctl stop friday-satelite",
-                    "/usr/bin/systemctl restart friday-satelite", "/usr/sbin/reboot"]
+                    "/usr/bin/systemctl restart friday-satelite", "/usr/sbin/reboot", "/usr/bin/nmcli"]
 
 
 async def test_startup_stop_failure_does_not_raise(tmp_path):

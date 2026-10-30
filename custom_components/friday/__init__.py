@@ -13,6 +13,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.util import slugify
 
 from .connection import FridayConnection
+from .services import async_register_services
 from .const import (
     CONF_AREA_ID, CONF_HOST, CONF_PORT, CONF_TOKEN, DEVICE_KIND_SATELLITE, DEVICE_KIND_SERVER, DOMAIN, EVENT_CHANGE,
     ORIGIN_HA, READ_ONLY_PLATFORMS,
@@ -33,6 +34,12 @@ SERVER_VOICE_KEY = "voice"
 SATELLITE_VOICE_KEY = "voice_enabled"
 
 type FridayConfigEntry = ConfigEntry[dict[str, FridayConnection]]
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Register the integration's services (once, whatever the entries)."""
+    async_register_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bool:

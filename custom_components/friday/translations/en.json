@@ -94,6 +94,13 @@
         },
         "reconfigure": {
           "title": "F.R.I.D.A.Y. Satellite",
+          "menu_options": {
+            "connection": "Connection",
+            "wifi": "Change Wi-Fi"
+          }
+        },
+        "connection": {
+          "title": "F.R.I.D.A.Y. Satellite",
           "data": {
             "host": "Host",
             "port": "Port",
@@ -103,10 +110,42 @@
           "data_description": {
             "token": "Leave blank to keep the stored token."
           }
+        },
+        "wifi": {
+          "title": "Change Wi-Fi",
+          "description": "The satellite joins the new network; if it does not answer within a minute, it goes back to the previous one. The password is not stored.",
+          "data": {
+            "ssid": "Network name",
+            "password": "Password"
+          }
         }
       },
       "abort": {
-        "reconfigure_successful": "Satellite updated."
+        "reconfigure_successful": "Satellite updated.",
+        "wifi_changed": "Wi-Fi changed."
+      },
+      "error": {
+        "wifi_failed": "The new network did not work (or the satellite is offline); the previous one was kept."
+      }
+    }
+  },
+  "services": {
+    "set_wifi": {
+      "name": "Set Wi-Fi",
+      "description": "Changes the Wi-Fi network of a satellite, with automatic rollback.",
+      "fields": {
+        "device_id": {
+          "name": "Satellite",
+          "description": "The satellite device."
+        },
+        "ssid": {
+          "name": "Network name",
+          "description": "SSID of the new network."
+        },
+        "password": {
+          "name": "Password",
+          "description": "Network password (8-63 characters); never stored."
+        }
       }
     }
   }

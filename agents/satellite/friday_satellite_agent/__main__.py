@@ -13,7 +13,9 @@ from aiohttp import web
 from friday_agent_core.server import AgentCore
 
 from . import capabilities as cap
+from . import hardware as hw
 from . import local
+from . import wifi
 from .announce import announce
 from .power import Power
 from .program import ProgramClient, ProgramError
@@ -124,6 +126,12 @@ async def main() -> None:
         await refresh("ha")
         return {"ok": True}
 
+    async def do_wifi(cmd: dict) -> dict:
+        args = cmd.get("args")
+        if not isinstance(args, dict) or not wifi.nmcli_available():
+            return {"ok": False, "error": "unsupported"}
+        return await wifi.set_wifi(args.get("ssid"), args.get("password"))  # never logged
+
     async def on_event(tipo: str, dados: dict) -> None:
         out = tracker.on_event(tipo, dados)
         if not out:
@@ -137,7 +145,7 @@ async def main() -> None:
         if out.get("event"):
             await core.push_event(*out["event"])
 
-    core = AgentCore(token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press})
+    core = AgentCore(token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi})
 
     async def poll() -> None:
         sent_caps = None
@@ -151,6 +159,16 @@ async def main() -> None:
             except Exception as err:  # noqa: BLE001
                 LOG.warning("poll failed: %s", type(err).__name__)
             await asyncio.sleep(POLL_S)
+
+    async def hardware_loop() -> None:
+        while True:
+            try:
+                changes = await hw.sample_async(with_network=wifi.nmcli_available())
+                memo["state"].update(changes)
+                await core.push_state(changes, "agent")
+            except Exception as err:  # noqa: BLE001
+                LOG.warning("hardware sample failed: %s", type(err).__name__)
+            await asyncio.sleep(hw.SAMPLE_S)
 
     async def midnight() -> None:
         while True:
@@ -168,7 +186,7 @@ async def main() -> None:
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     zc = await asyncio.to_thread(announce, sat_id, PORT)
     try:
-        await asyncio.gather(poll(), midnight())
+        await asyncio.gather(poll(), midnight(), hardware_loop())
     finally:
         if zc:
             zc.close()

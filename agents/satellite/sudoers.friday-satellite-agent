@@ -1,2 +1,2 @@
 # Installed by satellite/install.sh as /etc/sudoers.d/friday-satellite-agent (mode 0440).
-jose ALL=(root) NOPASSWD: /usr/bin/systemctl start friday-satelite, /usr/bin/systemctl stop friday-satelite, /usr/bin/systemctl restart friday-satelite, /usr/sbin/reboot
+jose ALL=(root) NOPASSWD: /usr/bin/systemctl start friday-satelite, /usr/bin/systemctl stop friday-satelite, /usr/bin/systemctl restart friday-satelite, /usr/sbin/reboot, /usr/bin/nmcli

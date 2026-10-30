@@ -10,6 +10,8 @@ import re
 import time
 from datetime import datetime, timezone
 
+from . import hardware as hw
+
 VERSION = "0.1.0"
 WHISPER_DEFAULT_DB = 5.5
 DUCK_DEFAULT = 15
@@ -49,6 +51,8 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("ducking_restore", "number", "Ducking restore delay", min=0, max=10, step=0.5, unit="s",
            category=c, mode="box"),
         _d("voice_enabled", "switch", "Voice", icon="mdi:account-voice"),
+        _d("mute", "switch", "Mute", icon="mdi:microphone-off"),
+        _d("turn_sounds", "switch", "Turn sounds", category=c, icon="mdi:bell-ring"),
         _d("reboot", "button", "Reboot", device_class="restart", category=c),
         _d("restart_program", "button", "Restart program", hidden=True, available=False, category=c),
     ]
@@ -67,7 +71,7 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("sw_version", "sensor", "Software version", category="diagnostic"),
         _d("activation", "event", "Activation", event_types=["conversation", "rejected", "shadow"]),
     ]
-    return out
+    return out + hw.descriptors()
 
 
 class Mapper:
@@ -86,6 +90,8 @@ class Mapper:
             pos = status.get("volume")
         st = {
             "do_not_disturb": bool(cfg.get("nao_perturbe")),
+            "mute": bool(cfg.get("mudo", False)),
+            "turn_sounds": cfg.get("sons_turno", True) is not False,
             "alarm_volume": cfg.get("volume_alertas"),
             "alarm_ramp": cfg.get("alarm_ramp_s"),
             "sounds_volume": cfg.get("volume_sons"),
@@ -107,7 +113,7 @@ class Mapper:
 
     def to_program(self, cfg: dict, key: str, value) -> dict | None:
         """Translate a `set` into {"config": {...}} or {"wakeword": (name, mode)}; None = unknown key."""
-        simple = {"do_not_disturb": "nao_perturbe", "alarm_volume": "volume_alertas", "alarm_ramp": "alarm_ramp_s",
+        simple = {"do_not_disturb": "nao_perturbe", "mute": "mudo", "turn_sounds": "sons_turno", "alarm_volume": "volume_alertas", "alarm_ramp": "alarm_ramp_s",
                   "sounds_volume": "volume_sons", "follow_up": "espera_resposta_s",
                   "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s"}
         if key in simple:

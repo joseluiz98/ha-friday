@@ -94,6 +94,13 @@
         },
         "reconfigure": {
           "title": "F.R.I.D.A.Y. Satellite",
+          "menu_options": {
+            "connection": "Conexão",
+            "wifi": "Trocar o Wi-Fi"
+          }
+        },
+        "connection": {
+          "title": "F.R.I.D.A.Y. Satellite",
           "data": {
             "host": "Endereço",
             "port": "Porta",
@@ -103,10 +110,42 @@
           "data_description": {
             "token": "Deixe em branco para manter."
           }
+        },
+        "wifi": {
+          "title": "Trocar o Wi-Fi",
+          "description": "O satélite entra na rede nova; se ela não responder em um minuto, ele volta para a anterior. A senha não é guardada.",
+          "data": {
+            "ssid": "Nome da rede",
+            "password": "Senha"
+          }
         }
       },
       "abort": {
-        "reconfigure_successful": "Satélite atualizado."
+        "reconfigure_successful": "Satélite atualizado.",
+        "wifi_changed": "Wi-Fi trocado."
+      },
+      "error": {
+        "wifi_failed": "A rede nova não funcionou (ou o satélite está desconectado); a anterior foi mantida."
+      }
+    }
+  },
+  "services": {
+    "set_wifi": {
+      "name": "Definir Wi-Fi",
+      "description": "Troca a rede Wi-Fi de um satélite, com volta automática.",
+      "fields": {
+        "device_id": {
+          "name": "Satélite",
+          "description": "O dispositivo do satélite."
+        },
+        "ssid": {
+          "name": "Nome da rede",
+          "description": "SSID da rede nova."
+        },
+        "password": {
+          "name": "Senha",
+          "description": "Senha da rede (8 a 63 caracteres); nunca guardada."
+        }
       }
     }
   }
