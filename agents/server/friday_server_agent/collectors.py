@@ -117,7 +117,6 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("brain_version", "Brain version", **diag),
         s("lucid_last_run", "Lucid Dreaming last run", device_class="timestamp"),
         s("memory_views_mode", "Memory views mode", **diag),
-        s("embeddings_reindex", "Embeddings reindex", icon="mdi:database-sync", **diag),
         s("conversation_open", "Conversation open", platform="binary_sensor"),
         s("host_available_mb", "Proxmox host available memory", unit="MB", available=proxmox, **m),
         s("nvme_temperature", "Proxmox NVMe temperature", unit="°C", device_class="temperature",

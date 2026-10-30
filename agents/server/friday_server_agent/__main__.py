@@ -87,7 +87,7 @@ async def main() -> None:
     status_token = _read(f"{SECRETS}/status_token")
     pve = _read(f"{SECRETS}/proxmox_ro")
     switch = vsw.VoiceSwitch(os.environ.get("FRIDAY_VOICE_ENABLED_FILE", vsw.DEFAULT_PATH))
-    state: dict = {"voice": switch.enabled, "embeddings_reindex": "idle"}
+    state: dict = {"voice": switch.enabled}
     device = {"id": "server", "kind": "server", "name": "F.R.I.D.A.Y. Server",
               "model": "Proxmox VM", "sw_version": c.VERSION}
     try:
@@ -111,12 +111,7 @@ async def main() -> None:
         modelsmod.google_fetch(f"{SECRETS}/gemini_api_key"), _log_tail, cmds.compose_restart,
         env_file="/srv/friday/friday.env")
 
-    async def push_state(ch: dict) -> None:
-        state.update(ch)
-        await core.push_state(ch, "agent")
-
-    store.reindexer = embmod.Reindexer(store, push_state=push_state,
-                                       push_log=lambda m, d: core.push_log(m, d))
+    store.reindexer = embmod.Reindexer(store)
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,

@@ -73,8 +73,7 @@ async def test_full_flow_sends_only_changes(hass):
     r = await hass.config_entries.options.async_init(entry.entry_id)
     assert r["type"] == FlowResultType.FORM and r["step_id"] == "init"
     r = await hass.config_entries.options.async_configure(r["flow_id"], {
-        "voice": "gemini-3.8-live", "brain": "gemini-3.8-pro", "lucid": "gemini-3.8-flash",
-        "embeddings": "gemini-embedding-2"})
+        "voice": "gemini-3.8-live", "brain": "gemini-3.8-pro", "lucid": "gemini-3.8-flash"})
     assert r["step_id"] == "voice"
     r = await hass.config_entries.options.async_configure(r["flow_id"], {
         "voice": "Kore", "speaking_rate": "slow", "brief_mode": True})
@@ -90,32 +89,12 @@ async def test_full_flow_sends_only_changes(hass):
     await agent.stop()
 
 
-async def test_embeddings_change_aborts_when_agent_lacks_estimate(hass):
+async def test_embeddings_is_read_only_in_the_form(hass):
     sink = []
     agent = make_agent(sink)
     entry = await setup(hass, agent)
     r = await hass.config_entries.options.async_init(entry.entry_id)
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {
-        "voice": "gemini-3.8-live", "brain": "gemini-3.8-flash", "lucid": "gemini-3.8-flash",
-        "embeddings": "gemini-embedding-3"})
-    assert r["type"] == FlowResultType.ABORT and r["reason"] == "embeddings_unavailable"
-    assert [c["name"] for c in sink] == ["list_models", "estimate_reindex"]
-    await hass.config_entries.async_unload(entry.entry_id)
-    await agent.stop()
-
-
-async def test_embeddings_change_goes_through_confirmation(hass):
-    sink = []
-    agent = make_agent(sink, {"estimate_reindex": {"ok": True, "data": {"chars": 4000, "tokens": 1000, "usd": 0.00015, "brl": 1.2345}}})
-    entry = await setup(hass, agent)
-    r = await hass.config_entries.options.async_init(entry.entry_id)
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {
-        "voice": "gemini-3.8-live", "brain": "gemini-3.8-flash", "lucid": "gemini-3.8-flash",
-        "embeddings": "gemini-embedding-3"})
-    assert r["type"] == FlowResultType.FORM and r["step_id"] == "embeddings_confirm"
-    assert r["description_placeholders"]["model"] == "gemini-embedding-3"
-    assert r["description_placeholders"]["brl"] == "1,23"
-    r = await hass.config_entries.options.async_configure(r["flow_id"], {"confirm": True})
-    assert r["step_id"] == "voice"
+    assert "embeddings" not in {str(k) for k in r["data_schema"].schema}
+    assert r["description_placeholders"]["embeddings"] == "gemini-embedding-2"
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()

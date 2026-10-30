@@ -180,19 +180,11 @@
     "step": {
       "init": {
         "title": "Modelos",
-        "description": "Modelo de cada papel. Voz e Lucid valem na próxima conversa ou execução; o cérebro só reinicia a F.R.I.D.A.Y. sem conversa aberta.",
+        "description": "Modelo de cada papel. Voz e Lucid valem na próxima conversa ou execução; o cérebro só reinicia a F.R.I.D.A.Y. sem conversa aberta. Modelo de embeddings (somente leitura): {embeddings}.",
         "data": {
           "voice": "Modelo da voz",
           "brain": "Modelo do cérebro",
-          "lucid": "Modelo do Lucid Dreaming",
-          "embeddings": "Modelo de embeddings da memória"
-        }
-      },
-      "embeddings_confirm": {
-        "title": "Trocar o modelo de embeddings",
-        "description": "A memória inteira será reindexada com {model}; custo estimado R$ {brl}.",
-        "data": {
-          "confirm": "Confirmar a troca"
+          "lucid": "Modelo do Lucid Dreaming"
         }
       },
       "voice": {

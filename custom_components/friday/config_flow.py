@@ -166,14 +166,6 @@ def _select(options: list[str], current: str | None, translation_key: str | None
     return SelectSelector(SelectSelectorConfig(**cfg))
 
 
-def _brl(estimate: dict) -> str:
-    """'1,23' from the agent's estimate (Brazilian decimal comma)."""
-    try:
-        return f"{float(estimate['brl']):.2f}".replace(".", ",")
-    except (KeyError, TypeError, ValueError):
-        return "?"
-
-
 class FridayOptionsFlow(OptionsFlow):
     """Global settings of the F.R.I.D.A.Y. server: models per role, voice, monthly budget."""
 
@@ -201,34 +193,15 @@ class FridayOptionsFlow(OptionsFlow):
         current = self._listing.get("current", {})
         if user_input is not None:
             self._models = user_input
-            if user_input.get("embeddings") != current.get("embeddings"):
-                return await self.async_step_embeddings_confirm()
             return await self.async_step_voice()
-        return self.async_show_form(step_id="init", data_schema=vol.Schema({
+        # Embeddings are read-only: the server agent cannot reindex into an isolated store (reindex_unsupported).
+        return self.async_show_form(step_id="init",
+                                    description_placeholders={"embeddings": current.get("embeddings", "?")},
+                                    data_schema=vol.Schema({
             vol.Required("voice", default=current.get("voice")): _select(self._listing["voice"], current.get("voice")),
             vol.Required("brain", default=current.get("brain")): _select(self._listing["brain"], current.get("brain")),
             vol.Required("lucid", default=current.get("lucid")): _select(self._listing["lucid"], current.get("lucid")),
-            vol.Required("embeddings", default=current.get("embeddings")): _select(
-                self._listing["embeddings"], current.get("embeddings")),
         }))
-
-    async def async_step_embeddings_confirm(self, user_input: dict[str, Any] | None = None) -> Any:
-        """Changing the embeddings model re-indexes the memory: show the agent's estimate first."""
-        model = self._models["embeddings"]
-        if user_input is None:
-            try:
-                self._estimate = await self._connection.send("estimate_reindex", args={"model": model}, timeout=30)
-            except HomeAssistantError:
-                return self.async_abort(reason="embeddings_unavailable")
-        elif not user_input.get("confirm"):
-            self._models["embeddings"] = self._listing["current"]["embeddings"]
-            return await self.async_step_voice()
-        else:
-            return await self.async_step_voice()
-        return self.async_show_form(
-            step_id="embeddings_confirm",
-            description_placeholders={"model": model, "brl": _brl(self._estimate)},
-            data_schema=vol.Schema({vol.Required("confirm", default=False): BooleanSelector()}))
 
     async def async_step_voice(self, user_input: dict[str, Any] | None = None) -> Any:
         current = self._listing.get("current", {})
@@ -254,7 +227,7 @@ class FridayOptionsFlow(OptionsFlow):
 
     async def _apply(self, budget: float) -> Any:
         current = self._listing.get("current", {})
-        changed = {role: self._models[role] for role in ("voice", "brain", "lucid", "embeddings")
+        changed = {role: self._models[role] for role in ("voice", "brain", "lucid")
                    if self._models.get(role) not in (None, current.get(role))}
         try:
             if changed:

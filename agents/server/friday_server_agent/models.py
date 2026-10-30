@@ -79,7 +79,7 @@ class ModelStore:
         self.state_dir, self.openclaw_json = state_dir, openclaw_json
         self.fetch, self.log_tail, self.restart = fetch, log_tail, restart
         self.env_file = env_file
-        self.reindexer = None  # embeddings.Reindexer, set by __main__ (None = embeddings switch unavailable)
+        self.reindexer = None  # embeddings.Reindexer (estimate only), set by __main__
         self.voice_path = os.path.join(state_dir, "voice-settings.json")
         self.models_path = os.path.join(state_dir, "models.json")
 
@@ -204,6 +204,13 @@ def make_handlers(store: ModelStore):
             return {"ok": False, "error": "invalid_value"}
         if not all(isinstance(v, str) and NAME_RE.match(v) for v in args.values()):
             return {"ok": False, "error": "invalid_value"}
+        current = store.current()  # read once
+        # Refused before anything else is applied: no partial change. See embeddings.py (why).
+        if "embeddings" in args and args["embeddings"] != current["embeddings"]:
+            return {"ok": False, "error": "reindex_unsupported"}
+        args = {k: v for k, v in args.items() if k != "embeddings"}
+        if not args:
+            return {"data": {"embeddings": "unchanged"}}
         # Write-time validation (a bad voice model would only fail when the next conversation connects):
         # the model must be in the Google listing for its role.
         try:
@@ -214,11 +221,6 @@ def make_handlers(store: ModelStore):
             if role in args and args[role] not in listing[group]:
                 return {"ok": False, "error": "invalid_value"}
         result: dict = {}
-        if "embeddings" in args:
-            if store.reindexer is None:
-                return {"ok": False, "error": "embeddings_unavailable"}
-            if args["embeddings"] != store.current()["embeddings"] and store.reindexer.running:
-                return {"ok": False, "error": "reindex_running"}  # before anything else is applied
         try:
             if "voice" in args:
                 await asyncio.to_thread(store.set_voice_model, args["voice"])
@@ -230,13 +232,6 @@ def make_handlers(store: ModelStore):
                 result["brain"] = await asyncio.to_thread(store.set_brain, args["brain"])
         except (OSError, subprocess.SubprocessError):
             return {"ok": False, "error": "write_failed"}
-        if "embeddings" in args:  # background: the reply does not wait for the reindex
-            if args["embeddings"] == store.current()["embeddings"]:
-                result["embeddings"] = "unchanged"
-            elif store.reindexer.start(args["embeddings"]):
-                result["embeddings"] = "started"
-            else:
-                return {"ok": False, "error": "reindex_running", "data": result}
         return {"data": result}
 
     async def estimate_reindex(cmd: dict) -> dict:

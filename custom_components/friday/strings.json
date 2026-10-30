@@ -180,19 +180,11 @@
     "step": {
       "init": {
         "title": "Models",
-        "description": "Model used by each role. Voice and Lucid apply from the next conversation or run; the brain restarts F.R.I.D.A.Y. only when no conversation is open.",
+        "description": "Model used by each role. Voice and Lucid apply from the next conversation or run; the brain restarts F.R.I.D.A.Y. only when no conversation is open. Embeddings model (read-only): {embeddings}.",
         "data": {
           "voice": "Voice model",
           "brain": "Brain model",
-          "lucid": "Lucid Dreaming model",
-          "embeddings": "Memory embeddings model"
-        }
-      },
-      "embeddings_confirm": {
-        "title": "Change embeddings model",
-        "description": "The whole memory will be re-indexed with {model}; estimated cost R$ {brl}.",
-        "data": {
-          "confirm": "Confirm the change"
+          "lucid": "Lucid Dreaming model"
         }
       },
       "voice": {
