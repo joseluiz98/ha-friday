@@ -13,6 +13,7 @@ from aiohttp import web
 from friday_agent_core.server import AgentCore
 
 from . import capabilities as cap
+from . import eq as eqmod
 from . import hardware as hw
 from . import local
 from . import room_sensors
@@ -86,9 +87,10 @@ async def main() -> None:
 
     room = room_sensors.Monitor(room_sensors.RoomSensors(), lambda v: room_state(v), lambda: room_caps())
     memo["sent_caps"] = None
+    equalizer = eqmod.Equalizer()
 
     def capabilities() -> list[dict]:
-        return cap.controls_from_config(memo["cfg"] or {}, memo["ww"]) + cap.room_descriptors(room.keys)
+        return cap.controls_from_config(memo["cfg"] or {}, memo["ww"]) + cap.room_descriptors(room.keys) + equalizer.descriptors()
 
     async def room_state(values: dict) -> None:
         memo["state"].update(values)
@@ -117,6 +119,11 @@ async def main() -> None:
     async def do_set(cmd: dict) -> dict:
         if cmd.get("key") == "voice_enabled":
             return await set_voice(bool(cmd.get("value")))
+        if cmd.get("key") in eqmod.BANDS:
+            res = await equalizer.apply({cmd["key"]: cmd.get("value")})
+            memo["state"].update(equalizer.state())
+            await core.push_state(equalizer.state(), "ha")
+            return res
         cfg = memo["cfg"]
         if cfg is None:
             return {"ok": False, "error": "program_down"}
@@ -233,6 +240,9 @@ async def main() -> None:
 
     await asyncio.to_thread(room.prime)
     await power.startup()
+    if await asyncio.to_thread(equalizer.detect):
+        await equalizer.startup()
+        memo["state"].update(equalizer.state())
     if await changer.recover():  # an attempt interrupted by an agent restart is rolled back
         memo["state"]["wifi_change"] = "rolled_back"
     app = local.make_app(token, on_event, core.app())

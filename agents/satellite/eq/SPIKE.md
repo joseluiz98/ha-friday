@@ -16,3 +16,5 @@ Never run in parallel with other heavy jobs (Pi 3). Stop `friday-satelite` befor
    no sync loss in Sendspin.
 7. Pass -> restart agent (it detects `equal`, declares eq_bass/mid/treble). Fail -> do not declare; note reason in README.
 Rollback: `sudo cp /etc/asound.conf.bak.<date> /etc/asound.conf`; restart sendspin and friday-satelite.
+
+Fallback note: if the single post-dmix instance fails, measure per-stream placement CPU (2 instances) here.
