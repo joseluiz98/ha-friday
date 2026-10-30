@@ -106,7 +106,7 @@ async def test_embeddings_change_aborts_when_agent_lacks_estimate(hass):
 
 async def test_embeddings_change_goes_through_confirmation(hass):
     sink = []
-    agent = make_agent(sink, {"estimate_reindex": {"ok": True, "data": {"files": 12, "cost_brl": 0.4}}})
+    agent = make_agent(sink, {"estimate_reindex": {"ok": True, "data": {"chars": 4000, "tokens": 1000, "usd": 0.00015, "brl": 1.2345}}})
     entry = await setup(hass, agent)
     r = await hass.config_entries.options.async_init(entry.entry_id)
     r = await hass.config_entries.options.async_configure(r["flow_id"], {
@@ -114,6 +114,7 @@ async def test_embeddings_change_goes_through_confirmation(hass):
         "embeddings": "gemini-embedding-3"})
     assert r["type"] == FlowResultType.FORM and r["step_id"] == "embeddings_confirm"
     assert r["description_placeholders"]["model"] == "gemini-embedding-3"
+    assert r["description_placeholders"]["brl"] == "1,23"
     r = await hass.config_entries.options.async_configure(r["flow_id"], {"confirm": True})
     assert r["step_id"] == "voice"
     await hass.config_entries.async_unload(entry.entry_id)

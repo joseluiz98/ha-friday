@@ -190,7 +190,7 @@
       },
       "embeddings_confirm": {
         "title": "Change embeddings model",
-        "description": "Switching to {model} re-indexes the memory. Estimate: {estimate}.",
+        "description": "The whole memory will be re-indexed with {model}; estimated cost R$ {brl}.",
         "data": {
           "confirm": "Confirm the change"
         }

@@ -17,6 +17,7 @@ from friday_agent_core.server import AgentCore
 from . import collectors as c
 from . import commands as cmds
 from . import cost as costmod
+from . import embeddings as embmod
 from . import models as modelsmod
 from . import voice_switch as vsw
 
@@ -86,7 +87,7 @@ async def main() -> None:
     status_token = _read(f"{SECRETS}/status_token")
     pve = _read(f"{SECRETS}/proxmox_ro")
     switch = vsw.VoiceSwitch(os.environ.get("FRIDAY_VOICE_ENABLED_FILE", vsw.DEFAULT_PATH))
-    state: dict = {"voice": switch.enabled}
+    state: dict = {"voice": switch.enabled, "embeddings_reindex": "idle"}
     device = {"id": "server", "kind": "server", "name": "F.R.I.D.A.Y. Server",
               "model": "Proxmox VM", "sw_version": c.VERSION}
     try:
@@ -109,6 +110,13 @@ async def main() -> None:
         os.environ.get("FRIDAY_OPENCLAW_JSON", "/srv/friday/home/.openclaw/openclaw.json"),
         modelsmod.google_fetch(f"{SECRETS}/gemini_api_key"), _log_tail, cmds.compose_restart,
         env_file="/srv/friday/friday.env")
+
+    async def push_state(ch: dict) -> None:
+        state.update(ch)
+        await core.push_state(ch, "agent")
+
+    store.reindexer = embmod.Reindexer(store, push_state=push_state,
+                                       push_log=lambda m, d: core.push_log(m, d))
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,

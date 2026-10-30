@@ -111,13 +111,6 @@ async def test_brain_pending_when_log_unreadable(aiohttp_client, tmp_path):
     assert r["data"]["brain"] == "pending" and calls == []
 
 
-async def test_embeddings_not_handled_but_other_roles_apply(aiohttp_client, tmp_path):
-    core, store, state, oc, calls = make(tmp_path)
-    r = await call(aiohttp_client, core, "set_models", embeddings="gemini-embedding-2", lucid="gemini-3.8-pro")
-    assert r["ok"] is False and r["error"] == "embeddings_unavailable"
-    assert json.loads((state / "models.json").read_text())["lucid"] == "gemini-3.8-pro"
-
-
 async def test_model_must_be_in_listing_for_its_role(aiohttp_client, tmp_path):
     core, store, state, oc, calls = make(tmp_path)
     for args in ({"voice": "gemini-3.8-flash"}, {"voice": "gemini-bogus-live"}, {"brain": "gemini-3.8-live"}):

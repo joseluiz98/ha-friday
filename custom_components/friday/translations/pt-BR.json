@@ -190,7 +190,7 @@
       },
       "embeddings_confirm": {
         "title": "Trocar o modelo de embeddings",
-        "description": "Trocar para {model} reindexa a memória. Estimativa: {estimate}.",
+        "description": "A memória inteira será reindexada com {model}; custo estimado R$ {brl}.",
         "data": {
           "confirm": "Confirmar a troca"
         }

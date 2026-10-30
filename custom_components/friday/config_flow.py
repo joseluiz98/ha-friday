@@ -166,6 +166,14 @@ def _select(options: list[str], current: str | None, translation_key: str | None
     return SelectSelector(SelectSelectorConfig(**cfg))
 
 
+def _brl(estimate: dict) -> str:
+    """'1,23' from the agent's estimate (Brazilian decimal comma)."""
+    try:
+        return f"{float(estimate['brl']):.2f}".replace(".", ",")
+    except (KeyError, TypeError, ValueError):
+        return "?"
+
+
 class FridayOptionsFlow(OptionsFlow):
     """Global settings of the F.R.I.D.A.Y. server: models per role, voice, monthly budget."""
 
@@ -219,8 +227,7 @@ class FridayOptionsFlow(OptionsFlow):
             return await self.async_step_voice()
         return self.async_show_form(
             step_id="embeddings_confirm",
-            description_placeholders={"model": model, "estimate": ", ".join(
-                f"{k}: {v}" for k, v in sorted(self._estimate.items()))},
+            description_placeholders={"model": model, "brl": _brl(self._estimate)},
             data_schema=vol.Schema({vol.Required("confirm", default=False): BooleanSelector()}))
 
     async def async_step_voice(self, user_input: dict[str, Any] | None = None) -> Any:

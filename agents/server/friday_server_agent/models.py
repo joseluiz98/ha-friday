@@ -79,6 +79,7 @@ class ModelStore:
         self.state_dir, self.openclaw_json = state_dir, openclaw_json
         self.fetch, self.log_tail, self.restart = fetch, log_tail, restart
         self.env_file = env_file
+        self.reindexer = None  # embeddings.Reindexer, set by __main__ (None = embeddings switch unavailable)
         self.voice_path = os.path.join(state_dir, "voice-settings.json")
         self.models_path = os.path.join(state_dir, "models.json")
 
@@ -98,13 +99,17 @@ class ModelStore:
                    .get("model", {}).get("primary", ""))
         return primary.split("/", 1)[-1] if primary else ""
 
+    def _embeddings(self, ms: dict) -> str:
+        live = (_read_json(self.openclaw_json).get("memory", {}).get("search", {}).get("model"))
+        return live or ms.get("embeddings") or DEFAULT_EMBEDDINGS
+
     def current(self) -> dict:
         vs, ms = _read_json(self.voice_path), _read_json(self.models_path)
         return {
             "voice": str(vs.get("model") or DEFAULT_VOICE_MODEL).removeprefix("models/"),
             "brain": self._brain(),
             "lucid": ms.get("lucid") or DEFAULT_LUCID,
-            "embeddings": ms.get("embeddings") or DEFAULT_EMBEDDINGS,
+            "embeddings": self._embeddings(ms),
             "voice_name": vs.get("voice") or self._env_voice() or "Charon",
             "speaking_rate": vs.get("speaking_rate") if vs.get("speaking_rate") in RATES else "normal",
             "brief_mode": bool(vs.get("brief_mode", False)),
@@ -205,10 +210,15 @@ def make_handlers(store: ModelStore):
             listing = await asyncio.to_thread(store.list_models)
         except Exception:  # noqa: BLE001
             return {"ok": False, "error": "models_unavailable"}
-        for role, group in (("voice", "voice"), ("brain", "brain"), ("lucid", "lucid")):
+        for role, group in (("voice", "voice"), ("brain", "brain"), ("lucid", "lucid"), ("embeddings", "embeddings")):
             if role in args and args[role] not in listing[group]:
                 return {"ok": False, "error": "invalid_value"}
         result: dict = {}
+        if "embeddings" in args:
+            if store.reindexer is None:
+                return {"ok": False, "error": "embeddings_unavailable"}
+            if args["embeddings"] != store.current()["embeddings"] and store.reindexer.running:
+                return {"ok": False, "error": "reindex_running"}  # before anything else is applied
         try:
             if "voice" in args:
                 await asyncio.to_thread(store.set_voice_model, args["voice"])
@@ -220,9 +230,25 @@ def make_handlers(store: ModelStore):
                 result["brain"] = await asyncio.to_thread(store.set_brain, args["brain"])
         except (OSError, subprocess.SubprocessError):
             return {"ok": False, "error": "write_failed"}
-        if "embeddings" in args:  # Task 16; the other roles above were applied
-            return {"ok": False, "error": "embeddings_unavailable", "data": result}
+        if "embeddings" in args:  # background: the reply does not wait for the reindex
+            if args["embeddings"] == store.current()["embeddings"]:
+                result["embeddings"] = "unchanged"
+            elif store.reindexer.start(args["embeddings"]):
+                result["embeddings"] = "started"
+            else:
+                return {"ok": False, "error": "reindex_running", "data": result}
         return {"data": result}
+
+    async def estimate_reindex(cmd: dict) -> dict:
+        model = (cmd.get("args") or {}).get("model")
+        if not isinstance(model, str) or not NAME_RE.match(model):
+            return {"ok": False, "error": "invalid_value"}
+        if store.reindexer is None:
+            return {"ok": False, "error": "embeddings_unavailable"}
+        try:
+            return {"data": await asyncio.to_thread(store.reindexer.estimate, model)}
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "error": "estimate_failed"}
 
     async def set_voice_settings(cmd: dict) -> dict:
         a = cmd.get("args") or {}
@@ -236,4 +262,5 @@ def make_handlers(store: ModelStore):
             return {"ok": False, "error": "write_failed"}
         return {"data": data}
 
-    return {"list_models": list_models, "set_models": set_models, "set_voice_settings": set_voice_settings}
+    return {"list_models": list_models, "set_models": set_models,
+            "estimate_reindex": estimate_reindex, "set_voice_settings": set_voice_settings}
