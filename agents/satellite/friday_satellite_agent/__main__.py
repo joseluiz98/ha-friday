@@ -27,6 +27,7 @@ LOG = logging.getLogger("friday_satellite_agent")
 CONFIG = os.environ.get("FRIDAY_SAT_CONFIG", "/etc/friday-satelite/config.json")
 ID_FILE = os.environ.get("FRIDAY_SAT_ID_FILE", "/etc/friday-satelite/id")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8701"))
+COUNTERS = os.path.expanduser("~/.friday-agent/counters.json")  # today's counts survive an agent restart
 POLL_S = 20
 
 
@@ -49,7 +50,7 @@ async def main() -> None:
         raise SystemExit("missing local port password")
     sat_id = _sat_id()
     program = ProgramClient(token, f"http://127.0.0.1:{program_port}")
-    mapper, tracker = cap.Mapper(), cap.Tracker()
+    mapper, tracker = cap.Mapper(), cap.Tracker(path=COUNTERS)
     memo: dict = {"cfg": None, "ww": [], "state": {"program_state": "off", **tracker.counters(),
                                                    "sw_version": cap.VERSION, "wifi_change": "idle"}}
     device = {"id": sat_id, "kind": "satellite", "name": f"F.R.I.D.A.Y. Satellite {sat_id}",

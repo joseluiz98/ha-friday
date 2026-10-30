@@ -61,3 +61,11 @@ restarts `friday-satelite`). It announces `_friday._tcp` over zeroconf; Home Ass
 integrations page, asks for the local-port password and the area, and adds it as a `satellite` subentry
 (`async_add_subentry`, available in HA 2026.10). `single_config_entry` is deliberately not set in the manifest, since it
 would abort discovery once the main entry exists; the user flow still allows a single entry.
+
+### Privacy and recorder notes
+
+- `wifi_ssid` (the network name) is a diagnostic sensor that is **disabled by default** (`enabled_default: false` in
+  the descriptor): Home Assistant's recorder stores the state of every enabled entity, so the SSID is only kept if you
+  enable the entity yourself. `wifi_signal` and the other network sensors stay enabled.
+- `activations_today` and `rejected_today` reset every local midnight, so they carry no `state_class`. The agent keeps
+  today's counts in `~/.friday-agent/counters.json` so a restart of the agent does not zero them.

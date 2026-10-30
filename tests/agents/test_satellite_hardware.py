@@ -119,3 +119,9 @@ def test_mute_and_turn_sounds_mapping():
     caps = {d["key"]: d for d in cap.controls_from_config({}, [])}
     assert caps["mute"]["platform"] == "switch" and caps["mute"].get("category") is None
     assert caps["turn_sounds"]["platform"] == "switch" and caps["turn_sounds"]["category"] == "config"
+
+
+def test_wifi_ssid_is_diagnostic_and_disabled_by_default():
+    d = {x["key"]: x for x in hw.descriptors(network=True)}
+    assert d["wifi_ssid"]["category"] == "diagnostic" and d["wifi_ssid"]["enabled_default"] is False
+    assert d["wifi_signal"].get("enabled_default", True) is True

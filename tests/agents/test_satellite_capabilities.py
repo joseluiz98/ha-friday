@@ -140,3 +140,29 @@ async def test_announce_failure_does_not_raise(monkeypatch):
 
     monkeypatch.setattr(an, "lan_ip", boom)
     assert an.announce("sat-1", 8701) is None
+
+
+def test_daily_counters_survive_agent_restart_and_reset_on_new_day(tmp_path):
+    path, day = str(tmp_path / "counters.json"), ["2026-10-30"]
+    t = cap.Tracker(path=path, today=lambda: day[0])
+    t.on_event("ativacao", {"palavra": "friday", "resultado": "conversa"})
+    t.on_event("ativacao", {"palavra": "friday", "resultado": "barrada"})
+    t.on_event("ativacao", {"palavra": "friday", "resultado": "barrada"})
+    again = cap.Tracker(path=path, today=lambda: day[0])  # agent restart, same day
+    assert again.counters() == {"activations_today": 1, "rejected_today": 2}
+    day[0] = "2026-10-31"
+    assert cap.Tracker(path=path, today=lambda: day[0]).counters() == {"activations_today": 0, "rejected_today": 0}
+    again.reset_day()
+    day[0] = "2026-10-30"
+    assert cap.Tracker(path=path, today=lambda: day[0]).counters() == {"activations_today": 0, "rejected_today": 0}
+
+
+def test_daily_counters_corrupt_file_is_ignored(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text("not json")
+    assert cap.Tracker(path=str(p)).counters() == {"activations_today": 0, "rejected_today": 0}
+
+
+def test_daily_counters_have_no_state_class():
+    d = {x["key"]: x for x in cap.controls_from_config({}, [])}
+    assert "state_class" not in d["activations_today"] and "state_class" not in d["rejected_today"]

@@ -35,13 +35,15 @@ Sent right after connecting.
 {"key":"...","platform":"sensor|binary_sensor|number|switch|select|button|event",
  "name":"...","category":null,"icon":"...","unit":"...","device_class":"...",
  "state_class":"...","min":0,"max":10,"step":1,"mode":"...",
- "options":["..."],"event_types":["..."],"available":true,"hidden":false}
+ "options":["..."],"event_types":["..."],"available":true,"hidden":false,"enabled_default":true}
 ```
 
 - `category`: `null`, `"config"` or `"diagnostic"`.
 - Absent fields mean the Home Assistant default.
 - A descriptor whose `platform` is not one of the seven above is skipped (its
   key is reported in `Hello.skipped`); the rest of the hello is still used.
+- `enabled_default: false` creates the entity disabled in the entity registry (the user can enable it); used for
+  `wifi_ssid`, so the network name is not recorded unless asked for.
 - `hidden: true` marks a protocol-only command: it is never turned into an
   entity, but Home Assistant may still send it as a command.
 

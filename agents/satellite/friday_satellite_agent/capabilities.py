@@ -6,9 +6,11 @@ program's local events into protocol state, events and counters (idempotent).
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from . import hardware as hw
 
@@ -65,8 +67,8 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
     out += [
         _d("program_state", "sensor", "Program state", device_class="enum",
            options=["off", "idle", "listening", "conversation"]),
-        _d("activations_today", "sensor", "Activations today", state_class="total_increasing", category="diagnostic"),
-        _d("rejected_today", "sensor", "Rejected today", state_class="total_increasing", category="diagnostic"),
+        _d("activations_today", "sensor", "Activations today", category="diagnostic"),
+        _d("rejected_today", "sensor", "Rejected today", category="diagnostic"),
         _d("last_activation", "sensor", "Last activation", device_class="timestamp", category="diagnostic"),
         _d("sw_version", "sensor", "Software version", category="diagnostic"),
         _d("activation", "event", "Activation", event_types=["conversation", "rejected", "shadow"]),
@@ -155,13 +157,40 @@ class Tracker:
 
     PENDING_S = 5.0
 
-    def __init__(self, clock=time.monotonic) -> None:
+    def __init__(self, clock=time.monotonic, path: str | None = None, today=None) -> None:
         self._clock = clock
+        self._path = path
+        self._today = today or (lambda: date.today().isoformat())
         self._pending: dict[str, float] = {}
         self._act = 0
         self._rej = 0
         self._last = None
         self._conv = False
+        self._load()
+
+    def _load(self) -> None:
+        """Restore today's counts after an agent restart (counts of an earlier day are dropped)."""
+        if not self._path:
+            return
+        try:
+            with open(self._path, encoding="utf-8") as f:
+                saved = json.load(f)
+            if saved.get("date") == self._today():
+                self._act, self._rej = int(saved.get("act", 0)), int(saved.get("rej", 0))
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+
+    def _save(self) -> None:
+        if not self._path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
+            tmp = self._path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"date": self._today(), "act": self._act, "rej": self._rej}, f)
+            os.replace(tmp, self._path)
+        except OSError:
+            pass
 
     def mark_ha(self, keys) -> None:
         """Keys the agent just wrote for HA: their echo from the program is origin `ha`."""
@@ -179,6 +208,7 @@ class Tracker:
 
     def reset_day(self) -> dict:
         self._act = self._rej = 0
+        self._save()
         return self.counters()
 
     def on_event(self, tipo: str, dados: dict) -> dict | None:
@@ -193,6 +223,7 @@ class Tracker:
                 state["last_activation"] = self._last
             elif kind == "rejected":
                 self._rej += 1
+            self._save()
             state.update(self.counters())
             data = {"word": dados.get("palavra"), "score": dados.get("nota"), "duration_s": dados.get("duracao_s")}
             return {"event": ("activation", kind, data), "state": state}

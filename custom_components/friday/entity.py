@@ -35,6 +35,7 @@ class FridayEntity(Entity):
             f"{descriptor.platform}.friday_{slugify(device['id'])}_{slugify(descriptor.key)}"
         )
         self._attr_entity_category = _CATEGORIES.get(descriptor.category)
+        self._attr_entity_registry_enabled_default = descriptor.enabled_default is not False
         if descriptor.icon:
             self._attr_icon = descriptor.icon
         self._attr_device_info = DeviceInfo(

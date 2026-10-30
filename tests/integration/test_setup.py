@@ -201,3 +201,16 @@ async def test_entity_id_pattern_and_timestamp_sensors(hass):
     assert hass.states.get("switch.friday_dev1_dnd") is not None
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
+
+
+async def test_enabled_default_false_creates_disabled_entity(hass):
+    caps = CAPS + [{"key": "ssid", "platform": "sensor", "name": "SSID", "category": "diagnostic",
+                    "enabled_default": False}]
+    agent = FakeAgent(hello(caps, dict(STATE, ssid="Home")))
+    entry = await setup(hass, agent)
+    reg = await entities(hass, 4)
+    ent = reg.async_get("sensor.friday_dev1_ssid")
+    assert ent.disabled_by is not None and hass.states.get("sensor.friday_dev1_ssid") is None
+    assert reg.async_get("sensor.friday_dev1_temp").disabled_by is None
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()

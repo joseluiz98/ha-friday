@@ -40,6 +40,7 @@ class Descriptor:
     event_types: list[str] | None = None
     available: bool = True
     hidden: bool = False
+    enabled_default: bool = True
 
 
 @dataclass
