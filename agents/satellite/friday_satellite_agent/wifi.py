@@ -23,7 +23,7 @@ CMD_TIMEOUT_S = 30        # a helper call activates with `-w 20`; this is the ou
 DEADLINE_S = 75           # whole attempt (apply + connectivity checks)
 ROLLBACK_WAIT_S = 20
 MARKER = os.path.expanduser("~/.friday-agent/wifi-change.json")
-_NAME = re.compile(r"^friday-wifi-[0-9]+$")
+_NAME = re.compile(r"friday-wifi-[0-9]+")
 
 
 async def run_command(argv: list[str], stdin: str | None = None) -> tuple[int, str]:
@@ -127,7 +127,7 @@ class Changer:
         if previous:
             await self._call([*HELPER, "up", previous])
             await self._gateway_answers(self.rollback_wait_s, None)
-        if new and new != previous and _NAME.match(new):
+        if new and new != previous and _NAME.fullmatch(new):
             await self._call([*HELPER, "delete", new])
         _write_marker(self.marker, None)
         return {"ok": False, "error": "rollback"}

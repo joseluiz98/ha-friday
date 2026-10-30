@@ -16,8 +16,8 @@ import uuid
 
 CONN_DIR = os.environ.get("FRIDAY_WIFI_CONN_DIR", "/etc/NetworkManager/system-connections")
 IFACE = "wlan0"
-NAME_RE = re.compile(r"^friday-wifi-[0-9]+$")
-SAFE_NAME = re.compile(r"^[^\x00-\x1f/]{1,64}$")
+NAME_RE = re.compile(r"friday-wifi-[0-9]+")  # always used with fullmatch: "$" would accept a trailing newline
+SAFE_NAME = re.compile(r"[^\x00-\x1f/-][^\x00-\x1f/]{0,63}")  # fullmatch; never starts with "-" (option injection)
 ACTIVATE_WAIT_S = "20"
 
 
@@ -43,21 +43,28 @@ def main(argv, stdin, run=subprocess.run, conn_dir=CONN_DIR) -> int:
             name, ssid, password = data["name"], data["ssid"], data["password"]
         except (ValueError, KeyError, TypeError):
             return 2
-        if not (NAME_RE.match(str(name)) and isinstance(ssid, str) and isinstance(password, str)
+        if not (NAME_RE.fullmatch(str(name)) and isinstance(ssid, str) and isinstance(password, str)
                 and 1 <= len(ssid.encode()) <= 32 and 8 <= len(password.encode()) <= 63
                 and not any(c in ssid + password for c in "\n\r\0")):
             return 2
         path = os.path.join(conn_dir, f"{name}.nmconnection")
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(keyfile(name, ssid, password))
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(keyfile(name, ssid, password))
+        except FileExistsError:
+            print("friday-wifi-apply: profile already exists", file=sys.stderr)
+            return 5
+        except OSError as err:
+            print(f"friday-wifi-apply: cannot write profile ({type(err).__name__})", file=sys.stderr)
+            return 6
         if _nmcli(run, "connection", "reload") != 0:
             return 3
-        return _nmcli(run, "-w", ACTIVATE_WAIT_S, "connection", "up", name, "ifname", IFACE)
-    if cmd == "up" and len(argv) == 3 and SAFE_NAME.match(argv[2]):
-        return _nmcli(run, "-w", ACTIVATE_WAIT_S, "connection", "up", argv[2], "ifname", IFACE)
-    if cmd == "delete" and len(argv) == 3 and NAME_RE.match(argv[2]):
-        return _nmcli(run, "connection", "delete", argv[2])
+        return _nmcli(run, "-w", ACTIVATE_WAIT_S, "connection", "up", "id", name, "ifname", IFACE)
+    if cmd == "up" and len(argv) == 3 and SAFE_NAME.fullmatch(argv[2]):
+        return _nmcli(run, "-w", ACTIVATE_WAIT_S, "connection", "up", "id", argv[2], "ifname", IFACE)
+    if cmd == "delete" and len(argv) == 3 and NAME_RE.fullmatch(argv[2]):
+        return _nmcli(run, "connection", "delete", "id", argv[2])
     return 2
 
 

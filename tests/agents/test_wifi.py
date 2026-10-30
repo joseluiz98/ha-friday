@@ -190,3 +190,61 @@ def test_helper_refuses_bad_input_and_foreign_names(tmp_path):
     assert h.main(["x", "delete", "ExampleNet"], io.StringIO(""), run=run, conn_dir=str(tmp_path)) == 2
     assert h.main(["x", "delete", "friday-wifi-3"], io.StringIO(""), run=run, conn_dir=str(tmp_path)) == 0
     assert h.main(["x", "up", "../etc"], io.StringIO(""), run=run, conn_dir=str(tmp_path)) == 2
+
+
+def test_helper_rejects_leading_dash_and_trailing_newline(tmp_path):
+    h = load_helper()
+    calls = []
+    run = lambda argv, **kw: calls.append(argv) or Cp()  # noqa: E731
+    for name in ("-w", "--help", "-"):
+        assert h.main(["x", "up", name], io.StringIO(""), run=run, conn_dir=str(tmp_path)) == 2
+    assert not calls
+
+
+def test_helper_name_fullmatch_no_trailing_newline(tmp_path):
+    h = load_helper()
+    run = lambda argv, **kw: Cp()  # noqa: E731
+    payload = {"name": "friday-wifi-1\n", "ssid": "a", "password": PASSWORD}
+    assert h.main(["x", "apply"], io.StringIO(json.dumps(payload)), run=run, conn_dir=str(tmp_path)) == 2
+    assert h.main(["x", "delete", "friday-wifi-3\n"], io.StringIO(""), run=run, conn_dir=str(tmp_path)) == 2
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_helper_up_uses_explicit_id(tmp_path):
+    h, calls = load_helper(), []
+    run = lambda argv, **kw: calls.append(argv) or Cp()  # noqa: E731
+    assert h.main(["x", "up", "ExampleNet"], io.StringIO(""), run=run, conn_dir=str(tmp_path)) == 0
+    assert calls[0] == ["nmcli", "-w", "20", "connection", "up", "id", "ExampleNet", "ifname", "wlan0"]
+    h.main(["x", "apply"], io.StringIO(json.dumps({"name": "friday-wifi-4", "ssid": "a", "password": PASSWORD})),
+           run=run, conn_dir=str(tmp_path))
+    assert calls[-1] == ["nmcli", "-w", "20", "connection", "up", "id", "friday-wifi-4", "ifname", "wlan0"]
+
+
+def test_helper_existing_file_and_oserror_exit_cleanly(tmp_path, capsys):
+    h = load_helper()
+    run = lambda argv, **kw: Cp()  # noqa: E731
+    (tmp_path / "friday-wifi-5.nmconnection").write_text("x")
+    payload = json.dumps({"name": "friday-wifi-5", "ssid": "a", "password": PASSWORD})
+    assert h.main(["x", "apply"], io.StringIO(payload), run=run, conn_dir=str(tmp_path)) == 5
+    assert (tmp_path / "friday-wifi-5.nmconnection").read_text() == "x"  # never overwritten
+    assert h.main(["x", "apply"], io.StringIO(payload), run=run, conn_dir=str(tmp_path / "missing")) == 6
+    assert PASSWORD not in capsys.readouterr().err
+
+
+async def test_helper_call_shape_sudo_argv_and_stdin_only(tmp_path):
+    """The real subprocess path: argv is exactly the sudoers-allowed command, the password is only on stdin."""
+    assert wifi.HELPER == ["sudo", "-n", "/usr/local/sbin/friday-wifi-apply"]
+    out = tmp_path / "seen.json"
+    fake = tmp_path / "fake-helper"
+    fake.write_text(f"#!{sys.executable}\nimport json,sys\n"
+                    f"json.dump({{'argv': sys.argv[1:], 'stdin': sys.stdin.read()}}, open({str(out)!r}, 'w'))\n")
+    fake.chmod(0o755)
+    code, _ = await wifi.run_command([str(fake), "apply"], json.dumps({"name": "friday-wifi-1", "ssid": "a", "password": PASSWORD}))
+    seen = json.loads(out.read_text())
+    assert code == 0 and seen["argv"] == ["apply"] and PASSWORD in seen["stdin"]
+    # and the Changer builds exactly HELPER + ["apply"] with the password in stdin only
+    r = Runner()
+    await changer(r, tmp_path).set_wifi("Casa", PASSWORD)
+    argv, stdin = next(c for c in r.calls if c[0][:3] == wifi.HELPER)
+    assert argv == ["sudo", "-n", "/usr/local/sbin/friday-wifi-apply", "apply"]
+    assert PASSWORD in stdin and not any(PASSWORD in " ".join(a) for a, _ in r.calls)
