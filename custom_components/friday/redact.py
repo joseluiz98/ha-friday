@@ -11,7 +11,7 @@ SENSITIVE_PARTS = ("secret", "token", "password", "psk", "senha", "authorization
 
 _KW = r"(?:psk|password|passwd|token|secret|senha|api[_-]?key|apikey)"
 _VAL = r"""("[^"\n]*"|'[^'\n]*'|[^\n,;&}\]"']+)"""
-# Keep in sync with custom_components/friday/redact.py (a test compares them).
+# Keep in sync with agents/common/friday_agent_core/diagnostics.py (a test compares them).
 _PATTERNS = [
     (re.compile(r"""(?i)(authorization["']?\s*[:=]\s*["']?)(?:(?:Bearer|Basic|PVEAPIToken=?)\s+)?[^\s"',}]+"""),
      r"\1" + REDACTED),

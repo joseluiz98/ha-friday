@@ -44,3 +44,12 @@ async def test_diagnostics_agent_error_does_not_raise(hass):
     assert out["agent"] == "unavailable" and out["device"]["id"] == "dev1"
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
+
+
+def test_diagnostics_redacts_proxmox_token_secret():
+    from custom_components.friday.diagnostics import _redact
+
+    out = _redact({"entry": {"subentry": {"host": "h", "token": "t", "proxmox_token_secret": "PVE-S3CRET-value",
+                                          "proxmox_token_id": "root@pam!x"}}})
+    assert out["entry"]["subentry"]["proxmox_token_secret"] == "**REDACTED**"
+    assert "PVE-S3CRET-value" not in str(out)
