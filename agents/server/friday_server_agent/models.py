@@ -43,6 +43,15 @@ def _write_json(path: str, data: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
+    try:  # keep the original's mode and owner (openclaw.json is not ours alone)
+        st = os.stat(path)
+        os.chmod(tmp, st.st_mode & 0o7777)
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except PermissionError:
+            pass
+    except FileNotFoundError:
+        pass
     os.replace(tmp, path)
 
 
@@ -188,10 +197,17 @@ def make_handlers(store: ModelStore):
         roles = {"voice", "brain", "lucid", "embeddings"}
         if not args or not set(args) <= roles:
             return {"ok": False, "error": "invalid_value"}
-        if "embeddings" in args:
-            return {"ok": False, "error": "embeddings_unavailable"}  # Task 16
         if not all(isinstance(v, str) and NAME_RE.match(v) for v in args.values()):
             return {"ok": False, "error": "invalid_value"}
+        # Write-time validation (a bad voice model would only fail when the next conversation connects):
+        # the model must be in the Google listing for its role.
+        try:
+            listing = await asyncio.to_thread(store.list_models)
+        except Exception:  # noqa: BLE001
+            return {"ok": False, "error": "models_unavailable"}
+        for role, group in (("voice", "voice"), ("brain", "brain"), ("lucid", "lucid")):
+            if role in args and args[role] not in listing[group]:
+                return {"ok": False, "error": "invalid_value"}
         result: dict = {}
         try:
             if "voice" in args:
@@ -204,11 +220,14 @@ def make_handlers(store: ModelStore):
                 result["brain"] = await asyncio.to_thread(store.set_brain, args["brain"])
         except (OSError, subprocess.SubprocessError):
             return {"ok": False, "error": "write_failed"}
+        if "embeddings" in args:  # Task 16; the other roles above were applied
+            return {"ok": False, "error": "embeddings_unavailable", "data": result}
         return {"data": result}
 
     async def set_voice_settings(cmd: dict) -> dict:
         a = cmd.get("args") or {}
-        if (a.get("voice") not in VOICES or a.get("speaking_rate") not in RATES
+        known = a.get("voice") in VOICES or a.get("voice") == store.current()["voice_name"]  # env voice stays valid
+        if (not known or a.get("speaking_rate") not in RATES
                 or not isinstance(a.get("brief_mode"), bool)):
             return {"ok": False, "error": "invalid_value"}
         try:

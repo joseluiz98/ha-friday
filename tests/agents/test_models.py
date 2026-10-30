@@ -10,6 +10,7 @@ from friday_server_agent import models as m
 HDR = {"Authorization": "Bearer t"}
 CATALOG = [
     {"name": "models/gemini-3.8-live", "supportedGenerationMethods": ["bidiGenerateContent"]},
+    {"name": "models/gemini-3.9-live", "supportedGenerationMethods": ["bidiGenerateContent"]},
     {"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent", "countTokens"]},
     {"name": "models/gemini-3.8-pro", "supportedGenerationMethods": ["generateContent"]},
     {"name": "models/gemini-embedding-2", "supportedGenerationMethods": ["embedContent"]},
@@ -53,7 +54,7 @@ async def test_list_models_groups_by_method(aiohttp_client, tmp_path):
     core, *_ = make(tmp_path)
     r = await call(aiohttp_client, core, "list_models")
     d = r["data"]
-    assert d["voice"] == ["gemini-3.8-live"]
+    assert d["voice"] == ["gemini-3.8-live", "gemini-3.9-live"]
     assert d["brain"] == ["gemini-3.8-flash", "gemini-3.8-pro"]
     assert d["lucid"] == d["brain"]
     assert d["embeddings"] == ["gemini-embedding-2"]
@@ -110,10 +111,38 @@ async def test_brain_pending_when_log_unreadable(aiohttp_client, tmp_path):
     assert r["data"]["brain"] == "pending" and calls == []
 
 
-async def test_embeddings_not_handled_here(aiohttp_client, tmp_path):
-    core, *_ = make(tmp_path)
-    r = await call(aiohttp_client, core, "set_models", embeddings="gemini-embedding-2")
+async def test_embeddings_not_handled_but_other_roles_apply(aiohttp_client, tmp_path):
+    core, store, state, oc, calls = make(tmp_path)
+    r = await call(aiohttp_client, core, "set_models", embeddings="gemini-embedding-2", lucid="gemini-3.8-pro")
     assert r["ok"] is False and r["error"] == "embeddings_unavailable"
+    assert json.loads((state / "models.json").read_text())["lucid"] == "gemini-3.8-pro"
+
+
+async def test_model_must_be_in_listing_for_its_role(aiohttp_client, tmp_path):
+    core, store, state, oc, calls = make(tmp_path)
+    for args in ({"voice": "gemini-3.8-flash"}, {"voice": "gemini-bogus-live"}, {"brain": "gemini-3.8-live"}):
+        r = await call(aiohttp_client, core, "set_models", **args)
+        assert r["ok"] is False and r["error"] == "invalid_value"
+    assert not (state / "voice-settings.json").exists() and calls == []
+
+
+async def test_rewrite_preserves_mode(aiohttp_client, tmp_path):
+    import os
+    core, store, state, oc, calls = make(tmp_path)
+    os.chmod(oc, 0o640)
+    m._write_json(str(oc), json.loads(oc.read_text()))
+    assert os.stat(oc).st_mode & 0o7777 == 0o640
+    r = await call(aiohttp_client, core, "set_models", brain="gemini-3.8-pro")
+    assert r["data"]["brain"] == "applied" and os.stat(oc).st_mode & 0o7777 == 0o640
+
+
+async def test_env_voice_outside_the_list_is_accepted(aiohttp_client, tmp_path):
+    core, store, state, oc, calls = make(tmp_path)
+    env = tmp_path / "friday.env"
+    env.write_text("FRIDAY_VOICE=Custom\n")
+    store.env_file = str(env)
+    r = await call(aiohttp_client, core, "set_voice_settings", voice="Custom", speaking_rate="normal", brief_mode=False)
+    assert r["ok"] is True
 
 
 async def test_invalid_model_name(aiohttp_client, tmp_path):
