@@ -7,6 +7,7 @@
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/joseluiz98/ha-friday/issues",
+  "after_dependencies": ["logbook"],
   "requirements": [],
   "version": "0.1.0",
   "zeroconf": ["_friday._tcp.local."]

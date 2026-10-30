@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
+from homeassistant.components.logbook import async_log_entry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.util import slugify
 
 from .connection import FridayConnection
-from .const import CONF_AREA_ID, CONF_HOST, CONF_PORT, CONF_TOKEN, DOMAIN
+from .const import (
+    CONF_AREA_ID, CONF_HOST, CONF_PORT, CONF_TOKEN, DOMAIN, EVENT_CHANGE,
+    ORIGIN_HA, READ_ONLY_PLATFORMS,
+)
 
 PLATFORMS = [
     Platform.BINARY_SENSOR,
@@ -42,6 +47,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
             hass.config_entries.async_schedule_reload(entry.entry_id)
 
         entry.async_on_unload(connection.add_capabilities_listener(_reload))
+        entry.async_on_unload(connection.add_listener(_change_listener(hass, connection)))
+        entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
         area_id = entry.subentries[subentry_id].data.get(CONF_AREA_ID)
         if area_id:
             entry.async_on_unload(_area_listener(hass, entry, subentry_id, connection))
@@ -49,6 +56,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
+
+
+def _entity_id(connection, descriptor) -> str:
+    device_id = connection.hello.device["id"]
+    return f"{descriptor.platform}.friday_{slugify(device_id)}_{slugify(descriptor.key)}"
+
+
+def _change_listener(hass, connection):
+    """Fire friday_change for changes the satellite made itself (not HA's own)."""
+
+    def _on_changes(changes: dict, origin: str) -> None:
+        if origin == ORIGIN_HA or connection.hello is None:
+            return
+        for d in connection.hello.capabilities:
+            if d.key not in changes or d.hidden or d.platform in READ_ONLY_PLATFORMS:
+                continue
+            hass.bus.async_fire(EVENT_CHANGE, {
+                "device_id": connection.hello.device["id"],
+                "entity_id": _entity_id(connection, d),
+                "key": d.key, "value": changes[d.key], "origin": origin,
+            })
+
+    return _on_changes
+
+
+def _log_listener(hass, connection):
+    """Agent log messages become logbook entries on the device's first entity."""
+
+    def _on_log(message: str, data: dict) -> None:
+        if connection.hello is None:
+            return
+        first = next((d for d in connection.hello.capabilities if not d.hidden), None)
+        async_log_entry(
+            hass, connection.hello.device.get("name") or "F.R.I.D.A.Y.", message,
+            DOMAIN, _entity_id(connection, first) if first else None,
+        )
+
+    return _on_log
 
 
 def _area_listener(hass, entry, subentry_id, connection):

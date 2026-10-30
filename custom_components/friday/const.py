@@ -31,3 +31,7 @@ PROXMOX_FIELDS = (
 )
 DEFAULT_PROXMOX_URL = "https://192.0.2.252:8006"
 DEFAULT_PROXMOX_NODE = "hypervisor"
+
+EVENT_CHANGE = "friday_change"
+# Entities that only mirror a reading are not logged as changes.
+READ_ONLY_PLATFORMS = ("sensor", "binary_sensor")
