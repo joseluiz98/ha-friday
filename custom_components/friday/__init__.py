@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.components.logbook import async_log_entry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.util import slugify
 
 from .connection import FridayConnection
 from .const import (
-    CONF_AREA_ID, CONF_HOST, CONF_PORT, CONF_TOKEN, DOMAIN, EVENT_CHANGE,
+    CONF_AREA_ID, CONF_HOST, CONF_PORT, CONF_TOKEN, DEVICE_KIND_SATELLITE, DEVICE_KIND_SERVER, DOMAIN, EVENT_CHANGE,
     ORIGIN_HA, READ_ONLY_PLATFORMS,
 )
 
@@ -24,6 +27,10 @@ PLATFORMS = [
     Platform.SENSOR,
     Platform.SWITCH,
 ]
+
+_LOGGER = logging.getLogger(__name__)
+SERVER_VOICE_KEY = "voice"
+SATELLITE_VOICE_KEY = "voice_enabled"
 
 type FridayConfigEntry = ConfigEntry[dict[str, FridayConnection]]
 
@@ -48,6 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
 
         entry.async_on_unload(connection.add_capabilities_listener(_reload))
         entry.async_on_unload(connection.add_listener(_change_listener(hass, connection)))
+        entry.async_on_unload(connection.add_listener(_voice_propagation_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
         area_id = entry.subentries[subentry_id].data.get(CONF_AREA_ID)
         if area_id:
@@ -77,6 +85,33 @@ def _change_listener(hass, connection):
                 "entity_id": _entity_id(connection, d),
                 "key": d.key, "value": changes[d.key], "origin": origin,
             })
+
+    return _on_changes
+
+
+def _voice_propagation_listener(hass, entry, connection):
+    """The server's global voice switch, whatever changed it, is mirrored to every satellite."""
+
+    def _on_changes(changes: dict, origin: str) -> None:
+        hello = connection.hello
+        if (SERVER_VOICE_KEY not in changes or hello is None
+                or hello.device.get("kind") != DEVICE_KIND_SERVER):
+            return
+        value = bool(changes[SERVER_VOICE_KEY])
+
+        async def _push() -> None:
+            for other in list(entry.runtime_data.values()):
+                h = other.hello
+                if other is connection or not other.connected or h is None \
+                        or h.device.get("kind") != DEVICE_KIND_SATELLITE:
+                    continue
+                try:
+                    await other.send("set", key=SATELLITE_VOICE_KEY, value=value)
+                except HomeAssistantError as err:
+                    _LOGGER.warning("Voice switch not applied on satellite %s: %s",
+                                    h.device.get("id"), err)
+
+        hass.async_create_background_task(_push(), "friday voice propagation")
 
     return _on_changes
 

@@ -15,6 +15,7 @@ from friday_agent_core.server import AgentCore
 from . import capabilities as cap
 from . import local
 from .announce import announce
+from .power import Power
 from .program import ProgramClient, ProgramError
 
 LOG = logging.getLogger("friday_satellite_agent")
@@ -46,6 +47,40 @@ async def main() -> None:
     device = {"id": sat_id, "kind": "satellite", "name": f"F.R.I.D.A.Y. Satellite {sat_id}",
               "model": "Raspberry Pi 3 + Jabra", "sw_version": cap.VERSION}
 
+    async def power_log(message: str) -> None:
+        await core.push_log(message, {})
+
+    power = Power(program_state=lambda: memo["state"].get("program_state"), log=power_log)
+    memo["state"]["voice_enabled"] = power.enabled
+    off_task: list[asyncio.Task] = []
+
+    async def voice_off() -> None:
+        try:
+            await power.set_voice(False)
+        except Exception as err:  # noqa: BLE001
+            LOG.warning("voice off failed: %s", type(err).__name__)
+
+    async def set_voice(enabled: bool) -> dict:
+        for t in off_task:
+            t.cancel()  # a newer command replaces a pending courtesy wait
+        off_task.clear()
+        memo["state"]["voice_enabled"] = enabled
+        await core.push_state({"voice_enabled": enabled}, "ha")
+        if enabled:
+            await power.set_voice(True)
+        else:
+            power._persist(False)  # noqa: SLF001 - durable before the (up to 120 s) wait
+            off_task.append(asyncio.create_task(voice_off()))
+        return {"ok": True}
+
+    async def do_press(cmd: dict) -> dict:
+        key = cmd.get("key")
+        if key == "reboot":
+            return await power.reboot()
+        if key == "restart_program":
+            return await power.restart_program()
+        return {"ok": False, "error": "unknown_key"}
+
     def capabilities() -> list[dict]:
         return cap.controls_from_config(memo["cfg"] or {}, memo["ww"])
 
@@ -66,6 +101,8 @@ async def main() -> None:
         await core.push_state(changes, origin)
 
     async def do_set(cmd: dict) -> dict:
+        if cmd.get("key") == "voice_enabled":
+            return await set_voice(bool(cmd.get("value")))
         cfg = memo["cfg"]
         if cfg is None:
             return {"ok": False, "error": "program_down"}
@@ -100,7 +137,7 @@ async def main() -> None:
         if out.get("event"):
             await core.push_event(*out["event"])
 
-    core = AgentCore(token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set})
+    core = AgentCore(token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press})
 
     async def poll() -> None:
         sent_caps = None
@@ -124,6 +161,7 @@ async def main() -> None:
             memo["state"].update(changes)
             await core.push_state(changes, "system")
 
+    await power.startup()
     app = local.make_app(token, on_event, core.app())
     runner = web.AppRunner(app)
     await runner.setup()

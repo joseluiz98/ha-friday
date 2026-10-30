@@ -48,6 +48,9 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("ducking_level", "number", "Ducking level", min=1, max=25, step=1, unit="%", category=c, mode="box"),
         _d("ducking_restore", "number", "Ducking restore delay", min=0, max=10, step=0.5, unit="s",
            category=c, mode="box"),
+        _d("voice_enabled", "switch", "Voice", icon="mdi:account-voice"),
+        _d("reboot", "button", "Reboot", device_class="restart", category=c),
+        _d("restart_program", "button", "Restart program", hidden=True, available=False, category=c),
     ]
     for w in wakewords:
         n = w["nome"]
