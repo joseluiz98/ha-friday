@@ -35,6 +35,12 @@ def test_signal_dbm():
     assert hw.parse_signal_dbm(text, "wlan1") is None
 
 
+def test_signal_nonsense_is_rejected_and_falls_back_to_percent():
+    bad = " wlan0: 0000 70. -11. -256 0 0 0 0 0 0"
+    assert hw.parse_signal_dbm(bad, "wlan0") is None
+    assert hw.dbm_from_percent("60") == -70 and hw.dbm_from_percent("x") is None
+
+
 FILES = {hw.THERMAL: "51000", hw.UPTIME: "3600.0 1.0",
          hw.WIRELESS: " wlan0: 0000 70. -48. -256 0 0 0 0 0 0"}
 
@@ -49,6 +55,8 @@ def fake_run(devices):
             return "192.0.2.15/24\n"
         if "GENERAL.HWADDR" in argv:
             return "02\\:00\\:00\\:00\\:00\\:00\n"
+        if argv[:4] == ["nmcli", "-t", "-f", "ACTIVE,SIGNAL"]:
+            return "yes:80\n"
         if argv[:4] == ["nmcli", "-t", "-f", "ACTIVE,SSID"]:
             return "no:Other\nyes:ExampleNet\n"
         raise AssertionError(argv)
@@ -61,6 +69,12 @@ def test_sample_wifi_only():
     assert out == {"cpu_temperature": 51.0, "throttled": False, "uptime_since": "2026-10-29T11:00:00+00:00",
                    "network_interface": "wifi", "ip_address": "192.0.2.15",
                    "mac_address": "02:00:00:00:00:00", "wifi_ssid": "ExampleNet", "wifi_signal": -48}
+
+
+def test_sample_signal_falls_back_to_nmcli_percent():
+    files = dict(FILES, **{hw.WIRELESS: " wlan0: 0000 70. -11. -256 0 0 0 0 0 0"})
+    out = hw.sample(read=files.__getitem__, run=fake_run("wlan0:wifi:connected\n"), now=lambda: NOW)
+    assert out["wifi_signal"] == -60
 
 
 def test_sample_ethernet_wins_and_has_no_wifi_keys():
@@ -91,6 +105,7 @@ def test_descriptors_network_only_with_nmcli():
     assert d["wifi_signal"]["device_class"] == "signal_strength" and d["wifi_signal"]["unit"] == "dBm"
     assert d["mac_address"]["category"] == "diagnostic"
     assert d["wifi_set"]["hidden"] is True
+    assert d["wifi_change"]["options"] == ["idle", "running", "ok", "rolled_back"]
 
 
 def test_mute_and_turn_sounds_mapping():

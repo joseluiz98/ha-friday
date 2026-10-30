@@ -122,7 +122,7 @@
       },
       "abort": {
         "reconfigure_successful": "Satélite atualizado.",
-        "wifi_changed": "Wi-Fi trocado."
+        "wifi_changed": "Troca de Wi-Fi iniciada; o resultado aparece no diário e no sensor de troca de Wi-Fi."
       },
       "error": {
         "wifi_failed": "A rede nova não funcionou (ou o satélite está desconectado); a anterior foi mantida."
@@ -132,7 +132,7 @@
   "services": {
     "set_wifi": {
       "name": "Definir Wi-Fi",
-      "description": "Troca a rede Wi-Fi de um satélite, com volta automática.",
+      "description": "Inicia a troca de Wi-Fi de um satélite. Se a rede nova não funcionar, ele volta sozinho; o resultado aparece no diário e no sensor de troca de Wi-Fi.",
       "fields": {
         "device_id": {
           "name": "Satélite",

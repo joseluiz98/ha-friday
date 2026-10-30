@@ -122,7 +122,7 @@
       },
       "abort": {
         "reconfigure_successful": "Satellite updated.",
-        "wifi_changed": "Wi-Fi changed."
+        "wifi_changed": "Wi-Fi change started; the result appears in the logbook and in the Wi-Fi change sensor."
       },
       "error": {
         "wifi_failed": "The new network did not work (or the satellite is offline); the previous one was kept."
@@ -132,7 +132,7 @@
   "services": {
     "set_wifi": {
       "name": "Set Wi-Fi",
-      "description": "Changes the Wi-Fi network of a satellite, with automatic rollback.",
+      "description": "Starts a Wi-Fi change on a satellite. It rolls back by itself if the new network does not work; the outcome appears in the logbook and in the Wi-Fi change sensor.",
       "fields": {
         "device_id": {
           "name": "Satellite",

@@ -1,36 +1,45 @@
-"""Wi-Fi change with automatic rollback. Commands go through an injectable runner.
+"""Wi-Fi change with automatic, bounded rollback. Commands go through an injectable runner.
 
-The password only ever lives in the argv of the one `nmcli ... add` call. It is never logged, never part of
-a result, and error paths report short machine-readable codes only.
+The password travels only on the stdin of the root helper `friday-wifi-apply` (see sudoers): never in argv,
+never in a log, never in a result. Read-only nmcli queries run without sudo.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import re
 import shutil
+import time
 
 LOG = logging.getLogger("friday_satellite_agent")
 
-NMCLI = ["sudo", "-n", "/usr/bin/nmcli"]
+HELPER = ["sudo", "-n", "/usr/local/sbin/friday-wifi-apply"]
 IFACE = "wlan0"
-NEW_PROFILE = "friday-wifi-new"
 PING_INTERVAL_S = 2
+CMD_TIMEOUT_S = 30        # a helper call activates with `-w 20`; this is the outer bound
+DEADLINE_S = 75           # whole attempt (apply + connectivity checks)
+ROLLBACK_WAIT_S = 20
+MARKER = os.path.expanduser("~/.friday-agent/wifi-change.json")
+_NAME = re.compile(r"^friday-wifi-[0-9]+$")
 
 
-async def run_command(argv: list[str]) -> tuple[int, str]:
+async def run_command(argv: list[str], stdin: str | None = None) -> tuple[int, str]:
     proc = await asyncio.create_subprocess_exec(
-        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-    out, _ = await proc.communicate()
+        *argv, stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    try:
+        out, _ = await proc.communicate(stdin.encode() if stdin is not None else None)
+    except asyncio.CancelledError:
+        proc.kill()
+        raise
     return proc.returncode or 0, out.decode("utf-8", "replace")
 
 
 def nmcli_available() -> bool:
     return shutil.which("nmcli") is not None
-
-
-def _unescape(field: str) -> str:
-    return field.replace("\\:", ":").replace("\\\\", "\\")
 
 
 def _split(line: str) -> list[str]:
@@ -52,7 +61,6 @@ def _split(line: str) -> list[str]:
 
 
 def active_wifi_profile(output: str) -> str | None:
-    """Name of the active Wi-Fi connection from `nmcli -t -f NAME,TYPE connection show --active`."""
     for line in output.splitlines():
         parts = _split(line)
         if len(parts) >= 2 and parts[1] == "802-11-wireless":
@@ -62,49 +70,92 @@ def active_wifi_profile(output: str) -> str | None:
 
 def valid_credentials(ssid, password) -> bool:
     return (isinstance(ssid, str) and isinstance(password, str)
-            and 1 <= len(ssid.encode("utf-8")) <= 32 and 8 <= len(password) <= 63)
+            and 1 <= len(ssid.encode("utf-8")) <= 32 and 8 <= len(password.encode("utf-8")) <= 63
+            and not any(c in ssid + password for c in "\n\r\0"))
 
 
-async def set_wifi(ssid: str, password: str, run=run_command, wait_s: int = 60, sleep=asyncio.sleep) -> dict:
-    """Create and activate a new Wi-Fi profile; back to the previous one if the gateway does not answer."""
-    if not valid_credentials(ssid, password):
-        return {"ok": False, "error": "invalid"}
+def _write_marker(path: str, data: dict | None) -> None:
+    try:
+        if data is None:
+            os.unlink(path)
+            return
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:  # profile names only, no secrets
+            json.dump(data, f)
+    except OSError:
+        pass
 
-    async def nm(*args: str) -> tuple[int, str]:
-        return await run([*NMCLI, *args])
 
-    code, out = await nm("-t", "-f", "NAME,TYPE", "connection", "show", "--active")
-    previous = active_wifi_profile(out) if code == 0 else None
+class Changer:
+    def __init__(self, run=run_command, sleep=asyncio.sleep, marker: str = MARKER, clock=time.time,
+                 cmd_timeout: float = CMD_TIMEOUT_S, deadline_s: float = DEADLINE_S,
+                 rollback_wait_s: int = ROLLBACK_WAIT_S) -> None:
+        self._run, self._sleep, self.marker, self._clock = run, sleep, marker, clock
+        self.cmd_timeout, self.deadline_s, self.rollback_wait_s = cmd_timeout, deadline_s, rollback_wait_s
 
-    async def rollback() -> dict:
+    async def _call(self, argv: list[str], stdin: str | None = None) -> tuple[int, str]:
+        """One bounded command; a hang or crash is just a failure."""
+        try:
+            if stdin is None:
+                return await asyncio.wait_for(self._run(argv), self.cmd_timeout)
+            return await asyncio.wait_for(self._run(argv, stdin), self.cmd_timeout)
+        except (asyncio.TimeoutError, OSError):
+            return 1, ""
+
+    async def _gateway_answers(self, wait_s: int, server_host: str | None) -> bool:
+        for _ in range(max(1, wait_s // PING_INTERVAL_S)):
+            code, out = await self._call(["nmcli", "-g", "IP4.GATEWAY", "device", "show", IFACE])
+            gateway = out.strip().splitlines()[0] if code == 0 and out.strip() else ""
+            if gateway:
+                code, _ = await self._call(["ping", "-c", "1", "-W", "2", gateway])
+                if code == 0:
+                    if not server_host:
+                        return True
+                    code, _ = await self._call(["ping", "-c", "1", "-W", "2", server_host])
+                    if code == 0:
+                        return True
+            await self._sleep(PING_INTERVAL_S)
+        return False
+
+    async def _attempt(self, name: str, ssid: str, password: str, server_host, wait_s: int) -> bool:
+        payload = json.dumps({"name": name, "ssid": ssid, "password": password})
+        code, _ = await self._call([*HELPER, "apply"], payload)
+        return code == 0 and await self._gateway_answers(wait_s, server_host)
+
+    async def rollback(self, new: str, previous: str | None) -> dict:
+        """Reactivate the previous profile (verifying the gateway) and drop only the new attempt."""
         if previous:
-            await nm("connection", "up", previous)
-        await nm("connection", "delete", NEW_PROFILE)
+            await self._call([*HELPER, "up", previous])
+            await self._gateway_answers(self.rollback_wait_s, None)
+        if new and new != previous and _NAME.match(new):
+            await self._call([*HELPER, "delete", new])
+        _write_marker(self.marker, None)
         return {"ok": False, "error": "rollback"}
 
-    await nm("connection", "delete", NEW_PROFILE)  # a leftover from an interrupted attempt
-    code, _ = await nm("connection", "add", "type", "wifi", "ifname", IFACE, "con-name", NEW_PROFILE,
-                       "ssid", ssid, "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password,
-                       "connection.autoconnect-priority", "10")
-    if code != 0:
-        await nm("connection", "delete", NEW_PROFILE)
-        return {"ok": False, "error": "rollback"}
-    code, _ = await nm("connection", "up", NEW_PROFILE, "ifname", IFACE)
-    if code != 0:
-        return await rollback()
-    if await _gateway_answers(nm, run, wait_s, sleep):
-        return {"ok": True}
-    LOG.warning("wifi change failed: gateway unreachable, rolling back")
-    return await rollback()
+    async def set_wifi(self, ssid: str, password: str, server_host: str | None = None,
+                       wait_s: int = 40) -> dict:
+        if not valid_credentials(ssid, password):
+            return {"ok": False, "error": "invalid"}
+        code, out = await self._call(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active"])
+        previous = active_wifi_profile(out) if code == 0 else None
+        name = f"friday-wifi-{int(self._clock())}"
+        _write_marker(self.marker, {"new": name, "previous": previous})
+        try:
+            ok = await asyncio.wait_for(self._attempt(name, ssid, password, server_host, wait_s), self.deadline_s)
+        except (asyncio.TimeoutError, OSError):
+            ok = False
+        if ok:
+            _write_marker(self.marker, None)
+            return {"ok": True}
+        LOG.warning("wifi change failed, rolling back")
+        return await self.rollback(name, previous)
 
-
-async def _gateway_answers(nm, run, wait_s: int, sleep) -> bool:
-    for _ in range(max(1, wait_s // PING_INTERVAL_S)):
-        code, out = await nm("-g", "IP4.GATEWAY", "device", "show", IFACE)
-        gateway = out.strip().splitlines()[0] if code == 0 and out.strip() else ""
-        if gateway:
-            code, _ = await run(["ping", "-c", "1", "-W", "2", gateway])
-            if code == 0:
-                return True
-        await sleep(PING_INTERVAL_S)
-    return False
+    async def recover(self) -> bool:
+        """Agent restart with an unfinished attempt: roll it back. Returns True if there was one."""
+        try:
+            with open(self.marker, encoding="utf-8") as f:
+                m = json.load(f)
+        except (OSError, ValueError):
+            return False
+        await self.rollback(str(m.get("new") or ""), m.get("previous"))
+        return True

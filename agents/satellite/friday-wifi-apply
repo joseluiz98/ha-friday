@@ -1,0 +1,65 @@
+#!/usr/bin/python3
+"""Root helper for Wi-Fi changes (installed as /usr/local/sbin/friday-wifi-apply, root:root 0755).
+
+sudoers allows ONLY this program, so the password never appears in a command line, in sudo's log or in /proc.
+
+  friday-wifi-apply apply   JSON on stdin {"name","ssid","password"}: write a 0600 keyfile, reload, activate
+  friday-wifi-apply up NAME           activate an existing friday-wifi-* or any saved profile
+  friday-wifi-apply delete NAME       delete a friday-wifi-<digits> profile only (never the user's own)
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import uuid
+
+CONN_DIR = os.environ.get("FRIDAY_WIFI_CONN_DIR", "/etc/NetworkManager/system-connections")
+IFACE = "wlan0"
+NAME_RE = re.compile(r"^friday-wifi-[0-9]+$")
+SAFE_NAME = re.compile(r"^[^\x00-\x1f/]{1,64}$")
+ACTIVATE_WAIT_S = "20"
+
+
+def _esc(value: str) -> str:
+    return value.replace("\\", "\\\\")
+
+
+def keyfile(name: str, ssid: str, password: str) -> str:
+    return (f"[connection]\nid={name}\nuuid={uuid.uuid4()}\ntype=wifi\ninterface-name={IFACE}\n"
+            f"autoconnect-priority=10\n\n[wifi]\nmode=infrastructure\nssid={_esc(ssid)}\n\n"
+            f"[wifi-security]\nkey-mgmt=wpa-psk\npsk={_esc(password)}\n\n[ipv4]\nmethod=auto\n\n[ipv6]\nmethod=auto\n")
+
+
+def _nmcli(run, *args: str) -> int:
+    return run(["nmcli", *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=40).returncode
+
+
+def main(argv, stdin, run=subprocess.run, conn_dir=CONN_DIR) -> int:
+    cmd = argv[1] if len(argv) > 1 else ""
+    if cmd == "apply":
+        try:
+            data = json.loads(stdin.read())
+            name, ssid, password = data["name"], data["ssid"], data["password"]
+        except (ValueError, KeyError, TypeError):
+            return 2
+        if not (NAME_RE.match(str(name)) and isinstance(ssid, str) and isinstance(password, str)
+                and 1 <= len(ssid.encode()) <= 32 and 8 <= len(password.encode()) <= 63
+                and not any(c in ssid + password for c in "\n\r\0")):
+            return 2
+        path = os.path.join(conn_dir, f"{name}.nmconnection")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(keyfile(name, ssid, password))
+        if _nmcli(run, "connection", "reload") != 0:
+            return 3
+        return _nmcli(run, "-w", ACTIVATE_WAIT_S, "connection", "up", name, "ifname", IFACE)
+    if cmd == "up" and len(argv) == 3 and SAFE_NAME.match(argv[2]):
+        return _nmcli(run, "-w", ACTIVATE_WAIT_S, "connection", "up", argv[2], "ifname", IFACE)
+    if cmd == "delete" and len(argv) == 3 and NAME_RE.match(argv[2]):
+        return _nmcli(run, "connection", "delete", argv[2])
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv, sys.stdin))

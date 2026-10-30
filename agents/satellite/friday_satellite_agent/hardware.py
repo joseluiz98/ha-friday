@@ -49,10 +49,19 @@ def parse_signal_dbm(text: str, iface: str) -> int | None:
         if line.strip().startswith(iface + ":"):
             cols = line.split(":", 1)[1].split()
             try:
-                return int(float(cols[2]))
+                level = int(float(cols[2]))
             except (IndexError, ValueError):
                 return None
+            return level if -100 <= level <= -20 else None  # the Pi 3 driver sometimes reports nonsense (-11)
     return None
+
+
+def dbm_from_percent(percent) -> int | None:
+    """Rough dBm from nmcli's signal quality (the usual linear mapping)."""
+    try:
+        return round(int(percent) / 2 - 100)
+    except (TypeError, ValueError):
+        return None
 
 
 def parse_devices(text: str) -> list[tuple[str, str, str]]:
@@ -115,7 +124,15 @@ def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), wi
                 if len(p) >= 2 and p[0] == "yes":
                     return p[1]
         attempt("wifi_ssid", ssid)
-        attempt("wifi_signal", lambda: parse_signal_dbm(read(WIRELESS), dev))
+        def signal():
+            dbm = parse_signal_dbm(read(WIRELESS), dev)
+            if dbm is not None:
+                return dbm
+            for line in run(["nmcli", "-t", "-f", "ACTIVE,SIGNAL", "device", "wifi"]).splitlines():
+                p = _split(line)
+                if len(p) >= 2 and p[0] == "yes":
+                    return dbm_from_percent(p[1])
+        attempt("wifi_signal", signal)
     return out
 
 
@@ -141,6 +158,8 @@ def descriptors(network: bool | None = None) -> list[dict]:
             {"key": "wifi_ssid", "platform": "sensor", "name": "Wi-Fi network"},
             {"key": "wifi_signal", "platform": "sensor", "name": "Wi-Fi signal", "unit": "dBm",
              "device_class": "signal_strength", "state_class": "measurement"},
+            {"key": "wifi_change", "platform": "sensor", "name": "Wi-Fi change", "device_class": "enum",
+             "options": ["idle", "running", "ok", "rolled_back"], "category": "diagnostic"},
             {"key": "wifi_set", "platform": "button", "name": "Change Wi-Fi", "hidden": True,
              "available": False},
         ]

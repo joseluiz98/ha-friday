@@ -39,6 +39,8 @@ class AgentCore:
         app.router.add_get("/v1/ws", self._ws)
         return app
 
+    last_peer: str | None = None
+
     def _authorized(self, request: web.Request) -> bool:
         header = request.headers.get("Authorization", "")
         if not header.startswith("Bearer "):
@@ -50,6 +52,7 @@ class AgentCore:
     async def _ws(self, request: web.Request) -> web.StreamResponse:
         if not self._authorized(request):
             return web.Response(status=401)
+        self.last_peer = request.remote  # the HA host, used to verify reachability after a Wi-Fi change
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
         state = dict(self._state_fn())

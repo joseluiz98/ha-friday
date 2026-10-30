@@ -69,11 +69,11 @@ async def test_set_wifi_service_routes_to_device(hass):
     await sat2.stop()
 
 
-async def test_set_wifi_rollback_is_reported_without_the_password(hass, caplog):
+async def test_set_wifi_error_is_reported_without_the_password(hass, caplog):
     caplog.set_level(logging.DEBUG)
 
     async def on_command(ws, cmd):
-        await ws.send_json({"type": "result", "id": cmd["id"], "ok": False, "error": "rollback"})
+        await ws.send_json({"type": "result", "id": cmd["id"], "ok": False, "error": "invalid"})
 
     sat = FakeAgent(_hello("satellite", "sat1", [SENSOR, WIFI_CAP]), on_command)
     entry = await _setup(hass, [("satellite", sat)])
@@ -81,7 +81,7 @@ async def test_set_wifi_rollback_is_reported_without_the_password(hass, caplog):
         await hass.services.async_call(
             DOMAIN, "set_wifi",
             {"device_id": _device_id(hass, entry, "sat1"), "ssid": "Casa", "password": PASSWORD}, blocking=True)
-    assert "previous network was restored" in str(err.value) and PASSWORD not in str(err.value)
+    assert "invalid" in str(err.value) and PASSWORD not in str(err.value)
     assert PASSWORD not in caplog.text
     await hass.config_entries.async_unload(entry.entry_id)
     await sat.stop()
@@ -106,7 +106,7 @@ async def test_reconfigure_change_wifi_does_not_store_password(hass):
 
     async def on_command(ws, cmd):
         got.append(cmd)
-        await ws.send_json({"type": "result", "id": cmd["id"], "ok": True})
+        await ws.send_json({"type": "result", "id": cmd["id"], "ok": True, "data": {"status": "started"}})
 
     sat = FakeAgent(_hello("satellite", "sat1", [SENSOR, WIFI_CAP]), on_command)
     entry = await _setup(hass, [("satellite", sat)])
@@ -126,7 +126,7 @@ async def test_reconfigure_change_wifi_does_not_store_password(hass):
 
 async def test_reconfigure_change_wifi_failure_shows_error(hass):
     async def on_command(ws, cmd):
-        await ws.send_json({"type": "result", "id": cmd["id"], "ok": False, "error": "rollback"})
+        await ws.send_json({"type": "result", "id": cmd["id"], "ok": False, "error": "invalid"})
 
     sat = FakeAgent(_hello("satellite", "sat1", [SENSOR, WIFI_CAP]), on_command)
     entry = await _setup(hass, [("satellite", sat)])

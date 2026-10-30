@@ -1,11 +1,14 @@
-"""Change a satellite's Wi-Fi through its agent. The password is passed through, never stored or logged."""
+"""Change a satellite's Wi-Fi through its agent. The password is passed through, never stored or logged.
+
+The agent answers at once with status `started` and runs the change (with automatic rollback) in the
+background; the outcome arrives as a logbook entry and in the `wifi_change` sensor."""
 
 from __future__ import annotations
 
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 WIFI_COMMAND = "wifi_set"
-WIFI_TIMEOUT_S = 130  # the agent waits up to 60 s for the new network, then rolls back
+WIFI_TIMEOUT_S = 15  # the agent answers "started" at once; the change runs in the background
 
 
 def supports_wifi(connection) -> bool:

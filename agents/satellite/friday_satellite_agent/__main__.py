@@ -45,7 +45,7 @@ async def main() -> None:
     program = ProgramClient(token, f"http://127.0.0.1:{program_port}")
     mapper, tracker = cap.Mapper(), cap.Tracker()
     memo: dict = {"cfg": None, "ww": [], "state": {"program_state": "off", **tracker.counters(),
-                                                   "sw_version": cap.VERSION}}
+                                                   "sw_version": cap.VERSION, "wifi_change": "idle"}}
     device = {"id": sat_id, "kind": "satellite", "name": f"F.R.I.D.A.Y. Satellite {sat_id}",
               "model": "Raspberry Pi 3 + Jabra", "sw_version": cap.VERSION}
 
@@ -126,11 +126,44 @@ async def main() -> None:
         await refresh("ha")
         return {"ok": True}
 
+    changer = wifi.Changer()
+    wifi_tasks: set = set()
+
+    async def wifi_report(status: str, message: str | None = None) -> None:
+        memo["state"]["wifi_change"] = status
+        await core.push_state({"wifi_change": status}, "agent")
+        if message:
+            await core.push_log(message, {})
+
+    async def wifi_job(ssid: str, password: str, server_host) -> None:
+        try:
+            await wifi_report("running")
+            result = await changer.set_wifi(ssid, password, server_host)
+            if result.get("ok"):
+                await wifi_report("ok", "Wi-Fi changed")
+            else:
+                await wifi_report("rolled_back", "Wi-Fi change failed; previous network restored")
+        except Exception as err:  # noqa: BLE001 - never log args (password)
+            LOG.error("wifi change crashed: %s", type(err).__name__)
+            await changer.recover()
+            await wifi_report("rolled_back", "Wi-Fi change failed; previous network restored")
+
     async def do_wifi(cmd: dict) -> dict:
         args = cmd.get("args")
         if not isinstance(args, dict) or not wifi.nmcli_available():
             return {"ok": False, "error": "unsupported"}
-        return await wifi.set_wifi(args.get("ssid"), args.get("password"))  # never logged
+        ssid, password = args.get("ssid"), args.get("password")
+        if not wifi.valid_credentials(ssid, password):
+            return {"ok": False, "error": "invalid"}
+        if memo["state"].get("wifi_change") == "running":
+            return {"ok": False, "error": "busy"}
+        host = args.get("server_host") or core.last_peer
+        # a background task owned by the agent: a dropped websocket (the IP may change) cannot cancel it
+        task = asyncio.create_task(wifi_job(ssid, password, host))
+        wifi_tasks.add(task)
+        task.add_done_callback(wifi_tasks.discard)
+        memo["state"]["wifi_change"] = "running"
+        return {"ok": True, "data": {"status": "started"}}
 
     async def on_event(tipo: str, dados: dict) -> None:
         out = tracker.on_event(tipo, dados)
@@ -180,6 +213,8 @@ async def main() -> None:
             await core.push_state(changes, "system")
 
     await power.startup()
+    if await changer.recover():  # an attempt interrupted by an agent restart is rolled back
+        memo["state"]["wifi_change"] = "rolled_back"
     app = local.make_app(token, on_event, core.app())
     runner = web.AppRunner(app)
     await runner.setup()
