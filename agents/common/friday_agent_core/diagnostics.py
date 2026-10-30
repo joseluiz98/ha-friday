@@ -12,13 +12,22 @@ from typing import Any
 
 REDACTED = "**REDACTED**"
 MAX_BYTES = 200_000
-SENSITIVE_PARTS = ("secret", "token", "password", "psk", "senha", "authorization")
+SENSITIVE_PARTS = ("secret", "token", "password", "psk", "senha", "authorization", "api_key", "apikey", "api-key")
 
+_KW = r"(?:psk|password|passwd|token|secret|senha|api[_-]?key|apikey)"
+_VAL = r"""("[^"\n]*"|'[^'\n]*'|[^\n,;&}\]"']+)"""
+# Keep in sync with custom_components/friday/redact.py (a test compares them).
 _PATTERNS = [
-    (re.compile(r"(?i)\b(Bearer)\s+[A-Za-z0-9._~+/=\-]+"), r"\1 " + REDACTED),
+    (re.compile(r"""(?i)(authorization["']?\s*[:=]\s*["']?)(?:(?:Bearer|Basic|PVEAPIToken=?)\s+)?[^\s"',}]+"""),
+     r"\1" + REDACTED),
+    (re.compile(r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=\-]{8,}"), r"\1 " + REDACTED),
     (re.compile(r"PVEAPIToken=\S+"), "PVEAPIToken=" + REDACTED),
-    (re.compile(r"""(?i)\b((?:psk|password|passwd|senha\w*|token|secret)\w*)(["']?\s*[=:]\s*["']?)[^\s"',;&}]+"""),
-     r"\1\2" + REDACTED),
+    (re.compile(r"bot\d{6,}:[A-Za-z0-9_\-]{20,}"), "bot" + REDACTED),
+    (re.compile(r"eyJ[\w\-]+\.eyJ[\w\-]+\.[\w\-]*"), REDACTED),
+    (re.compile(r"(?i)([?&]key=)[^\s&\"']+"), r"\1" + REDACTED),
+    (re.compile(r"""(?i)(["']?[\w.\-]*""" + _KW + r"""[\w.\-]*["']?\s*[=:]\s*)""" + _VAL), r"\1" + REDACTED),
+    (re.compile(r"""(?i)(["']?\bkey["']?\s*[=:]\s*)""" + _VAL), r"\1" + REDACTED),
+    (re.compile(r"""([=:]\s*["']?)[A-Za-z0-9+/_\-]{32,}={0,2}"""), r"\1" + REDACTED),
 ]
 
 
@@ -71,3 +80,18 @@ async def run_text(argv: list[str], timeout: float = 10, literals: tuple[str, ..
         await proc.wait()
         return "unavailable: timeout"
     return cap(redact_text(out.decode("utf-8", "replace"), literals), limit)
+
+
+def collect_literals(obj: Any, out: set | None = None, sensitive: bool = False) -> tuple[str, ...]:
+    """Every string value (len >= 4) under a sensitive key, recursively."""
+    top = out is None
+    out = set() if out is None else out
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            collect_literals(v, out, sensitive or is_sensitive_key(k))
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            collect_literals(v, out, sensitive)
+    elif isinstance(obj, str) and sensitive and len(obj) >= 4:
+        out.add(obj)
+    return tuple(sorted(out, key=len, reverse=True)) if top else ()

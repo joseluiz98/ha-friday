@@ -15,7 +15,7 @@ async def test_diagnostics_redacts_secrets(hass):
         assert cmd["name"] == "diagnostics"
         await ws.send_json({"type": "result", "id": cmd["id"], "ok": True, "data": {
             "config": {"senha_porta_local": "hunter2", "porta_local": 8700, "wifi_psk": "x"},
-            "logs": {"u": "ok"}}})
+            "logs": {"u": "ok", "v": "GET /x?key=AbCd1234 api_token=zzz Bearer abcdefgh12"}}})
 
     agent = FakeAgent(hello(CAPS, STATE), on_command)
     entry = await setup(hass, agent)
@@ -26,7 +26,9 @@ async def test_diagnostics_redacts_secrets(hass):
     assert out["agent"]["config"]["senha_porta_local"] == "**REDACTED**"
     assert out["agent"]["config"]["wifi_psk"] == "**REDACTED**"
     assert out["entry"]["subentry"]["token"] == "**REDACTED**"
-    assert "hunter2" not in text and "'t'" not in text
+    assert "hunter2" not in text
+    assert out["agent"]["logs"]["u"] == "ok"
+    assert "AbCd1234" not in text and "zzz" not in text and "abcdefgh12" not in text
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
 

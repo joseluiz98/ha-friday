@@ -1,4 +1,5 @@
 import json
+import pytest
 import sys
 from pathlib import Path
 
@@ -59,8 +60,54 @@ async def test_satellite_missing_config(tmp_path):
 
 async def test_server_collect():
     async def run(argv, timeout, literals):
-        return d.redact_text(" ".join(argv) + " Bearer zzz", literals)
+        return d.redact_text(" ".join(argv) + " Bearer zzzzzzzzzz", literals)
 
     out = await srv.collect({"voice": True, "api_token": "q"}, (), run)
     assert out["state"]["api_token"] == d.REDACTED
-    assert "docker logs --tail 300 friday" in out["logs"]["friday"] and "zzz" not in out["logs"]["friday"]
+    assert "docker logs --tail 300 friday" in out["logs"]["friday"] and "zzzzzzzzzz" not in out["logs"]["friday"]
+
+
+def test_server_literals_from_disk(tmp_path):
+    sec = tmp_path / "sec"
+    sec.mkdir()
+    (sec / "gemini_api_key").write_text("AIzaFAKEKEYVALUE\n")
+    (sec / "telegram").write_text("tg-secret-value\n")
+    oc = tmp_path / "oc.json"
+    oc.write_text(json.dumps({"channels": {"telegram": {"botToken": "123:nested-bot"}}, "x": "plain"}))
+    env = tmp_path / "e.env"
+    env.write_text("GEMINI_API_KEY=envkeyvalue\nOTHER=plainval\n")
+    lits = srv.load_literals(str(sec), str(oc), str(env))
+    assert lits and {"AIzaFAKEKEYVALUE", "tg-secret-value", "123:nested-bot", "envkeyvalue"} <= set(lits)
+    assert "plainval" not in lits and "plain" not in lits
+
+
+def test_nested_literals():
+    assert d.collect_literals({"a": {"wifi_psk": "longpsk1", "list": [{"senha": "pw12345"}]}, "n": "no"}) == ("longpsk1", "pw12345")
+
+
+CASES = [
+    "wifi_psk=SuperSecret1", "api_token=SuperSecret1", "access_token: SuperSecret1",
+    '{"api_token":"SuperSecret1"}', "bot_token: SuperSecret1", "GEMINI_API_KEY=SuperSecret1",
+    '{"password": "Super Secret1 x"}', "url?key=SuperSecret1&a=1", "x-goog-api-key: SuperSecret1",
+    "x-api-key: SuperSecret1", "Authorization: Basic U3VwZXJTZWNyZXQx", "Authorization: SuperSecret1",
+    "GET https://api.telegram.org/bot1234567:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/getMe",
+    "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.SflKxwRJSMeKKF2QT4fwpM tail",
+    "blob=QWxhZGRpbjpvcGVuIHNlc2FtZVRoaXNJc0xvbmc0NA==", "token='Super Secret1'",
+]
+
+
+@pytest.mark.parametrize("line", CASES)
+def test_pattern_cases(line):
+    out = d.redact_text(line)
+    for bad in ("SuperSecret1", "Super Secret1", "U3VwZXJT", "AAHdqTcv", "SflKxw", "eyJzdWIi", "QWxhZGRp"):
+        assert bad not in out, (line, out)
+
+
+def test_integration_copy_in_sync():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "redact_copy", AG.parent / "custom_components" / "friday" / "redact.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert [(p.pattern, r) for p, r in m._PATTERNS] == [(p.pattern, r) for p, r in d._PATTERNS]
+    assert m.SENSITIVE_PARTS == d.SENSITIVE_PARTS

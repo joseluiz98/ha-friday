@@ -27,6 +27,8 @@ SECRETS = os.environ.get("FRIDAY_SECRETS_DIR", "/srv/friday/secrets")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8801"))
 # Proxmox read-only token file /srv/friday/secrets/proxmox_ro: ONE line, the whole Proxmox API token header value (PVEAuditor role),
 # sent verbatim as Authorization. Format: see the Proxmox API token docs (user@realm!tokenid, then the token value).
+OPENCLAW_JSON = os.environ.get("FRIDAY_OPENCLAW_JSON", "/srv/friday/home/.openclaw/openclaw.json")
+ENV_FILE = "/srv/friday/friday.env"
 PVE = "https://192.0.2.252:8006/api2/json/nodes/hypervisor"
 
 
@@ -116,7 +118,7 @@ async def main() -> None:
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,
-                      "diagnostics": diagmod.make_handler(lambda: dict(state), tuple(x for x in (token, status_token, pve) if x)),
+                      "diagnostics": diagmod.make_handler(lambda: dict(state), lambda: diagmod.load_literals(SECRETS, OPENCLAW_JSON, ENV_FILE) + tuple(x for x in (token, status_token, pve) if x)),
                       **modelsmod.make_handlers(store),
                       **cmds.make_handlers(_log_tail, cmds.compose_restart,
                                            lambda m, d: core.push_log(m, d))})

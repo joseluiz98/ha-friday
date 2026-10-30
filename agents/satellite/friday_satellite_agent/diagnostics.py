@@ -15,8 +15,7 @@ async def collect(config_path: str, state: dict, run=d.run_text) -> dict:
     try:
         with open(config_path, encoding="utf-8") as f:
             cfg = json.load(f)
-        literals = tuple(str(v) for k, v in cfg.items()
-                         if isinstance(v, str) and len(v) >= 4 and d.is_sensitive_key(k))
+        literals = d.collect_literals(cfg)
         config = d.redact_data(cfg, literals)
     except (OSError, ValueError):
         config = "unavailable"

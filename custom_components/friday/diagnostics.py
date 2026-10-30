@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
@@ -11,20 +12,21 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceEntry
 
 from .const import DOMAIN
+from .redact import is_sensitive_key, redact_text
 
 TO_REDACT = {"token", "password", "senha_porta_local", "proxmox_token_secret", "Authorization"}
-_PARTS = ("secret", "token", "password", "psk", "senha")
 REDACTED = "**REDACTED**"
 
 
 def _redact(obj: Any) -> Any:
-    """Exact keys via HA's helper, then any key containing a sensitive word, recursively."""
+    """Exact keys via HA's helper, then sensitive-looking keys and string values, recursively."""
     if isinstance(obj, dict):
         obj = async_redact_data(obj, TO_REDACT)
-        return {k: (REDACTED if any(p in str(k).lower() for p in _PARTS) else _redact(v))
-                for k, v in obj.items()}
+        return {k: (REDACTED if is_sensitive_key(k) else _redact(v)) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_redact(v) for v in obj]
+    if isinstance(obj, str):
+        return redact_text(obj)
     return obj
 
 
@@ -48,6 +50,6 @@ async def async_get_device_diagnostics(hass: HomeAssistant, entry: ConfigEntry, 
     out["state"] = dict(connection.state)
     try:
         out["agent"] = await connection.send("diagnostics", timeout=30)
-    except HomeAssistantError:
+    except (HomeAssistantError, TimeoutError, asyncio.TimeoutError, OSError, ConnectionError):
         out["agent"] = "unavailable"
     return _redact(out)
