@@ -74,6 +74,19 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
     return out + hw.descriptors()
 
 
+ROOM_DESCRIPTORS = {
+    "room_temperature": ("Room temperature", {"unit": "°C", "device_class": "temperature"}),
+    "room_humidity": ("Room humidity", {"unit": "%", "device_class": "humidity"}),
+    "room_pressure": ("Room pressure", {"unit": "hPa", "device_class": "pressure"}),
+}
+
+
+def room_descriptors(keys) -> list[dict]:
+    """Sensor descriptors for the detected room sensors (the integration consumes temperature/humidity)."""
+    return [_d(k, "sensor", ROOM_DESCRIPTORS[k][0], state_class="measurement", **ROOM_DESCRIPTORS[k][1])
+            for k in ROOM_DESCRIPTORS if k in keys]
+
+
 class Mapper:
     def __init__(self) -> None:
         self.last_duck = DUCK_DEFAULT

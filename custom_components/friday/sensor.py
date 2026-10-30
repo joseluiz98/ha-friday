@@ -5,11 +5,14 @@ from __future__ import annotations
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.util import dt as dt_util
 
+from . import room_climate
 from .entity import FridayEntity, setup_platform
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    setup_platform(hass, entry, async_add_entities, "sensor", FridaySensor)
+    setup_platform(
+        hass, entry, async_add_entities, "sensor", FridaySensor,
+        skip_keys=room_climate.CONSUMED_KEYS, extra=room_climate.create_entities)
 
 
 class FridaySensor(FridayEntity, SensorEntity):

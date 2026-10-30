@@ -35,3 +35,6 @@ DEFAULT_PROXMOX_NODE = "hypervisor"
 EVENT_CHANGE = "friday_change"
 # Entities that only mirror a reading are not logged as changes.
 READ_ONLY_PLATFORMS = ("sensor", "binary_sensor")
+
+SOURCE_SATELLITE = "satellite"
+SOURCE_HA_ENTITY = "ha_entity"

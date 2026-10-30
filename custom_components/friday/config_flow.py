@@ -20,6 +20,10 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.helpers.selector import (
     AreaSelector,
+    EntitySelector,
+    EntitySelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -30,6 +34,8 @@ from .const import (
     CONF_PROXMOX_TOKEN_SECRET, CONF_PROXMOX_URL, CONF_PROXMOX_VMID, CONF_TOKEN,
     DEFAULT_PORT_SATELLITE, DEFAULT_PORT_SERVER, DEFAULT_PROXMOX_NODE, DEFAULT_PROXMOX_URL, DOMAIN,
 )
+from . import room_climate
+from .const import SOURCE_HA_ENTITY, SOURCE_SATELLITE
 from .wifi import async_set_wifi
 
 CONF_SSID = "ssid"  # form field names only; neither value is ever stored
@@ -220,7 +226,7 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        return self.async_show_menu(step_id="reconfigure", menu_options=["connection", "wifi"])
+        return self.async_show_menu(step_id="reconfigure", menu_options=["connection", "wifi", "room_sensors"])
 
     async def async_step_wifi(
         self, user_input: dict[str, Any] | None = None
@@ -245,6 +251,45 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
                 vol.Required(CONF_WIFI_PASSWORD): _PASSWORD,
             }),
         )
+
+    async def async_step_room_sensors(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Choose where the room temperature and humidity come from (each on its own)."""
+        subentry = self._get_reconfigure_subentry()
+        old = dict(subentry.data)
+        connection = self._get_entry().runtime_data.get(subentry.subentry_id)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            data = {k: v for k, v in old.items()
+                    if k not in {f(key) for key in room_climate.CONSUMED_KEYS
+                                 for f in (room_climate.source_key, room_climate.entity_key)}}
+            for key in room_climate.CONSUMED_KEYS:
+                source = user_input.get(room_climate.source_key(key))
+                entity = user_input.get(room_climate.entity_key(key))
+                if source == SOURCE_HA_ENTITY and not entity:
+                    errors[room_climate.entity_key(key)] = "entity_required"
+                if source:
+                    data[room_climate.source_key(key)] = source
+                if source == SOURCE_HA_ENTITY and entity:
+                    data[room_climate.entity_key(key)] = entity
+            if not errors:
+                return self.async_update_and_abort(self._get_entry(), subentry, data=data)
+            old = {**old, **user_input}
+        fields: dict = {}
+        for quantity, (key, _name, _unit, device_class) in room_climate.QUANTITIES.items():
+            options = [SOURCE_HA_ENTITY]
+            if connection is not None and room_climate.declared(connection, key):
+                options.insert(0, SOURCE_SATELLITE)
+            src, ent = room_climate.source_key(key), room_climate.entity_key(key)
+            fields[vol.Optional(src, description=(
+                {"suggested_value": old[src]} if old.get(src) in options else {}))] = SelectSelector(
+                    SelectSelectorConfig(options=options, translation_key="room_source"))
+            fields[vol.Optional(ent, description=(
+                {"suggested_value": old[ent]} if old.get(ent) else {}))] = EntitySelector(
+                    EntitySelectorConfig(domain="sensor", device_class=device_class))
+        return self.async_show_form(
+            step_id="room_sensors", errors=errors, data_schema=vol.Schema(fields))
 
     async def async_step_connection(
         self, user_input: dict[str, Any] | None = None

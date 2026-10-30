@@ -96,7 +96,8 @@
           "title": "F.R.I.D.A.Y. Satellite",
           "menu_options": {
             "connection": "Connection",
-            "wifi": "Change Wi-Fi"
+            "wifi": "Change Wi-Fi",
+            "room_sensors": "Room sensors"
           }
         },
         "connection": {
@@ -118,6 +119,16 @@
             "ssid": "Network name",
             "password": "Password"
           }
+        },
+        "room_sensors": {
+          "title": "Room sensors",
+          "description": "Where the room temperature and humidity come from. Leave a source empty to keep that sensor unavailable. The entity is used only with the Home Assistant entity source.",
+          "data": {
+            "room_temperature_source": "Temperature source",
+            "room_temperature_entity": "Temperature entity",
+            "room_humidity_source": "Humidity source",
+            "room_humidity_entity": "Humidity entity"
+          }
         }
       },
       "abort": {
@@ -125,7 +136,8 @@
         "wifi_changed": "Wi-Fi change started; the result appears in the logbook and in the Wi-Fi change sensor."
       },
       "error": {
-        "wifi_failed": "The new network did not work (or the satellite is offline); the previous one was kept."
+        "wifi_failed": "The new network did not work (or the satellite is offline); the previous one was kept.",
+        "entity_required": "Choose the entity to mirror."
       }
     }
   },
@@ -146,6 +158,14 @@
           "name": "Password",
           "description": "Network password (8-63 characters); never stored."
         }
+      }
+    }
+  },
+  "selector": {
+    "room_source": {
+      "options": {
+        "satellite": "Satellite sensor",
+        "ha_entity": "Home Assistant entity"
       }
     }
   }

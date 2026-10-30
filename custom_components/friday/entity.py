@@ -76,6 +76,8 @@ def setup_platform(
     async_add_entities: AddConfigEntryEntitiesCallback,
     platform: str,
     factory: Callable[[FridayConnection, Descriptor], FridayEntity],
+    skip_keys: frozenset[str] = frozenset(),
+    extra: Callable[[FridayConnection, dict], list[FridayEntity]] | None = None,
 ) -> None:
     """Create the platform's entities for each subentry once its hello arrives.
 
@@ -97,8 +99,10 @@ def setup_platform(
             entities = [
                 factory(connection, d)
                 for d in connection.hello.capabilities
-                if d.platform == platform and not d.hidden
+                if d.platform == platform and not d.hidden and d.key not in skip_keys
             ]
+            if extra is not None:
+                entities += extra(connection, dict(entry.subentries[subentry_id].data))
             if entities:
                 async_add_entities(entities, config_subentry_id=subentry_id)
 

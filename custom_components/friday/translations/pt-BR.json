@@ -96,7 +96,8 @@
           "title": "F.R.I.D.A.Y. Satellite",
           "menu_options": {
             "connection": "Conexão",
-            "wifi": "Trocar o Wi-Fi"
+            "wifi": "Trocar o Wi-Fi",
+            "room_sensors": "Sensores do cômodo"
           }
         },
         "connection": {
@@ -118,6 +119,16 @@
             "ssid": "Nome da rede",
             "password": "Senha"
           }
+        },
+        "room_sensors": {
+          "title": "Sensores do cômodo",
+          "description": "De onde vêm a temperatura e a umidade do cômodo. Deixe a origem vazia para o sensor ficar indisponível. A entidade só vale com a origem entidade do Home Assistant.",
+          "data": {
+            "room_temperature_source": "Origem da temperatura",
+            "room_temperature_entity": "Entidade da temperatura",
+            "room_humidity_source": "Origem da umidade",
+            "room_humidity_entity": "Entidade da umidade"
+          }
         }
       },
       "abort": {
@@ -125,7 +136,8 @@
         "wifi_changed": "Troca de Wi-Fi iniciada; o resultado aparece no diário e no sensor de troca de Wi-Fi."
       },
       "error": {
-        "wifi_failed": "A rede nova não funcionou (ou o satélite está desconectado); a anterior foi mantida."
+        "wifi_failed": "A rede nova não funcionou (ou o satélite está desconectado); a anterior foi mantida.",
+        "entity_required": "Escolha a entidade a espelhar."
       }
     }
   },
@@ -146,6 +158,14 @@
           "name": "Senha",
           "description": "Senha da rede (8 a 63 caracteres); nunca guardada."
         }
+      }
+    }
+  },
+  "selector": {
+    "room_source": {
+      "options": {
+        "satellite": "Sensor do satélite",
+        "ha_entity": "Entidade do Home Assistant"
       }
     }
   }

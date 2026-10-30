@@ -15,6 +15,7 @@ from friday_agent_core.server import AgentCore
 from . import capabilities as cap
 from . import hardware as hw
 from . import local
+from . import room_sensors
 from . import wifi
 from .announce import announce
 from .power import Power
@@ -83,8 +84,19 @@ async def main() -> None:
             return await power.restart_program()
         return {"ok": False, "error": "unknown_key"}
 
+    room = room_sensors.Monitor(room_sensors.RoomSensors(), lambda v: room_state(v), lambda: room_caps())
+    memo["sent_caps"] = None
+
     def capabilities() -> list[dict]:
-        return cap.controls_from_config(memo["cfg"] or {}, memo["ww"])
+        return cap.controls_from_config(memo["cfg"] or {}, memo["ww"]) + cap.room_descriptors(room.keys)
+
+    async def room_state(values: dict) -> None:
+        memo["state"].update(values)
+        await core.push_state(values, "agent")
+
+    async def room_caps() -> None:
+        memo["sent_caps"] = capabilities()  # the poll must not announce the same change again
+        await core.push_capabilities()
 
     async def refresh(origin: str) -> None:
         status = await program.status()
@@ -181,14 +193,13 @@ async def main() -> None:
     core = AgentCore(token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi})
 
     async def poll() -> None:
-        sent_caps = None
         while True:
             try:
                 await refresh("agent")
                 caps = capabilities()
-                if sent_caps is not None and caps != sent_caps:
+                if memo["sent_caps"] is not None and caps != memo["sent_caps"]:
                     await core.push_capabilities()
-                sent_caps = caps
+                memo["sent_caps"] = caps
             except Exception as err:  # noqa: BLE001
                 LOG.warning("poll failed: %s", type(err).__name__)
             await asyncio.sleep(POLL_S)
@@ -203,6 +214,14 @@ async def main() -> None:
                 LOG.warning("hardware sample failed: %s", type(err).__name__)
             await asyncio.sleep(hw.SAMPLE_S)
 
+    async def room_loop() -> None:
+        while True:
+            try:
+                await room.step()
+            except Exception as err:  # noqa: BLE001
+                LOG.warning("room sensors failed: %s", type(err).__name__)
+            await asyncio.sleep(room_sensors.READ_S)
+
     async def midnight() -> None:
         while True:
             now = datetime.datetime.now()
@@ -212,6 +231,7 @@ async def main() -> None:
             memo["state"].update(changes)
             await core.push_state(changes, "system")
 
+    await asyncio.to_thread(room.prime)
     await power.startup()
     if await changer.recover():  # an attempt interrupted by an agent restart is rolled back
         memo["state"]["wifi_change"] = "rolled_back"
@@ -221,7 +241,7 @@ async def main() -> None:
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     zc = await asyncio.to_thread(announce, sat_id, PORT)
     try:
-        await asyncio.gather(poll(), midnight(), hardware_loop())
+        await asyncio.gather(poll(), midnight(), hardware_loop(), room_loop())
     finally:
         if zc:
             zc.close()
