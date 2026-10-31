@@ -42,9 +42,17 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
+LEGACY_TITLE_PREFIX = "F.R.I.D.A.Y. "
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bool:
     """Start one connection per subentry; entities appear once each hello arrives."""
     connections: dict[str, FridayConnection] = {}
+    for subentry in list(entry.subentries.values()):
+        # 31/10: titles no longer repeat the integration name ("F.R.I.D.A.Y. Server" -> "Server")
+        if subentry.title.startswith(LEGACY_TITLE_PREFIX):
+            hass.config_entries.async_update_subentry(
+                entry, subentry, title=subentry.title.removeprefix(LEGACY_TITLE_PREFIX))
     for subentry_id, subentry in entry.subentries.items():
         data = subentry.data
         connections[subentry_id] = FridayConnection(

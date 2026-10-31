@@ -53,7 +53,7 @@ async def main() -> None:
     mapper, tracker = cap.Mapper(), cap.Tracker(path=COUNTERS)
     memo: dict = {"cfg": None, "ww": [], "state": {"program_state": "off", **tracker.counters(),
                                                    "sw_version": cap.VERSION, "wifi_change": "idle"}}
-    device = {"id": sat_id, "kind": "satellite", "name": f"F.R.I.D.A.Y. Satellite {sat_id}",
+    device = {"id": sat_id, "kind": "satellite", "name": f"Satellite {sat_id}",
               "model": "Raspberry Pi 3 + Jabra", "sw_version": cap.VERSION}
 
     async def power_log(message: str) -> None:

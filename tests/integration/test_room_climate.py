@@ -101,13 +101,13 @@ def _source_options(form, name):
     raise AssertionError(name)
 
 
-async def test_satellite_source_hidden_without_descriptor(hass):
+async def test_satellite_source_offered_even_without_descriptor(hass):
     agent = FakeAgent(_hello([TEMP], {"room_temperature": 21.0}))
     entry = await _setup(hass, agent)
     r = await _flow(hass, entry)
     assert r["type"] == FlowResultType.FORM and r["step_id"] == "room_sensors"
     assert "satellite" in _source_options(r, "room_temperature_source")
-    assert _source_options(r, "room_humidity_source") == ["ha_entity"]
+    assert _source_options(r, "room_humidity_source") == ["satellite", "ha_entity"]
     await _stop(hass, entry, agent)
 
 

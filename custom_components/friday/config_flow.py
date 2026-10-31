@@ -138,7 +138,7 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
                 entry,
                 ConfigSubentry(
                     data=MappingProxyType(data), subentry_type="satellite",
-                    title="F.R.I.D.A.Y. Satellite", unique_id=self._discovered["id"],
+                    title=f"Satellite {self._discovered['id']}", unique_id=self._discovered["id"],
                 ),
             )
             return self.async_abort(reason="satellite_added")
@@ -248,7 +248,7 @@ class ServerSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         if user_input is not None:
             return self.async_create_entry(
-                title="F.R.I.D.A.Y. Server",
+                title="Server",
                 data={
                     CONF_HOST: user_input[CONF_HOST],
                     CONF_PORT: user_input[CONF_PORT],
@@ -313,7 +313,7 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
             if user_input.get(CONF_AREA_ID):
                 data[CONF_AREA_ID] = user_input[CONF_AREA_ID]
             return self.async_create_entry(
-                title="F.R.I.D.A.Y. Satellite", data=data,
+                title=f"Satellite {user_input[CONF_HOST]}", data=data,
                 unique_id=f"{user_input[CONF_HOST]}:{user_input[CONF_PORT]}",
             )
         return self.async_show_form(step_id="user", data_schema=self._schema({}))
@@ -353,7 +353,6 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
         """Choose where the room temperature and humidity come from (each on its own)."""
         subentry = self._get_reconfigure_subentry()
         old = dict(subentry.data)
-        connection = self._get_entry().runtime_data.get(subentry.subentry_id)
         errors: dict[str, str] = {}
         if user_input is not None:
             data = {k: v for k, v in old.items()
@@ -373,9 +372,8 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
             old = {**old, **user_input}
         fields: dict = {}
         for quantity, (key, _name, _unit, device_class) in room_climate.QUANTITIES.items():
-            options = [SOURCE_HA_ENTITY]
-            if connection is not None and room_climate.declared(connection, key):
-                options.insert(0, SOURCE_SATELLITE)
+            # the satellite's own sensor is always offered: it stays unavailable until one is wired
+            options = [SOURCE_SATELLITE, SOURCE_HA_ENTITY]
             src, ent = room_climate.source_key(key), room_climate.entity_key(key)
             fields[vol.Optional(src, description=(
                 {"suggested_value": old[src]} if old.get(src) in options else {}))] = SelectSelector(

@@ -30,13 +30,13 @@
   },
   "config_subentries": {
     "server": {
-      "entry_type": "F.R.I.D.A.Y. Server",
+      "entry_type": "Server",
       "initiate_flow": {
         "user": "Add server"
       },
       "step": {
         "user": {
-          "title": "F.R.I.D.A.Y. Server",
+          "title": "Server",
           "data": {
             "host": "Host",
             "port": "Port",
@@ -53,7 +53,7 @@
           }
         },
         "reconfigure": {
-          "title": "F.R.I.D.A.Y. Server",
+          "title": "Server",
           "data": {
             "host": "Host",
             "port": "Port",
@@ -75,13 +75,13 @@
       }
     },
     "satellite": {
-      "entry_type": "F.R.I.D.A.Y. Satellite",
+      "entry_type": "Satellite",
       "initiate_flow": {
         "user": "Add satellite"
       },
       "step": {
         "user": {
-          "title": "F.R.I.D.A.Y. Satellite",
+          "title": "Satellite",
           "data": {
             "host": "Host",
             "port": "Port",
@@ -93,7 +93,7 @@
           }
         },
         "reconfigure": {
-          "title": "F.R.I.D.A.Y. Satellite",
+          "title": "Satellite",
           "menu_options": {
             "connection": "Connection",
             "wifi": "Change Wi-Fi",
@@ -101,7 +101,7 @@
           }
         },
         "connection": {
-          "title": "F.R.I.D.A.Y. Satellite",
+          "title": "Satellite",
           "data": {
             "host": "Host",
             "port": "Port",
@@ -164,7 +164,7 @@
   "selector": {
     "room_source": {
       "options": {
-        "satellite": "Satellite sensor",
+        "satellite": "Satellite's own sensor (GPIO: BME280, DS18B20)",
         "ha_entity": "Home Assistant entity"
       }
     },

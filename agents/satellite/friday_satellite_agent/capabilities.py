@@ -17,6 +17,7 @@ from . import hardware as hw
 VERSION = "0.1.0"
 WHISPER_DEFAULT_DB = 5.5
 DUCK_DEFAULT = 15
+INT_KEYS = {"ducking_level", "alarm_volume"}
 MODES = {"ativa": "active", "sombra": "shadow", "desligada": "off"}
 MODES_BACK = {v: k for k, v in MODES.items()}
 STATES = {"parada": "idle", "alarme": "idle", "cadastro": "idle", "conectando": "listening",
@@ -105,7 +106,8 @@ class Mapper:
             pos = status.get("volume")
         st = {
             "do_not_disturb": bool(cfg.get("nao_perturbe")),
-            "mute": bool(cfg.get("mudo", False)),
+            # software mute (HA) OR the Jabra's own mute button (detected by the program, `mudo` in /status)
+            "mute": bool(cfg.get("mudo", False)) or bool(status and status.get("mudo") is True),
             "turn_sounds": cfg.get("sons_turno", True) is not False,
             "alarm_volume": cfg.get("volume_alertas"),
             "alarm_ramp": cfg.get("alarm_ramp_s"),
@@ -132,13 +134,15 @@ class Mapper:
                   "sounds_volume": "volume_sons", "follow_up": "espera_resposta_s",
                   "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s"}
         if key in simple:
+            if key in INT_KEYS and isinstance(value, float) and value.is_integer():
+                value = int(value)  # HA number entities send 20.0; the program accepts only int here
             return {"config": {simple[key]: value}}
         if key == "volume":
             return {"config": {"volume": position_from_percent(value)}}
         if key == "whisper_mode":
             return {"config": {"whisper_min_ratio_db": WHISPER_DEFAULT_DB if value else None}}
         if key == "ducking":
-            return {"config": {"music_duck_percent": self.last_duck if value else 0}}
+            return {"config": {"music_duck_percent": int(self.last_duck) if value else 0}}
         m = _WW.match(key)
         if not m:
             return None

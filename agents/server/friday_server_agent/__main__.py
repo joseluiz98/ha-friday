@@ -94,7 +94,7 @@ async def main() -> None:
     pve = _read(f"{SECRETS}/proxmox_ro")
     switch = vsw.VoiceSwitch(os.environ.get("FRIDAY_VOICE_ENABLED_FILE", vsw.DEFAULT_PATH))
     state: dict = {"voice": switch.enabled}
-    device = {"id": "server", "kind": "server", "name": "F.R.I.D.A.Y. Server",
+    device = {"id": "server", "kind": "server", "name": "Server",
               "model": "Proxmox VM", "sw_version": c.VERSION}
     try:
         tracker = costmod.CostTracker()

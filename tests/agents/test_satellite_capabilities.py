@@ -166,3 +166,16 @@ def test_daily_counters_corrupt_file_is_ignored(tmp_path):
 def test_daily_counters_have_no_state_class():
     d = {x["key"]: x for x in cap.controls_from_config({}, [])}
     assert "state_class" not in d["activations_today"] and "state_class" not in d["rejected_today"]
+
+
+def test_ducking_level_float_from_ha_becomes_int():
+    m = cap.Mapper()
+    assert m.to_program({}, "ducking_level", 20.0) == {"config": {"music_duck_percent": 20}}
+    assert m.to_program({}, "alarm_volume", 7.0) == {"config": {"volume_alertas": 7}}
+
+
+def test_mute_reflects_the_jabra_button():
+    m = cap.Mapper()
+    assert m.state({"mudo": False}, [], {"estado": "ocioso", "mudo": True})["mute"] is True
+    assert m.state({"mudo": False}, [], {"estado": "ocioso", "mudo": False})["mute"] is False
+    assert m.state({"mudo": True}, [], {"estado": "ocioso", "mudo": None})["mute"] is True

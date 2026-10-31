@@ -75,13 +75,13 @@
       }
     },
     "satellite": {
-      "entry_type": "F.R.I.D.A.Y. Satellite",
+      "entry_type": "Satellite",
       "initiate_flow": {
         "user": "Adicionar satélite"
       },
       "step": {
         "user": {
-          "title": "F.R.I.D.A.Y. Satellite",
+          "title": "Satellite",
           "data": {
             "host": "Endereço",
             "port": "Porta",
@@ -93,7 +93,7 @@
           }
         },
         "reconfigure": {
-          "title": "F.R.I.D.A.Y. Satellite",
+          "title": "Satellite",
           "menu_options": {
             "connection": "Conexão",
             "wifi": "Trocar o Wi-Fi",
@@ -101,7 +101,7 @@
           }
         },
         "connection": {
-          "title": "F.R.I.D.A.Y. Satellite",
+          "title": "Satellite",
           "data": {
             "host": "Endereço",
             "port": "Porta",
@@ -164,7 +164,7 @@
   "selector": {
     "room_source": {
       "options": {
-        "satellite": "Sensor do satélite",
+        "satellite": "Sensor próprio do satélite (GPIO: BME280, DS18B20)",
         "ha_entity": "Entidade do Home Assistant"
       }
     },
