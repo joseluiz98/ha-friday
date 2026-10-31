@@ -77,7 +77,7 @@ async def test_satellite_source_uses_pushed_value_and_descriptors_are_consumed(h
     # one entity per quantity: the descriptors were not turned into duplicates
     reg = er.async_get(hass)
     ids = [e.unique_id for e in er.async_entries_for_config_entry(reg, entry.entry_id)]
-    assert sorted(ids) == ["sat1_room_humidity", "sat1_room_pressure", "sat1_room_temperature"]
+    assert sorted(i for i in ids if "room" in i) == ["sat1_room_humidity", "sat1_room_pressure", "sat1_room_temperature"]
     await _stop(hass, entry, agent)
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
-from . import cost
+from . import cost, reminders
 from .commands import RESTART_DESCRIPTOR
 from .voice_switch import DESCRIPTOR
 
@@ -126,4 +126,5 @@ def capabilities(proxmox: bool) -> list[dict]:
         cost.BUDGET_DESCRIPTOR,
         {**VOICE_DESCRIPTOR, "available": True},
         {**RESTART_DESCRIPTOR, "available": True},
+        reminders.DESCRIPTOR,
     ]

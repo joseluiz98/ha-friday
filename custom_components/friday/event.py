@@ -5,11 +5,12 @@ from __future__ import annotations
 from homeassistant.components.event import EventEntity
 from homeassistant.core import callback
 
+from . import reminders
 from .entity import FridayEntity, setup_platform
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    setup_platform(hass, entry, async_add_entities, "event", FridayEvent)
+    setup_platform(hass, entry, async_add_entities, "event", FridayEvent, extra=reminders.events(entry))
 
 
 class FridayEvent(FridayEntity, EventEntity):

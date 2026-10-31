@@ -73,6 +73,8 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("last_activation", "sensor", "Last activation", device_class="timestamp", category="diagnostic"),
         _d("sw_version", "sensor", "Software version", category="diagnostic"),
         _d("activation", "event", "Activation", event_types=["conversation", "rejected", "shadow"]),
+        _d("next_timer", "sensor", "Next timer", device_class="timestamp", icon="mdi:timer-outline"),
+        _d("timer", "event", "Timer", event_types=["finished"], icon="mdi:timer-check-outline"),
     ]
     return out + hw.descriptors()
 
@@ -88,6 +90,19 @@ def room_descriptors(keys) -> list[dict]:
     """Sensor descriptors for the detected room sensors (the integration consumes temperature/humidity)."""
     return [_d(k, "sensor", ROOM_DESCRIPTORS[k][0], state_class="measurement", **ROOM_DESCRIPTORS[k][1])
             for k in ROOM_DESCRIPTORS if k in keys]
+
+
+def timers_state(timers) -> dict:
+    """Next timer from the program's timers file (list of {id, nome, duracao_s, termino(epoch)})."""
+    valid = sorted((t for t in (timers if isinstance(timers, list) else [])
+                    if isinstance(t, dict) and isinstance(t.get("termino"), (int, float))),
+                   key=lambda t: t["termino"])
+    if not valid:
+        return {"next_timer": None, "next_timer_attributes": {"total_active": 0}}
+    t = valid[0]
+    return {"next_timer": datetime.fromtimestamp(t["termino"], timezone.utc).isoformat(),
+            "next_timer_attributes": {"name": t.get("nome"), "id": t.get("id"),
+                                      "duration_s": t.get("duracao_s"), "total_active": len(valid)}}
 
 
 class Mapper:
@@ -231,6 +246,9 @@ class Tracker:
             state.update(self.counters())
             data = {"word": dados.get("palavra"), "score": dados.get("nota"), "duration_s": dados.get("duracao_s")}
             return {"event": ("activation", kind, data), "state": state}
+        if tipo == "timer":
+            return {"event": ("timer", "finished", {"name": dados.get("nome"), "id": dados.get("id"),
+                                                    "duration_s": dados.get("duracao_s")})}
         if tipo == "conversa":
             self._conv = dados.get("estado") == "aberta"  # idempotent: last one wins
             return {"state": {"program_state": "conversation" if self._conv else "idle"}}

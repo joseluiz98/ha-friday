@@ -20,6 +20,7 @@ from . import cost as costmod
 from . import diagnostics as diagmod
 from . import embeddings as embmod
 from . import models as modelsmod
+from . import reminders as remmod
 from . import voice_switch as vsw
 
 LOG = logging.getLogger("friday_server_agent")
@@ -145,6 +146,7 @@ async def main() -> None:
              loop(sample_status, status_token, 30, "status", c.Source(c.status_metrics({})))]
     if tracker:
         tasks.append(loop(lambda: tracker.refresh(), None, 60, "cost", c.Source([])))
+    tasks.append(loop(remmod.sample, None, 60, "reminders", c.Source(["reminders"])))
     if pve:
         tasks.append(loop(sample_proxmox, pve, 300, "proxmox", c.Source(PVE_KEYS)))
 

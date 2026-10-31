@@ -80,3 +80,22 @@ def test_conversation_open_not_overwritten_when_not_computed():
     s = {"ready": True}
     assert "conversation_open" not in c.status_changes(s)
     assert c.status_changes({**s, "conversation_open": False})["conversation_open"] is False
+
+
+def test_reminders_only_home_enabled_future_sorted():
+    import json
+    from friday_server_agent import reminders as r
+    home = {"completionDestination": {"to": "http://127.0.0.1:7860/reminder"}}
+    rows = [
+        (json.dumps({"name": "b", "enabled": True, "delivery": home}), json.dumps({"nextRunAtMs": 3_000_000})),
+        (json.dumps({"name": "a", "enabled": True, "delivery": home}), json.dumps({"nextRunAtMs": 2_000_000})),
+        (json.dumps({"name": "off", "enabled": False, "delivery": home}), json.dumps({"nextRunAtMs": 2_500_000})),
+        (json.dumps({"name": "telegram", "enabled": True, "delivery": {"mode": "announce"}}),
+         json.dumps({"nextRunAtMs": 2_500_000})),
+        (json.dumps({"name": "past", "enabled": True, "delivery": home}), json.dumps({"nextRunAtMs": 500_000})),
+        ("not json", None),
+    ]
+    out = r.pending(rows, 1_000_000)
+    assert [x["name"] for x in out] == ["a", "b"]
+    assert out[0]["at"] == "1970-01-01T00:33:20+00:00"
+    assert r.DESCRIPTOR in c.capabilities(False)

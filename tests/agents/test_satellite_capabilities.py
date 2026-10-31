@@ -179,3 +179,18 @@ def test_mute_reflects_the_jabra_button():
     assert m.state({"mudo": False}, [], {"estado": "ocioso", "mudo": True})["mute"] is True
     assert m.state({"mudo": False}, [], {"estado": "ocioso", "mudo": False})["mute"] is False
     assert m.state({"mudo": True}, [], {"estado": "ocioso", "mudo": None})["mute"] is True
+
+
+def test_timers_state_next_and_empty():
+    st = cap.timers_state([{"id": "tb", "nome": None, "duracao_s": 600, "termino": 2000.0},
+                           {"id": "ta", "nome": "pizza", "duracao_s": 60, "termino": 1000.0}])
+    assert st["next_timer"] == "1970-01-01T00:16:40+00:00"
+    assert st["next_timer_attributes"] == {"name": "pizza", "id": "ta", "duration_s": 60, "total_active": 2}
+    assert cap.timers_state([]) == {"next_timer": None, "next_timer_attributes": {"total_active": 0}}
+    assert cap.timers_state("junk")["next_timer"] is None
+
+
+def test_timer_finished_becomes_event():
+    t = cap.Tracker()
+    out = t.on_event("timer", {"id": "ta", "nome": "pizza", "duracao_s": 60})
+    assert out == {"event": ("timer", "finished", {"name": "pizza", "id": "ta", "duration_s": 60})}

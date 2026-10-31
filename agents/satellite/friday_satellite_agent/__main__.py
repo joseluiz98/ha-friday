@@ -25,6 +25,15 @@ from .program import ProgramClient, ProgramError
 
 LOG = logging.getLogger("friday_satellite_agent")
 CONFIG = os.environ.get("FRIDAY_SAT_CONFIG", "/etc/friday-satelite/config.json")
+TIMERS = os.environ.get("FRIDAY_SAT_TIMERS", "/home/jose/satelite/estado/timers.json")
+
+
+def read_timers() -> list | None:
+    try:
+        with open(TIMERS, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 ID_FILE = os.environ.get("FRIDAY_SAT_ID_FILE", "/etc/friday-satelite/id")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8701"))
 COUNTERS = os.path.expanduser("~/.friday-agent/counters.json")  # today's counts survive an agent restart
@@ -117,6 +126,9 @@ async def main() -> None:
             except (ProgramError, OSError):
                 return
             changes = mapper.state(memo["cfg"], memo["ww"], status)
+        timers = await asyncio.to_thread(read_timers)
+        if timers is not None:
+            changes.update(cap.timers_state(timers))
         changes.update(tracker.counters())
         memo["state"].update(changes)
         await core.push_state(changes, origin)
@@ -205,6 +217,22 @@ async def main() -> None:
     core = AgentCore(token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi,
                       "diagnostics": diagmod.make_handler(CONFIG, lambda: dict(memo["state"]))})
 
+    async def timers_watch() -> None:
+        """Timers file changed (created/cancelled/finished): refresh at once instead of waiting the poll."""
+        last = None
+        while True:
+            try:
+                mtime = os.stat(TIMERS).st_mtime
+            except OSError:
+                mtime = None
+            if last is not None and mtime != last:
+                try:
+                    await refresh("voice")
+                except Exception as err:  # noqa: BLE001
+                    LOG.warning("timers refresh failed: %s", type(err).__name__)
+            last = mtime
+            await asyncio.sleep(2)
+
     async def poll() -> None:
         while True:
             try:
@@ -257,7 +285,7 @@ async def main() -> None:
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     zc = await asyncio.to_thread(announce, sat_id, PORT)
     try:
-        await asyncio.gather(poll(), midnight(), hardware_loop(), room_loop())
+        await asyncio.gather(poll(), midnight(), hardware_loop(), room_loop(), timers_watch())
     finally:
         if zc:
             zc.close()
