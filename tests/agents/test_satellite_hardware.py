@@ -17,6 +17,12 @@ def test_cpu_temperature_parse():
     assert hw.parse_cpu_temperature("garbage") is None
 
 
+def test_cpu_load_parse_like_the_server():
+    # same formula as the server's vm_cpu_load_pct: 1-min load average / cores, in %
+    assert hw.parse_cpu_load("1.36 1.22 1.16 2/240 1234\n", 4) == 34.0
+    assert hw.parse_cpu_load("", 4) is None
+
+
 def test_throttled_parse():
     assert hw.parse_throttled("throttled=0x0\n") is False
     assert hw.parse_throttled("throttled=0x50005") is True
@@ -41,7 +47,7 @@ def test_signal_nonsense_is_rejected_and_falls_back_to_percent():
     assert hw.dbm_from_percent("60") == -70 and hw.dbm_from_percent("x") is None
 
 
-FILES = {hw.THERMAL: "51000", hw.UPTIME: "3600.0 1.0",
+FILES = {hw.THERMAL: "51000", hw.UPTIME: "3600.0 1.0", hw.LOADAVG: "2.00 1.50 1.00 3/250 999",
          hw.WIRELESS: " wlan0: 0000 70. -48. -256 0 0 0 0 0 0"}
 
 
@@ -65,8 +71,9 @@ def fake_run(devices):
 
 def test_sample_wifi_only():
     out = hw.sample(read=FILES.__getitem__, run=fake_run("eth0:ethernet:unavailable\nwlan0:wifi:connected\n"),
-                    now=lambda: NOW)
-    assert out == {"cpu_temperature": 51.0, "throttled": False, "uptime_since": "2026-10-29T11:00:00+00:00",
+                    now=lambda: NOW, cores=lambda: 4)
+    assert out == {"cpu_temperature": 51.0, "cpu_load": 50.0, "throttled": False,
+                   "uptime_since": "2026-10-29T11:00:00+00:00",
                    "network_interface": "wifi", "ip_address": "192.0.2.15",
                    "mac_address": "02:00:00:00:00:00", "wifi_ssid": "ExampleNet", "wifi_signal": -48}
 
@@ -99,7 +106,7 @@ def test_sample_survives_missing_sources():
 
 def test_descriptors_network_only_with_nmcli():
     keys = {d["key"] for d in hw.descriptors(network=False)}
-    assert keys == {"cpu_temperature", "throttled", "uptime_since"}
+    assert keys == {"cpu_temperature", "cpu_load", "throttled", "uptime_since"}
     d = {x["key"]: x for x in hw.descriptors(network=True)}
     assert d["throttled"]["platform"] == "binary_sensor" and d["throttled"]["device_class"] == "problem"
     assert d["wifi_signal"]["device_class"] == "signal_strength" and d["wifi_signal"]["unit"] == "dBm"

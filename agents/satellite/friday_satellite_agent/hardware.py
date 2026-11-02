@@ -6,6 +6,7 @@ Everything that touches the system goes through injectable readers so the parsin
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -15,6 +16,7 @@ from .wifi import _split, nmcli_available
 SAMPLE_S = 30
 THERMAL = "/sys/class/thermal/thermal_zone0/temp"
 UPTIME = "/proc/uptime"
+LOADAVG = "/proc/loadavg"
 WIRELESS = "/proc/net/wireless"
 IFACE_TYPES = {"ethernet": "ethernet", "wifi": "wifi"}
 
@@ -23,6 +25,14 @@ def parse_cpu_temperature(text: str) -> float | None:
     try:
         return round(int(text.strip()) / 1000, 1)
     except ValueError:
+        return None
+
+
+def parse_cpu_load(text: str, ncpu: int) -> float | None:
+    """1-min load average as % of the cores: the same formula as the server's vm_cpu_load_pct."""
+    try:
+        return round(100 * float(text.split()[0]) / max(ncpu, 1), 1)
+    except (ValueError, IndexError):
         return None
 
 
@@ -92,7 +102,8 @@ def _run(argv: list[str]) -> str:
     return subprocess.run(argv, capture_output=True, text=True, timeout=5, check=False).stdout
 
 
-def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), with_network=True) -> dict:
+def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), with_network=True,
+           cores=os.cpu_count) -> dict:
     """One reading. A missing source simply leaves its key out (the entity stays at its last value)."""
     out: dict = {}
 
@@ -105,6 +116,7 @@ def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), wi
             out[key] = value
 
     attempt("cpu_temperature", lambda: parse_cpu_temperature(read(THERMAL)))
+    attempt("cpu_load", lambda: parse_cpu_load(read(LOADAVG), cores() or 1))
     attempt("throttled", lambda: parse_throttled(run(["vcgencmd", "get_throttled"])))
     attempt("uptime_since", lambda: parse_boot_time(read(UPTIME), now()))
     if not with_network:
@@ -146,6 +158,8 @@ def descriptors(network: bool | None = None) -> list[dict]:
     d = [
         {"key": "cpu_temperature", "platform": "sensor", "name": "CPU temperature", "unit": "°C",
          "device_class": "temperature", "state_class": "measurement"},
+        {"key": "cpu_load", "platform": "sensor", "name": "CPU load", "unit": "%", "icon": "mdi:cpu-64-bit",
+         "state_class": "measurement"},
         {"key": "throttled", "platform": "binary_sensor", "name": "Throttled", "device_class": "problem"},
         {"key": "uptime_since", "platform": "sensor", "name": "Up since", "device_class": "timestamp"},
     ]
