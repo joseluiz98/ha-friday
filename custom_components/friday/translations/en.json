@@ -1,0 +1,211 @@
+{
+  "issues": {
+    "protocol_mismatch": {
+      "title": "F.R.I.D.A.Y. agent protocol mismatch",
+      "description": "The F.R.I.D.A.Y. agent speaks a protocol version this integration does not support. Update the integration or the agent so both use the same protocol."
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "F.R.I.D.A.Y.",
+        "description": "Add the F.R.I.D.A.Y. integration. Add the server and satellites afterwards as devices of this entry."
+      },
+      "zeroconf_confirm": {
+        "title": "F.R.I.D.A.Y. satellite found",
+        "description": "Satellite at {host}. Enter its local-port password and, optionally, the area.",
+        "data": {
+          "token": "Token",
+          "area_id": "Area"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "F.R.I.D.A.Y. is already configured.",
+      "satellite_added": "Satellite added.",
+      "no_entry": "Add the F.R.I.D.A.Y. integration first.",
+      "not_supported": "Device not supported.",
+      "already_configured": "Already configured."
+    }
+  },
+  "config_subentries": {
+    "server": {
+      "entry_type": "Server",
+      "initiate_flow": {
+        "user": "Add server"
+      },
+      "step": {
+        "user": {
+          "title": "Server",
+          "data": {
+            "host": "Host",
+            "port": "Port",
+            "token": "Token",
+            "proxmox_url": "Proxmox URL",
+            "proxmox_node": "Proxmox node",
+            "proxmox_vmid": "Proxmox VM id",
+            "proxmox_token_id": "Proxmox token id",
+            "proxmox_token_secret": "Proxmox token secret"
+          },
+          "data_description": {
+            "token": "The agent token from the server (never shared outside Home Assistant).",
+            "proxmox_token_secret": "Leave blank to keep the stored value. The Reboot VM button appears only when all Proxmox fields are filled."
+          }
+        },
+        "reconfigure": {
+          "title": "Server",
+          "data": {
+            "host": "Host",
+            "port": "Port",
+            "token": "Token",
+            "proxmox_url": "Proxmox URL",
+            "proxmox_node": "Proxmox node",
+            "proxmox_vmid": "Proxmox VM id",
+            "proxmox_token_id": "Proxmox token id",
+            "proxmox_token_secret": "Proxmox token secret"
+          },
+          "data_description": {
+            "token": "Leave blank to keep the stored token.",
+            "proxmox_token_secret": "Leave blank to keep the stored value. The Reboot VM button appears only when all Proxmox fields are filled."
+          }
+        }
+      },
+      "abort": {
+        "reconfigure_successful": "Server updated."
+      }
+    },
+    "satellite": {
+      "entry_type": "Satellite",
+      "initiate_flow": {
+        "user": "Add satellite"
+      },
+      "step": {
+        "user": {
+          "title": "Satellite",
+          "data": {
+            "host": "Host",
+            "port": "Port",
+            "token": "Token",
+            "area_id": "Area"
+          },
+          "data_description": {
+            "token": "The satellite's local-port password (never shared outside Home Assistant)."
+          }
+        },
+        "reconfigure": {
+          "title": "Satellite",
+          "menu_options": {
+            "connection": "Connection",
+            "wifi": "Change Wi-Fi",
+            "room_sensors": "Room sensors"
+          }
+        },
+        "connection": {
+          "title": "Satellite",
+          "data": {
+            "host": "Host",
+            "port": "Port",
+            "token": "Token",
+            "area_id": "Area"
+          },
+          "data_description": {
+            "token": "Leave blank to keep the stored token."
+          }
+        },
+        "wifi": {
+          "title": "Change Wi-Fi",
+          "description": "The satellite joins the new network; if it does not answer within a minute, it goes back to the previous one. The password is not stored.",
+          "data": {
+            "ssid": "Network name",
+            "password": "Password"
+          }
+        },
+        "room_sensors": {
+          "title": "Room sensors",
+          "description": "Where the room temperature and humidity come from. Leave a source empty to keep that sensor unavailable. The entity is used only with the Home Assistant entity source.",
+          "data": {
+            "room_temperature_source": "Temperature source",
+            "room_temperature_entity": "Temperature entity",
+            "room_humidity_source": "Humidity source",
+            "room_humidity_entity": "Humidity entity"
+          }
+        }
+      },
+      "abort": {
+        "reconfigure_successful": "Satellite updated.",
+        "wifi_changed": "Wi-Fi change started; the result appears in the logbook and in the Wi-Fi change sensor."
+      },
+      "error": {
+        "wifi_failed": "The new network did not work (or the satellite is offline); the previous one was kept.",
+        "entity_required": "Choose the entity to mirror."
+      }
+    }
+  },
+  "services": {
+    "set_wifi": {
+      "name": "Set Wi-Fi",
+      "description": "Starts a Wi-Fi change on a satellite. It rolls back by itself if the new network does not work; the outcome appears in the logbook and in the Wi-Fi change sensor.",
+      "fields": {
+        "device_id": {
+          "name": "Satellite",
+          "description": "The satellite device."
+        },
+        "ssid": {
+          "name": "Network name",
+          "description": "SSID of the new network."
+        },
+        "password": {
+          "name": "Password",
+          "description": "Network password (8-63 characters); never stored."
+        }
+      }
+    }
+  },
+  "selector": {
+    "room_source": {
+      "options": {
+        "satellite": "Satellite's own sensor (GPIO: BME280, DS18B20)",
+        "ha_entity": "Home Assistant entity"
+      }
+    },
+    "speaking_rate": {
+      "options": {
+        "slow": "Slow",
+        "normal": "Normal",
+        "fast": "Fast"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Models",
+        "description": "Model used by each role. Voice and Lucid apply from the next conversation or run; the brain restarts F.R.I.D.A.Y. only when no conversation is open. Embeddings model (read-only): {embeddings}.",
+        "data": {
+          "voice": "Voice model",
+          "brain": "Brain model",
+          "lucid": "Lucid Dreaming model"
+        }
+      },
+      "voice": {
+        "title": "Voice",
+        "data": {
+          "voice": "Voice",
+          "speaking_rate": "Speaking rate",
+          "brief_mode": "Brief mode"
+        }
+      },
+      "budget": {
+        "title": "Budget",
+        "data": {
+          "budget_brl": "Monthly budget (BRL)"
+        }
+      }
+    },
+    "abort": {
+      "server_unavailable": "The F.R.I.D.A.Y. server is not connected.",
+      "embeddings_unavailable": "The server cannot change the embeddings model yet.",
+      "apply_failed": "The server refused the change."
+    }
+  }
+}

@@ -1,0 +1,211 @@
+{
+  "issues": {
+    "protocol_mismatch": {
+      "title": "Protocolo do agente F.R.I.D.A.Y. incompatível",
+      "description": "O agente F.R.I.D.A.Y. fala uma versão do protocolo que esta integração não suporta. Atualize a integração ou o agente."
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "F.R.I.D.A.Y.",
+        "description": "Adicione a integração F.R.I.D.A.Y. O servidor e os satélites entram depois, como dispositivos desta entrada."
+      },
+      "zeroconf_confirm": {
+        "title": "Satélite F.R.I.D.A.Y. encontrado",
+        "description": "Satélite em {host}. Informe a senha da porta local e, se quiser, a área.",
+        "data": {
+          "token": "Senha",
+          "area_id": "Área"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "A F.R.I.D.A.Y. já está configurada.",
+      "satellite_added": "Satélite adicionado.",
+      "no_entry": "Adicione primeiro a integração F.R.I.D.A.Y.",
+      "not_supported": "Dispositivo não suportado.",
+      "already_configured": "Já configurado."
+    }
+  },
+  "config_subentries": {
+    "server": {
+      "entry_type": "Servidor F.R.I.D.A.Y.",
+      "initiate_flow": {
+        "user": "Adicionar servidor"
+      },
+      "step": {
+        "user": {
+          "title": "Servidor F.R.I.D.A.Y.",
+          "data": {
+            "host": "Endereço",
+            "port": "Porta",
+            "token": "Token",
+            "proxmox_url": "URL do Proxmox",
+            "proxmox_node": "Nó do Proxmox",
+            "proxmox_vmid": "ID da VM no Proxmox",
+            "proxmox_token_id": "ID do token do Proxmox",
+            "proxmox_token_secret": "Segredo do token do Proxmox"
+          },
+          "data_description": {
+            "token": "O token do agente, no servidor.",
+            "proxmox_token_secret": "Deixe em branco para manter o valor guardado. O botão Reiniciar VM só aparece com todos os campos do Proxmox preenchidos."
+          }
+        },
+        "reconfigure": {
+          "title": "Servidor F.R.I.D.A.Y.",
+          "data": {
+            "host": "Host",
+            "port": "Porta",
+            "token": "Token",
+            "proxmox_url": "URL do Proxmox",
+            "proxmox_node": "Nó do Proxmox",
+            "proxmox_vmid": "ID da VM no Proxmox",
+            "proxmox_token_id": "ID do token do Proxmox",
+            "proxmox_token_secret": "Segredo do token do Proxmox"
+          },
+          "data_description": {
+            "token": "Deixe em branco para manter o token guardado.",
+            "proxmox_token_secret": "Deixe em branco para manter o valor guardado. O botão Reiniciar VM só aparece com todos os campos do Proxmox preenchidos."
+          }
+        }
+      },
+      "abort": {
+        "reconfigure_successful": "Servidor atualizado."
+      }
+    },
+    "satellite": {
+      "entry_type": "Satellite",
+      "initiate_flow": {
+        "user": "Adicionar satélite"
+      },
+      "step": {
+        "user": {
+          "title": "Satellite",
+          "data": {
+            "host": "Endereço",
+            "port": "Porta",
+            "token": "Senha",
+            "area_id": "Área"
+          },
+          "data_description": {
+            "token": "A senha da porta local do satélite (nunca sai do Home Assistant)."
+          }
+        },
+        "reconfigure": {
+          "title": "Satellite",
+          "menu_options": {
+            "connection": "Conexão",
+            "wifi": "Trocar o Wi-Fi",
+            "room_sensors": "Sensores do cômodo"
+          }
+        },
+        "connection": {
+          "title": "Satellite",
+          "data": {
+            "host": "Endereço",
+            "port": "Porta",
+            "token": "Senha",
+            "area_id": "Área"
+          },
+          "data_description": {
+            "token": "Deixe em branco para manter."
+          }
+        },
+        "wifi": {
+          "title": "Trocar o Wi-Fi",
+          "description": "O satélite entra na rede nova; se ela não responder em um minuto, ele volta para a anterior. A senha não é guardada.",
+          "data": {
+            "ssid": "Nome da rede",
+            "password": "Senha"
+          }
+        },
+        "room_sensors": {
+          "title": "Sensores do cômodo",
+          "description": "De onde vêm a temperatura e a umidade do cômodo. Deixe a origem vazia para o sensor ficar indisponível. A entidade só vale com a origem entidade do Home Assistant.",
+          "data": {
+            "room_temperature_source": "Origem da temperatura",
+            "room_temperature_entity": "Entidade da temperatura",
+            "room_humidity_source": "Origem da umidade",
+            "room_humidity_entity": "Entidade da umidade"
+          }
+        }
+      },
+      "abort": {
+        "reconfigure_successful": "Satélite atualizado.",
+        "wifi_changed": "Troca de Wi-Fi iniciada; o resultado aparece no diário e no sensor de troca de Wi-Fi."
+      },
+      "error": {
+        "wifi_failed": "A rede nova não funcionou (ou o satélite está desconectado); a anterior foi mantida.",
+        "entity_required": "Escolha a entidade a espelhar."
+      }
+    }
+  },
+  "services": {
+    "set_wifi": {
+      "name": "Definir Wi-Fi",
+      "description": "Inicia a troca de Wi-Fi de um satélite. Se a rede nova não funcionar, ele volta sozinho; o resultado aparece no diário e no sensor de troca de Wi-Fi.",
+      "fields": {
+        "device_id": {
+          "name": "Satélite",
+          "description": "O dispositivo do satélite."
+        },
+        "ssid": {
+          "name": "Nome da rede",
+          "description": "SSID da rede nova."
+        },
+        "password": {
+          "name": "Senha",
+          "description": "Senha da rede (8 a 63 caracteres); nunca guardada."
+        }
+      }
+    }
+  },
+  "selector": {
+    "room_source": {
+      "options": {
+        "satellite": "Sensor próprio do satélite (GPIO: BME280, DS18B20)",
+        "ha_entity": "Entidade do Home Assistant"
+      }
+    },
+    "speaking_rate": {
+      "options": {
+        "slow": "Lenta",
+        "normal": "Normal",
+        "fast": "Rápida"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Modelos",
+        "description": "Modelo de cada papel. Voz e Lucid valem na próxima conversa ou execução; o cérebro só reinicia a F.R.I.D.A.Y. sem conversa aberta. Modelo de embeddings (somente leitura): {embeddings}.",
+        "data": {
+          "voice": "Modelo da voz",
+          "brain": "Modelo do cérebro",
+          "lucid": "Modelo do Lucid Dreaming"
+        }
+      },
+      "voice": {
+        "title": "Voz",
+        "data": {
+          "voice": "Voz",
+          "speaking_rate": "Velocidade da fala",
+          "brief_mode": "Modo breve"
+        }
+      },
+      "budget": {
+        "title": "Teto de gasto",
+        "data": {
+          "budget_brl": "Teto mensal (R$)"
+        }
+      }
+    },
+    "abort": {
+      "server_unavailable": "O servidor da F.R.I.D.A.Y. não está conectado.",
+      "embeddings_unavailable": "O servidor ainda não sabe trocar o modelo de embeddings.",
+      "apply_failed": "O servidor recusou a alteração."
+    }
+  }
+}

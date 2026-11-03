@@ -1,0 +1,17 @@
+[Unit]
+Description=F.R.I.D.A.Y. Satellite agent (Home Assistant integration)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=jose
+WorkingDirectory=/opt/friday-satellite-agent
+Environment=PYTHONPATH=/opt/friday-satellite-agent
+ExecStart=/home/jose/oww/bin/python -m friday_satellite_agent
+CPUQuota=20%
+Nice=10
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=F.R.I.D.A.Y. Server agent (Home Assistant integration)
+After=network-online.target docker.service
+
+[Service]
+User=root
+WorkingDirectory=/opt/friday/agent
+Environment=PYTHONPATH=/opt/friday/agent
+Environment=FRIDAY_AGENT_TOKEN_FILE=/srv/friday/secrets/agent_token
+ExecStart=/opt/friday/agent/venv/bin/python -m friday_server_agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

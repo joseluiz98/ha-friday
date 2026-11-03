@@ -1,0 +1,31 @@
+# PROPOSED (not installed). Single EQ instance AFTER dmix, on the mixed output (voice + music together).
+# Needs: apt install caps libasound2-plugin-equal (LADSPA /usr/lib/ladspa/caps.so). Flat (all 66) must be transparent.
+# dmix keeps owning the Jabra; the Jabra becomes the slave of a plug->equal chain, dmix reads from the DEVICE side:
+#
+#   voice/music_vol -> mixer_out (dmix) -> eq_hw (equal) -> hw:CARD=USB
+#
+# i.e. only change dmix's slave: replace `slave { pcm "hw:CARD=USB,DEV=0" ...}` inside mixer_out by
+#   slave { pcm "eq_hw"  rate 48000  channels 2  period_size 1024  buffer_size 16384 }
+# The rest of /etc/asound.conf stays as is. Note: dmix's slave must be a plug-less hw-like pcm; the equal plugin is
+# wrapped in plug so the 2-channel S16 format passes. If dmix refuses the slave (spike), fall back to per-stream
+# placement (voice and music_vol slave -> eq_out) and measure CPU twice (two instances).
+
+pcm.eq_hw {
+    type plug
+    slave.pcm "eq_raw"
+}
+
+pcm.eq_raw {
+    type equal
+    slave.pcm "plughw:CARD=USB,DEV=0"
+    controls "/var/lib/friday/alsaequal.bin"
+    library "/usr/lib/ladspa/caps.so"
+    module "Eq10X2"
+}
+
+ctl.equal {
+    type equal
+    controls "/var/lib/friday/alsaequal.bin"
+    library "/usr/lib/ladspa/caps.so"
+    module "Eq10X2"
+}
