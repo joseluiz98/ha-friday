@@ -96,3 +96,21 @@ async def test_view_requires_auth(hass, hass_client_no_auth):
     assert r.status == 401
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
+
+
+def test_title_with_attrs():
+    from custom_components.friday.recordings import title_for
+    attrs = {"word": "friday", "cause": "no_voice", "score": 0.86, "threshold": 0.35,
+             "voice": 0.52, "voice_threshold": 0.6}
+    assert title_for("sem_voz_20261103_094322.wav", attrs) == \
+        "09:43:22 · friday · rejected (no voice) · 0.86/0.35 · voice 0.52/0.6"
+    assert title_for("20261103_100215.wav", {"word": "friday", "score": 0.6}) == \
+        "10:02:15 · friday · conversation · 0.6"
+
+
+def test_title_from_prefix():
+    from custom_components.friday.recordings import title_for
+    assert title_for("barrada_20261103_094130.wav", None) == "09:41:30 · rejected (verifier)"
+    assert title_for("sombra_sexta_feira_20261102_221000.wav", None) == "22:10:00 · shadow · sexta_feira"
+    assert title_for("20261103_100215.wav", None) == "10:02:15 · conversation · friday"
+    assert title_for("sexta_feira_quase_20261103_100215.wav", None) == "10:02:15 · near miss"
