@@ -9,8 +9,40 @@ Status: scaffolding (v0.1.0); only the pure protocol module exists so far.
 
 ## Install
 
-Add this repository to HACS as a custom repository (type: Integration), then
-restart Home Assistant. Requires Home Assistant 2026.10.0 or newer.
+1. In HACS open the three-dot menu, **Custom repositories**, add
+   `https://github.com/joseluiz98/ha-friday` with category **Integration**, then download it.
+2. Restart Home Assistant (2026.10.0 or newer) and add **F.R.I.D.A.Y.** under Settings, Devices & services.
+3. Install the agents (see below) so the server and each satellite announce themselves.
+
+### Agents
+
+Each agent is a small program that speaks the websocket protocol in [docs/protocol.md](docs/protocol.md).
+
+- **Server agent** (the VM running F.R.I.D.A.Y.): `sudo bash agents/server/install.sh`. It creates a venv, generates
+  the agent token under `/srv/friday/secrets/agent_token` and installs `friday-server-agent.service`.
+- **Satellite agent** (each Raspberry Pi satellite): from `agents/`, `sudo bash satellite/install.sh`. It announces
+  `_friday._tcp` over zeroconf; Home Assistant offers the satellite on the integrations page.
+
+### Proxmox token (optional, for the *Reboot VM* button)
+
+Fill the Proxmox fields (URL, node, VM id, token id, token secret) with *Reconfigure* on the Server. Create an API
+token in Proxmox with privilege separation and give it only `VM.PowerMgmt` on `/vms/<vmid>`. Keep the secret in the
+config entry only; never commit it.
+
+### Activations card
+
+The integration registers a Lovelace card for satellite activations:
+
+```yaml
+type: custom:friday-activations-card
+entity: event.friday_sat_activation   # one entity or a list
+hours: 24                             # 24, 72 or 168
+types: [conversation, rejected, shadow]
+```
+
+### Media panel
+
+Activation recordings appear in the Media panel under the **F.R.I.D.A.Y.** source, grouped by satellite and day.
 
 ## Development
 
