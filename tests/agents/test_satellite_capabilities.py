@@ -194,3 +194,30 @@ def test_timer_finished_becomes_event():
     t = cap.Tracker()
     out = t.on_event("timer", {"id": "ta", "nome": "pizza", "duracao_s": 60})
     assert out == {"event": ("timer", "finished", {"name": "pizza", "id": "ta", "duration_s": 60})}
+
+
+def test_activation_data_full_mapping():
+    d = cap.activation_data({"palavra": "friday", "nota": 0.86, "resultado": "barrada", "duracao_s": None, "modo": "ativa",
+        "limiar": 0.35, "limiar_voz": 0.6, "voz": 0.52, "causa": "sem_voz", "nota_verificador": 0.86,
+        "limiar_verificador": 0.3, "razao_sussurro_db": -11.6, "sussurro": False, "paciencia": 2,
+        "gravacao": "sem_voz_20261103_094322.wav", "extra": 1})
+    assert d == {"word": "friday", "score": 0.86, "duration_s": None, "mode": "active", "threshold": 0.35,
+                 "voice_threshold": 0.6, "voice": 0.52, "cause": "no_voice", "verifier_score": 0.86,
+                 "verifier_threshold": 0.3, "whisper_ratio_db": -11.6, "whisper": False, "patience": 2,
+                 "recording": "sem_voz_20261103_094322.wav"}
+
+
+def test_activation_data_old_program_payload():
+    assert cap.activation_data({"palavra": "friday", "nota": 0.8, "resultado": "conversa", "duracao_s": None}) == \
+        {"word": "friday", "score": 0.8, "duration_s": None}
+
+
+def test_activation_data_drops_bad_values():
+    d = cap.activation_data({"palavra": "friday", "nota": 0.5, "causa": "x", "modo": "y", "gravacao": "../a.wav"})
+    assert "cause" not in d and "mode" not in d and "recording" not in d
+
+
+def test_rejected_event_carries_cause_and_counts():
+    t = cap.Tracker()
+    ev = t.on_event("ativacao", {"palavra": "friday", "nota": 0.86, "resultado": "barrada", "causa": "sem_voz"})
+    assert ev["event"][1] == "rejected" and ev["event"][2]["cause"] == "no_voice" and ev["state"]["rejected_today"] == 1

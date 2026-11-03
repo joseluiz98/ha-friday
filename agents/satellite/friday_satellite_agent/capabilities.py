@@ -171,6 +171,30 @@ class Mapper:
         return {"config": {"palavras_extras": extras}}
 
 
+_CAUSES = {"verificador": "verifier", "sem_voz": "no_voice", "paciencia": "patience"}
+_MODES = {"ativa": "active", "sombra": "shadow"}
+_PLAIN = {"limiar": "threshold", "voz": "voice", "limiar_voz": "voice_threshold",
+          "nota_verificador": "verifier_score", "limiar_verificador": "verifier_threshold",
+          "razao_sussurro_db": "whisper_ratio_db", "sussurro": "whisper", "paciencia": "patience"}
+_REC = re.compile(r"^[A-Za-z0-9_-]+\.wav$")
+
+
+def activation_data(dados: dict) -> dict:
+    """Map the program's Portuguese payload to English event attributes (absent stays absent)."""
+    data = {"word": dados.get("palavra"), "score": dados.get("nota"), "duration_s": dados.get("duracao_s")}
+    if dados.get("causa") in _CAUSES:
+        data["cause"] = _CAUSES[dados["causa"]]
+    if dados.get("modo") in _MODES:
+        data["mode"] = _MODES[dados["modo"]]
+    for src, dst in _PLAIN.items():
+        if dados.get(src) is not None:
+            data[dst] = dados[src]
+    rec = dados.get("gravacao")
+    if isinstance(rec, str) and _REC.match(rec):
+        data["recording"] = rec
+    return data
+
+
 class Tracker:
     """Day counters and conversation state from the program's local events."""
 
@@ -244,7 +268,7 @@ class Tracker:
                 self._rej += 1
             self._save()
             state.update(self.counters())
-            data = {"word": dados.get("palavra"), "score": dados.get("nota"), "duration_s": dados.get("duracao_s")}
+            data = activation_data(dados)
             return {"event": ("activation", kind, data), "state": state}
         if tipo == "timer":
             return {"event": ("timer", "finished", {"name": dados.get("nome"), "id": dados.get("id"),
