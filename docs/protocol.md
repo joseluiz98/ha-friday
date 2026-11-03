@@ -104,3 +104,16 @@ message whose `origin` is `ha`. The integration re-emits nothing in that case
 redacted state and the tail of its logs (`logs`: unit/container to text, capped at
 200 KB each; satellite also returns the redacted `config`). Secrets are masked by key
 and by regex (Bearer, `PVEAPIToken=`, psk/password) and never leave the agent.
+
+## Recordings (satellite, HTTP)
+
+The satellite agent serves activation recordings read-only on its HTTP port (8701), all routes
+requiring `Authorization: Bearer <token>` (401 otherwise). Not restricted to loopback; the
+integration proxies them behind Home Assistant auth.
+
+- `GET /v1/recordings/days` returns `{"days": ["20261103", ...]}`, newest first.
+- `GET /v1/recordings?date=YYYYMMDD` returns `{"recordings": [{"name": "...", "size": 123}, ...]}`,
+  newest first; a bad or missing date is 400.
+- `GET /v1/recordings/{name}` returns the WAV (`audio/wav`). The name must match
+  `^[A-Za-z0-9_-]+\.wav$` and resolve inside the recordings folder (`FRIDAY_SAT_RECORDINGS`,
+  default `/home/jose/gravacoes/ativacoes`); anything else, or a missing file, is 404.

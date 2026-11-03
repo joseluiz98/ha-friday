@@ -16,7 +16,7 @@ from . import capabilities as cap
 from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
-from . import local
+from . import local, recordings
 from . import room_sensors
 from . import wifi
 from .announce import announce
@@ -35,6 +35,7 @@ def read_timers() -> list | None:
     except (OSError, ValueError):
         return None
 ID_FILE = os.environ.get("FRIDAY_SAT_ID_FILE", "/etc/friday-satelite/id")
+RECORDINGS = os.environ.get("FRIDAY_SAT_RECORDINGS", "/home/jose/gravacoes/ativacoes")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8701"))
 COUNTERS = os.path.expanduser("~/.friday-agent/counters.json")  # today's counts survive an agent restart
 POLL_S = 20
@@ -280,6 +281,7 @@ async def main() -> None:
     if await changer.recover():  # an attempt interrupted by an agent restart is rolled back
         memo["state"]["wifi_change"] = "rolled_back"
     app = local.make_app(token, on_event, core.app())
+    recordings.add_routes(app, token, RECORDINGS)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
