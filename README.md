@@ -1,17 +1,20 @@
 # F.R.I.D.A.Y. for Home Assistant
 
-F.R.I.D.A.Y. is a self-hosted voice assistant: a server running the brain and the voice, plus Raspberry Pi voice
-satellites with wake words. This custom integration brings both into Home Assistant as devices, so you can monitor
-health and costs, control wake words, volume and voice, see each activation's details and listen to its recording.
-The agents speak the websocket protocol in [docs/protocol.md](docs/protocol.md).
+F.R.I.D.A.Y. is a self-hosted voice assistant: a server runs the brain and the voice, and Raspberry Pi voice
+satellites listen for wake words in each room. This custom integration brings both into Home Assistant as
+devices, so you can monitor and control the assistant without leaving HA.
 
-## What you get
+What you get:
 
-- **Devices and entities** for the server and every satellite, generated from the capabilities the agents announce
-  (health, costs, wake word modes, volume, voice, restart and reboot actions).
-- **Activations card** (`custom:friday-activations-card`) listing each activation with its cause and a play button.
-- **Media panel source** with the activation recordings, grouped by satellite and day.
-- **Diagnostics** with secrets redacted, plus logbook entries for restart and reboot actions.
+- **Server device:** health, memory, costs (today, month, projection, budget), restart buttons, voice on/off.
+- **Satellite devices:** wake word mode and sensitivity, volume, mute, Wi-Fi, CPU and temperature, timers and
+  reminders.
+- **Activations card** (`custom:friday-activations-card`): every wake-word activation with its details (word,
+  score vs. threshold, voice gate, rejection cause) and an inline player for its recording.
+- **Media panel:** browse and play each satellite's activation recordings by day.
+- **Diagnostics** per device, with secrets redacted.
+
+Agents talk to HA over the websocket protocol in [docs/protocol.md](docs/protocol.md).
 
 ## Install
 
