@@ -133,6 +133,19 @@ class FridayConnection:
         finally:
             self._pending.pop(cmd_id, None)
 
+    async def agent_get(
+        self, path: str, params: dict | None = None, timeout: float = 15
+    ) -> tuple[int, bytes, str]:
+        """GET an HTTP route of the agent; returns (status, body, content type)."""
+        session = async_get_clientsession(self.hass)
+        async with session.get(
+            f"http://{self._host}:{self._port}{path}", params=params,
+            headers={"Authorization": f"Bearer {self._token}"},
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            body = await resp.read()
+            return resp.status, body, resp.content_type
+
     async def _run(self) -> None:
         backoff = BACKOFF_START
         while True:
