@@ -1,11 +1,17 @@
-# ha-friday
+# F.R.I.D.A.Y. for Home Assistant
 
-Home Assistant custom integration for **F.R.I.D.A.Y.**: the server (VM) and
-each voice satellite show up as devices, with entities generated from the
-capabilities the agents announce over the websocket protocol described in
-[docs/protocol.md](docs/protocol.md).
+F.R.I.D.A.Y. is a self-hosted voice assistant: a server running the brain and the voice, plus Raspberry Pi voice
+satellites with wake words. This custom integration brings both into Home Assistant as devices, so you can monitor
+health and costs, control wake words, volume and voice, see each activation's details and listen to its recording.
+The agents speak the websocket protocol in [docs/protocol.md](docs/protocol.md).
 
-Status: scaffolding (v0.1.0); only the pure protocol module exists so far.
+## What you get
+
+- **Devices and entities** for the server and every satellite, generated from the capabilities the agents announce
+  (health, costs, wake word modes, volume, voice, restart and reboot actions).
+- **Activations card** (`custom:friday-activations-card`) listing each activation with its cause and a play button.
+- **Media panel source** with the activation recordings, grouped by satellite and day.
+- **Diagnostics** with secrets redacted, plus logbook entries for restart and reboot actions.
 
 ## Install
 
