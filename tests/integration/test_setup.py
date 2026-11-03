@@ -246,3 +246,25 @@ async def test_every_subentry_gets_its_entities(hass):
     await hass.config_entries.async_unload(entry.entry_id)
     await server.stop()
     await sat.stop()
+
+
+async def test_card_registered(hass, hass_client):
+    from homeassistant.components import frontend
+
+    class Urls:  # stand-in: the real frontend (hass_frontend) is not installed in the test image
+        def __init__(self):
+            self.urls = set()
+
+        def add(self, url):
+            self.urls.add(url)
+
+    hass.data[frontend.DATA_EXTRA_MODULE_URL] = Urls()
+    agent = FakeAgent(hello(CAPS, STATE))
+    entry = await setup(hass, agent)
+    urls = hass.data[frontend.DATA_EXTRA_MODULE_URL].urls
+    assert any(u.startswith("/friday_frontend/friday-activations-card.js") for u in urls)
+    client = await hass_client()
+    r = await client.get("/friday_frontend/friday-activations-card.js")
+    assert r.status == 200
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()

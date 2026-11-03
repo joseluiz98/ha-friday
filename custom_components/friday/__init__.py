@@ -41,7 +41,27 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Register the integration's services (once, whatever the entries)."""
     async_register_services(hass)
     hass.http.register_view(RecordingView())
+    await _async_register_card(hass)
     return True
+
+
+CARD_URL = "/friday_frontend"
+
+
+async def _async_register_card(hass: HomeAssistant) -> None:
+    """Serve the activations card and load it in every dashboard."""
+    from pathlib import Path
+
+    from homeassistant.components.frontend import add_extra_js_url
+    from homeassistant.components.http import StaticPathConfig
+    from homeassistant.loader import async_get_integration
+
+    version = (await async_get_integration(hass, DOMAIN)).version
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(CARD_URL, str(Path(__file__).parent / "frontend"), False)])
+    if "frontend_extra_module_url" not in hass.data:
+        return  # frontend not loaded (e.g. headless): the card is simply unavailable
+    add_extra_js_url(hass, f"{CARD_URL}/friday-activations-card.js?v={version}")
 
 
 LEGACY_TITLE_PREFIX = "F.R.I.D.A.Y. "
