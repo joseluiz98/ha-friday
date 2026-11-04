@@ -268,3 +268,19 @@ async def test_card_registered(hass, hass_client):
     assert r.status == 200
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
+
+
+async def test_attributes_key_applies_to_binary_sensor_and_updates(hass):
+    """Protocol v1 `<key>_attributes` works on every platform (conversation_open is a binary_sensor)."""
+    caps = [{"key": "busy", "platform": "binary_sensor", "name": "Busy"}]
+    agent = FakeAgent(hello(caps, {"busy": True, "busy_attributes": {"sessions": 2, "brain_turns": 0}}))
+    entry = await setup(hass, agent)
+    await entities(hass, 1)
+    await wait_for(lambda: hass.states.get("binary_sensor.friday_dev1_busy") is not None)
+    st = hass.states.get("binary_sensor.friday_dev1_busy")
+    assert st.state == "on" and st.attributes["sessions"] == 2
+    await agent.sockets[0].send_json({"type": "state", "origin": "agent",
+                                      "changes": {"busy_attributes": {"sessions": 1, "brain_turns": 1}}})
+    await wait_for(lambda: hass.states.get("binary_sensor.friday_dev1_busy").attributes.get("brain_turns") == 1)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()

@@ -63,8 +63,14 @@ class FridayEntity(Entity):
 
     @callback
     def _on_changes(self, changes: dict, origin: str) -> None:
-        if self.descriptor.key in changes:
+        if self.descriptor.key in changes or f"{self.descriptor.key}_attributes" in changes:
             self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self):
+        """Protocol v1: state key `<key>_attributes` (a dict) becomes the entity's attributes."""
+        attrs = self._connection.state.get(f"{self.descriptor.key}_attributes")
+        return attrs if isinstance(attrs, dict) else None
 
     @callback
     def _on_availability(self, _up: bool) -> None:
