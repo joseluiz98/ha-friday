@@ -32,6 +32,8 @@ OPENCLAW_JSON = os.environ.get("FRIDAY_OPENCLAW_JSON", "/srv/friday/home/.opencl
 ENV_FILE = "/srv/friday/friday.env"
 PVE = "https://192.0.2.252:8006/api2/json/nodes/hypervisor"
 # Touched by friday-memory-index.service (ExecStartPost) after each successful reindex.
+# Written by the bot (activity.py): open sessions, brain turns in flight, heartbeat (minor 13 of 19/10).
+ACTIVITY_FILE = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")
 MEMORY_INDEX_STAMP = os.environ.get("FRIDAY_MEMORY_INDEX_STAMP", "/srv/friday/state/memory-index.ok")
 
 
@@ -74,12 +76,27 @@ def _log_tail() -> str:
     return r.stdout
 
 
-def sample_status(token: str) -> dict:
-    status = _get("http://127.0.0.1:8800/v1/status", f"Bearer {token}")
+def read_activity() -> dict | None:
     try:
-        status["conversation_open"] = c.conversation_open(_log_tail())
-    except (OSError, subprocess.SubprocessError):
-        pass
+        with open(ACTIVITY_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def sample_status(token: str) -> dict:
+    import time
+    status = _get("http://127.0.0.1:8800/v1/status", f"Bearer {token}")
+    view = c.activity_view(read_activity(), time.time())
+    if view is not None:
+        status["conversation_open"] = view["conversation_open"]
+        status["conversation_open_attributes"] = {"sessions": view["sessions"], "brain_turns": view["brain_turns"]}
+    else:
+        try:
+            status["conversation_open"] = c.conversation_open(_log_tail())
+            status["conversation_open_attributes"] = None
+        except (OSError, subprocess.SubprocessError):
+            pass
     return c.status_changes(status)
 
 
@@ -126,13 +143,14 @@ async def main() -> None:
         env_file="/srv/friday/friday.env")
 
     store.reindexer = embmod.Reindexer(store)
+    store.read_activity = read_activity
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,
                       "diagnostics": diagmod.make_handler(lambda: dict(state), lambda: diagmod.load_literals(SECRETS, OPENCLAW_JSON, ENV_FILE) + tuple(x for x in (token, status_token, pve) if x)),
                       **modelsmod.make_handlers(store),
                       **cmds.make_handlers(_log_tail, cmds.compose_restart,
-                                           lambda m, d: core.push_log(m, d))})
+                                           lambda m, d: core.push_log(m, d), read_activity)})
 
     async def loop(fn, arg, period, label, src):
         while True:

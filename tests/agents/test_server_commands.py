@@ -144,3 +144,18 @@ async def test_server_agent_fails_early_on_blank_agent_token(tmp_path, monkeypat
     monkeypatch.setenv("FRIDAY_AGENT_TOKEN_FILE", str(tmp_path / "agent_token"))
     with pytest.raises(SystemExit):
         await m.main()
+
+
+async def test_restart_refused_while_brain_turn_in_flight(aiohttp_client):
+    import time
+    calls, logs = [], []
+
+    async def push_log(message, data):
+        logs.append(message)
+
+    handlers = cm.make_handlers(lambda: IDLE, lambda: calls.append("restart"), push_log,
+                                lambda: {"updated_at": time.time(), "sessions": [], "brain_turns": 1})
+    core = AgentCore("t", {"id": "server", "kind": "server", "name": "S"},
+                     lambda: [cm.RESTART_DESCRIPTOR], lambda: {}, handlers)
+    r = await press(aiohttp_client, core)
+    assert r["ok"] is False and r["error"] == "conversation_open" and calls == []

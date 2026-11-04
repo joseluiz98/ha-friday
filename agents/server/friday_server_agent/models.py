@@ -149,13 +149,14 @@ class ModelStore:
         _write_json(self.voice_path, vs)
         return {"voice": voice, "speaking_rate": rate, "brief_mode": brief}
 
+    read_activity = staticmethod(lambda: None)  # set by __main__: the bot's activity file
+
     def idle(self) -> bool:
-        from .collectors import conversation_open
+        import time
+
+        from .collectors import is_busy
         try:
-            text = self.log_tail()
-            if text is None:
-                return False
-            return not conversation_open(text)
+            return not is_busy(self.read_activity(), time.time(), self.log_tail)
         except (OSError, subprocess.SubprocessError):
             return False  # unknown = busy: fail closed
 

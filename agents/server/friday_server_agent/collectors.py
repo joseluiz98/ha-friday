@@ -47,6 +47,38 @@ LUCID_ATTRS = ("date", "status", "cost_usd", "turns_in", "facts_added", "facts_c
                "directives_changed", "discarded")
 
 
+ACTIVITY_STALE_S = 90
+
+
+def activity_view(activity: dict | None, now: float) -> dict | None:
+    """activity = the bot's /srv/friday/state/activity.json (sessions open, brain turns in flight,
+    heartbeat every 20 s). None when absent/unreadable (caller falls back to the log rule).
+    A stale heartbeat means the bot is not running: nothing is open."""
+    if not isinstance(activity, dict):
+        return None
+    try:
+        age = now - float(activity["updated_at"])
+        sessions = len(activity.get("sessions") or [])
+        brain = int(activity.get("brain_turns") or 0)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if age > ACTIVITY_STALE_S:
+        return {"conversation_open": False, "sessions": 0, "brain_turns": 0}
+    return {"conversation_open": sessions > 0, "sessions": sessions, "brain_turns": brain}
+
+
+def is_busy(activity: dict | None, now: float, log_tail) -> bool:
+    """Restart guard: busy with an open session OR a brain turn in flight. Without a readable
+    activity file, the old log rule; `log_tail()` returning None raises OSError (fail closed)."""
+    view = activity_view(activity, now)
+    if view is not None:
+        return view["conversation_open"] or view["brain_turns"] > 0
+    text = log_tail()
+    if text is None:
+        raise OSError("no log")
+    return conversation_open(text)
+
+
 def status_metrics(status: dict) -> dict:
     """status = JSON of GET :8800/v1/status plus `conversation_open` added by the agent."""
     lucid = status.get("lucid") or {}
@@ -61,6 +93,7 @@ def status_metrics(status: dict) -> dict:
         "lucid_last_run_attributes": lucid_attrs,
         "memory_views_mode": views.get("mode"),
         "conversation_open": status.get("conversation_open"),
+        "conversation_open_attributes": status.get("conversation_open_attributes"),
     }
 
 
@@ -70,6 +103,7 @@ def status_changes(status: dict) -> dict:
     out = status_metrics(status)
     if "conversation_open" not in status:
         out.pop("conversation_open")
+        out.pop("conversation_open_attributes")
     return out
 
 
