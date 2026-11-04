@@ -43,16 +43,22 @@ def conversation_open(log_text: str) -> bool:
     return aberta
 
 
+LUCID_ATTRS = ("date", "status", "cost_usd", "turns_in", "facts_added", "facts_corrected",
+               "directives_changed", "discarded")
+
+
 def status_metrics(status: dict) -> dict:
     """status = JSON of GET :8800/v1/status plus `conversation_open` added by the agent."""
     lucid = status.get("lucid") or {}
     views = status.get("memory_views") or {}
+    lucid_attrs = {k: lucid[k] for k in LUCID_ATTRS if k in lucid} or None
     return {
         "brain_ready": bool(status.get("ready")) if "ready" in status else None,
         "brain_last_dream": status.get("last_dream"),
         "brain_restarted_in_process": status.get("restarted_in_process"),
         "brain_version": status.get("openclaw_version"),
         "lucid_last_run": lucid.get("finished_at"),
+        "lucid_last_run_attributes": lucid_attrs,
         "memory_views_mode": views.get("mode"),
         "conversation_open": status.get("conversation_open"),
     }
@@ -92,8 +98,16 @@ def proxmox_metrics(node_status: dict, smart: dict, last_vzdump: dict) -> dict:
     data = last_vzdump.get("data") or []
     end = data[0].get("endtime") if data else None
     backup = datetime.fromtimestamp(end, timezone.utc).isoformat() if end else None
+    status = data[0].get("status") if data else None
     return {"host_available_mb": mb, "nvme_temperature": int(found[0]) if found else None,
-            "last_backup": backup}
+            "last_backup": backup, "last_backup_attributes": {"status": status} if status else None}
+
+
+def memory_index_metrics(stamp_mtime: float | None) -> dict:
+    """stamp_mtime = mtime of the file the memory-index unit touches after a successful run (ExecStartPost)."""
+    when = (datetime.fromtimestamp(int(stamp_mtime), timezone.utc).isoformat()
+            if stamp_mtime is not None else None)
+    return {"memory_index_last_success": when}
 
 
 VOICE_DESCRIPTOR = DESCRIPTOR
@@ -117,6 +131,7 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("brain_version", "Brain version", **diag),
         s("lucid_last_run", "Lucid Dreaming last run", device_class="timestamp"),
         s("memory_views_mode", "Memory views mode", **diag),
+        s("memory_index_last_success", "Memory index last success", device_class="timestamp", **diag),
         s("conversation_open", "Conversation open", platform="binary_sensor"),
         s("host_available_mb", "Proxmox host available memory", unit="MB", available=proxmox, **m),
         s("nvme_temperature", "Proxmox NVMe temperature", unit="°C", device_class="temperature",

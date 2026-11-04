@@ -31,6 +31,8 @@ PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8801"))
 OPENCLAW_JSON = os.environ.get("FRIDAY_OPENCLAW_JSON", "/srv/friday/home/.openclaw/openclaw.json")
 ENV_FILE = "/srv/friday/friday.env"
 PVE = "https://192.0.2.252:8006/api2/json/nodes/hypervisor"
+# Touched by friday-memory-index.service (ExecStartPost) after each successful reindex.
+MEMORY_INDEX_STAMP = os.environ.get("FRIDAY_MEMORY_INDEX_STAMP", "/srv/friday/state/memory-index.ok")
 
 
 def _read(path: str) -> str:
@@ -55,9 +57,14 @@ def _proc(name: str) -> str:
 
 def sample_vm() -> dict:
     v = os.statvfs("/")
-    return c.vm_metrics(_proc("meminfo"), _proc("loadavg"),
-                        (v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail),
-                        _proc("uptime"), os.cpu_count() or 1)
+    try:
+        stamp = os.stat(MEMORY_INDEX_STAMP).st_mtime
+    except OSError:
+        stamp = None
+    return {**c.vm_metrics(_proc("meminfo"), _proc("loadavg"),
+                           (v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail),
+                           _proc("uptime"), os.cpu_count() or 1),
+            **c.memory_index_metrics(stamp)}
 
 
 def _log_tail() -> str:
@@ -140,7 +147,7 @@ async def main() -> None:
                 await core.push_state(changes, "agent")
             await asyncio.sleep(period)
 
-    PVE_KEYS = ["host_available_mb", "nvme_temperature", "last_backup"]
+    PVE_KEYS = list(c.proxmox_metrics({}, {}, {}))
     tasks = [loop(sample_vm, None, 30, "vm", c.Source(c.vm_metrics(
                  "MemTotal: 1 kB\n", "0", (1, 1, 1, 1), "1", 1))),
              loop(sample_status, status_token, 30, "status", c.Source(c.status_metrics({})))]
