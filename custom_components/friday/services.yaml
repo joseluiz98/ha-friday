@@ -14,3 +14,10 @@ set_wifi:
       selector:
         text:
           type: password
+retry_provisioning:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: friday

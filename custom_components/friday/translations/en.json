@@ -18,6 +18,14 @@
           "token": "Token",
           "area_id": "Area"
         }
+      },
+      "pair": {
+        "title": "Satellite {id}",
+        "description": "Enter the 4-digit code the satellite is speaking.",
+        "data": {
+          "code": "Code",
+          "area_id": "Area"
+        }
       }
     },
     "abort": {
@@ -25,7 +33,13 @@
       "satellite_added": "Satellite added.",
       "no_entry": "Add the F.R.I.D.A.Y. integration first.",
       "not_supported": "Device not supported.",
-      "already_configured": "Already configured."
+      "already_configured": "Already configured.",
+      "reauth_successful": "Satellite adopted again with a new token."
+    },
+    "error": {
+      "bad_code": "Wrong code. {attempts_left} attempts left.",
+      "locked": "Too many attempts: the satellite spoke a new code.",
+      "cannot_connect": "Could not reach the satellite."
     }
   },
   "config_subentries": {
@@ -157,6 +171,16 @@
         "password": {
           "name": "Password",
           "description": "Network password (8-63 characters); never stored."
+        }
+      }
+    },
+    "retry_provisioning": {
+      "name": "Retry provisioning",
+      "description": "Redoes the provisioning steps that failed on a satellite.",
+      "fields": {
+        "device_id": {
+          "name": "Satellite",
+          "description": "The satellite."
         }
       }
     }

@@ -13,6 +13,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import slugify
 
 from .connection import FridayConnection
+from . import provisioning
 from .recordings import RecordingView
 from .services import async_register_services
 from .const import (
@@ -125,6 +126,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
         entry.async_on_unload(connection.add_availability_listener(_late_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_server_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
+        sub = entry.subentries[subentry_id]
+        if sub.data.get("provisioned") is False:
+            _watch_new_satellite(hass, entry, subentry_id, sub, connection)
         area_id = entry.subentries[subentry_id].data.get(CONF_AREA_ID)
         if area_id:
             entry.async_on_unload(_area_listener(hass, entry, subentry_id, connection))
@@ -132,6 +136,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
+
+
+def orchestrator_for(hass: HomeAssistant, subentry_id: str, sat_id: str):
+    """The provisioning orchestrator of a satellite; created once and kept across entry reloads."""
+    store = hass.data.setdefault(DOMAIN, {}).setdefault("orchestrators", {})
+    if sat_id not in store:
+        store[sat_id] = provisioning.Orchestrator(hass, sat_id, subentry_id)
+    return store[sat_id]
+
+
+def _watch_new_satellite(hass, entry, subentry_id, subentry, connection) -> None:
+    """A satellite adopted with the spoken code and not yet provisioned: run the orchestrator when it connects,
+    and apply the area it picks in the presentation."""
+    sat_id = subentry.unique_id
+    if not sat_id:
+        return
+    orch = orchestrator_for(hass, subentry_id, sat_id)
+
+    def _on_up(up: bool) -> None:
+        if up:
+            hass.async_create_background_task(orch.run(), f"friday provisioning {sat_id}")
+
+    def _on_event(key: str, event_type: str, data: dict) -> None:
+        if key == "onboarding" and event_type == "area_selected" and isinstance(data.get("area_id"), str):
+            hass.async_create_background_task(orch.area_selected(data["area_id"]), f"friday area {sat_id}")
+
+    entry.async_on_unload(connection.add_availability_listener(_on_up))
+    entry.async_on_unload(connection.add_event_listener(_on_event))
+    if connection.connected:
+        _on_up(True)
 
 
 def _entity_id(connection, descriptor) -> str:
