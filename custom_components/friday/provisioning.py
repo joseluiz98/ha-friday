@@ -74,6 +74,9 @@ def write_registry(path: str, sat_id: str, fields: dict[str, Any], defaults: dic
     os.replace(tmp, path)
 
 
+CLOSE_SETTLE_S = 3  # the voice enrollment opens right after the presentation closes; `ready` waits for it
+
+
 class Orchestrator:
     """One per adopted satellite; survives config entry reloads (kept in hass.data)."""
 
@@ -262,6 +265,10 @@ class Orchestrator:
         step failed) and the subentry becomes provisioned."""
         if not self.ready_pending:
             return
+        await self._sleep(CLOSE_SETTLE_S)
+        c = self.connection()
+        if not self.ready_pending or (c is not None and getattr(c, "state", {}).get("program_state", "idle") != "idle"):
+            return  # reopened (the voice enrollment right after the presentation): the next idle tries again
         self.ready_pending = False
         failed = any(v == FAILED for v in (await self.steps_state()).values())
         if not failed:

@@ -221,6 +221,22 @@ async def test_ready_is_said_once_when_the_conversation_closes_and_marks_provisi
     assert entry.subentries["s1"].data["provisioned"] is True
 
 
+async def test_ready_waits_when_the_conversation_reopens_for_voice_enrollment(hass, reg, notes):
+    sat = good_sat()
+    entry, orch, _ = make(hass, sat, good_server())
+    area = ar.async_get(hass).async_create("Sala")
+    await orch.run()
+    with patch.object(hass.config_entries, "async_schedule_reload"):
+        await orch.area_selected(area.id)
+        sat.state = {"program_state": "conversation"}  # the enrollment reopened it during the settle wait
+        await orch.conversation_closed()
+        assert said(sat) == [] and entry.subentries["s1"].data["provisioned"] is False
+        sat.state = {"program_state": "idle"}  # the enrollment ended
+        await orch.conversation_closed()
+    assert said(sat) == [["ready"]]
+    assert entry.subentries["s1"].data["provisioned"] is True
+
+
 async def test_ready_is_not_said_when_a_step_failed_but_provisioned_flips(hass, reg, notes):
     server = good_server()
     server.responses["register_sync_key"] = HomeAssistantError("io")
