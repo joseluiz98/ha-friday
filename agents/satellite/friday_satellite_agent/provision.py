@@ -5,6 +5,7 @@ start_onboarding and the two-level factory reset. Every path and effect is injec
 from __future__ import annotations
 
 import asyncio
+import glob
 import hashlib
 import json
 import logging
@@ -28,6 +29,51 @@ DOWNLOAD_TIMEOUT_S = 300
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 VERIFIER = "friday_verificador.pkl"
 RESTART_WAIT_S = 120
+UPDATE_SLOW_S = 180  # spoken "this is taking longer" if a bundle update has not finished by then
+RESET_CONFIRM_S = 10  # window between the first and the second press of "forget home"
+WIFI_HELPER = ["sudo", "-n", "/usr/local/sbin/friday-wifi-apply"]
+OWN_WIFI = re.compile(r"friday-wifi-[0-9]+")
+
+
+async def run_capture(argv: list[str]) -> tuple[int, str]:
+    """Runs a command; returns (exit code, stdout). Never raises for a missing binary."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), 60)
+    except (OSError, asyncio.TimeoutError):
+        return 1, ""
+    return proc.returncode or 0, out.decode(errors="replace")
+
+
+def _split_nm(line: str) -> list[str]:
+    parts, cur, esc = [], "", False
+    for ch in line:
+        if esc:
+            cur, esc = cur + ch, False
+        elif ch == "\\":
+            esc = True
+        elif ch == ":":
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur)
+    return parts
+
+
+def wifi_profiles(listing: str) -> tuple[list[str], str | None]:
+    """From `nmcli -t -f NAME,TYPE connection show`: (profiles created by HA, the original wireless profile)."""
+    own, original = [], None
+    for line in listing.splitlines():
+        parts = _split_nm(line)
+        if len(parts) < 2 or parts[1] not in ("802-11-wireless", "wifi"):
+            continue
+        if OWN_WIFI.fullmatch(parts[0]):
+            own.append(parts[0])
+        elif original is None:
+            original = parts[0]
+    return own, original
 
 
 class BundleError(Exception):
@@ -108,7 +154,8 @@ class Provisioner:
                  voices_dir: str, models_dir: str, program, restart_program: Callable[[], Awaitable[dict]],
                  apply_agent: Callable[[str], Awaitable[int]] | None = None,
                  fetch=fetch_to_file, exit_fn=os._exit, ip_fn=lambda: "", loop_sleep=asyncio.sleep,
-                 now=time.time) -> None:
+                 now=time.time, run=run_capture, wipe_paths: list[str] | None = None,
+                 monotonic=time.monotonic) -> None:
         self.etc_dir, self.config_path, self.ssh_dir = etc_dir, config_path, ssh_dir
         self.program_dir, self.bundles_dir = program_dir, bundles_dir
         self.voices_dir, self.models_dir = voices_dir, models_dir
@@ -120,6 +167,13 @@ class Provisioner:
         self._ip = ip_fn
         self._sleep = loop_sleep
         self._now = now
+        self._run = run
+        self._monotonic = monotonic
+        self._armed_until: float | None = None
+        self._wipe_paths = wipe_paths if wipe_paths is not None else [
+            os.path.join(self.voices_dir, "*"),
+            os.path.join(self.models_dir, VERIFIER),
+            os.path.join(os.path.dirname(self.voices_dir), "gravacoes", "*")]
         self._pending_facts: dict | None = None
         self._exit_task: asyncio.Task | None = None
 
@@ -181,6 +235,22 @@ class Provisioner:
                 "verifier": verifier if os.path.isfile(verifier) else None}
 
     async def apply_bundle(self, kind, url, sha256) -> dict:
+        slow = None
+        if kind == "update":
+            await self.say(["updating"])
+
+            async def warn_slow() -> None:
+                await self._sleep(UPDATE_SLOW_S)
+                await self.say(["update_slow"])
+
+            slow = asyncio.ensure_future(warn_slow())
+        try:
+            return await self._apply_bundle(kind, url, sha256)
+        finally:
+            if slow is not None:
+                slow.cancel()
+
+    async def _apply_bundle(self, kind, url, sha256) -> dict:
         stage = None
         archive = None
         try:
@@ -301,14 +371,42 @@ class Provisioner:
             LOG.warning("open_presentation failed: %s", type(err).__name__)
 
     # ---- factory reset
+    async def reset_network(self) -> dict:
+        """Level 1: back to the Wi-Fi the card was written with (the first wireless profile that HA did not create)."""
+        code, listing = await self._run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"])
+        own, original = wifi_profiles(listing) if code == 0 else ([], None)
+        if original is None:
+            return {"ok": False, "error": "no_original_network"}
+        await self.say(["reset_network"])
+        for name in own:
+            await self._run([*WIFI_HELPER, "delete", name])
+        code, _ = await self._run([*WIFI_HELPER, "up", original])
+        return {"ok": code == 0, **({} if code == 0 else {"error": "wifi_up"})}
+
+    async def press_reset_home(self) -> dict:
+        """Level 2 needs a confirmation: the first press arms for RESET_CONFIRM_S and asks for the second one."""
+        now = self._monotonic()
+        if self._armed_until is not None and now <= self._armed_until:
+            self._armed_until = None
+            return await self.factory_reset(2)
+        self._armed_until = now + RESET_CONFIRM_S
+        await self.say(["reset_confirm_ha"])
+        return {"ok": True, "data": {"armed_for_s": RESET_CONFIRM_S}}
+
+    def _wipe_personal_data(self) -> None:
+        for pattern in self._wipe_paths:
+            for path in glob.glob(pattern):
+                try:
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
+                except OSError as err:
+                    LOG.warning("reset: could not remove an item (%s)", type(err).__name__)
+
     async def factory_reset(self, level) -> dict:
         if level == 1:
-            # The network is learned only by rewriting the card (spec §4): erasing it would strand the Pi.
-            # So this level is a hook: flag + spoken notice, NetworkManager untouched.
-            with open(os.path.join(self.etc_dir, "reset-network"), "w", encoding="utf-8") as f:
-                f.write("")
-            await self._say(["reset_network"])
-            return {"ok": True}
+            return await self.reset_network()
         if level == 2:
             def forget() -> None:
                 # pairable first: a crash in between must leave the satellite adoptable, not stranded
@@ -326,15 +424,19 @@ class Provisioner:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(cfg, f, ensure_ascii=False, indent=1)
                 os.replace(tmp, self.config_path)
+                self._wipe_personal_data()
 
             await asyncio.to_thread(forget)
-            await self._say(["reset_home"])
+            await self.say(["reset_home"])
             self._schedule_agent_exit(delay=3.0)  # let the phrase start; the restart comes back pairable
             return {"ok": True}
         return {"ok": False, "error": "invalid"}
 
-    async def _say(self, keys: list[str]) -> None:
+    async def say(self, keys: list[str]) -> bool:
         try:
-            await self.program.command({"acao": "play_phrases", "keys": keys})
-        except Exception as err:  # noqa: BLE001 - the reset never depends on the program being up
+            res = await self.program.command({"acao": "play_phrases", "keys": keys})
+            return bool(res.get("ok", True))
+        except Exception as err:  # noqa: BLE001 - nothing depends on the program being up
             LOG.warning("phrase failed: %s", type(err).__name__)
+            return False
+

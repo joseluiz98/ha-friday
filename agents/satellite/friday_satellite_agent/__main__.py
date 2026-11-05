@@ -17,7 +17,7 @@ from . import capabilities as cap
 from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
-from . import local, pairing, provision, recordings
+from . import local, pairing, provision, recordings, server_watch
 from . import room_sensors
 from . import wifi
 from .announce import announce, lan_ip as _lan_ip
@@ -131,12 +131,18 @@ async def main() -> None:
     async def do_factory_reset(cmd: dict) -> dict:
         return await prov.factory_reset(_args(cmd).get("level"))
 
+    async def do_say(cmd: dict) -> dict:
+        keys = _args(cmd).get("keys")
+        if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys):
+            return {"ok": False, "error": "invalid"}
+        return {"ok": await prov.say(keys)}
+
     async def do_press(cmd: dict) -> dict:
         key = cmd.get("key")
         if key == "reset_network":
             return await prov.factory_reset(1)
         if key == "reset_home":
-            return await prov.factory_reset(2)
+            return await prov.press_reset_home()
         if key == "reboot":
             return await power.reboot()
         if key == "restart_program":
@@ -262,7 +268,7 @@ async def main() -> None:
 
     core = AgentCore(ha_token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi,
                       "provision_info": do_provision_info, "apply_bundle": do_apply_bundle,
-                      "start_onboarding": do_start_onboarding, "factory_reset": do_factory_reset,
+                      "start_onboarding": do_start_onboarding, "say": do_say, "factory_reset": do_factory_reset,
                       "diagnostics": diagmod.make_handler(CONFIG, lambda: dict(memo["state"]))})
 
     async def timers_watch() -> None:
@@ -366,7 +372,8 @@ async def main() -> None:
     if zc:
         zc_box.append(zc)
     try:
-        tasks = [poll(), midnight(), hardware_loop(), room_loop(), timers_watch()]
+        tasks = [poll(), midnight(), hardware_loop(), room_loop(), timers_watch(),
+                 server_watch.ServerWatch(CONFIG, program).run()]
         if pairable:
             tasks.append(speak_code())
         await asyncio.gather(*tasks)

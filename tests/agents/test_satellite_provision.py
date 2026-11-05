@@ -1,5 +1,6 @@
 """Provisioning commands of the satellite agent: bundles, onboarding chain, two-level reset."""
 
+import asyncio
 import hashlib
 import io
 import json
@@ -235,6 +236,23 @@ async def test_start_onboarding_program_refuses(env):
     assert (await p.start_onboarding("nope"))["ok"] is False
 
 
+def with_run(p, listing="", log=None, up_code=0):
+    log = log if log is not None else []
+
+    async def run(argv):
+        log.append(argv)
+        if argv[:2] == ["nmcli", "-t"]:
+            return 0, listing
+        return (up_code if "up" in argv else 0), ""
+
+    p._run = run
+    return log
+
+
+LISTING = ("ExampleNet:802-11-wireless\nfriday-wifi-1700000000:802-11-wireless\n"
+           "friday-wifi-1700000100:802-11-wireless\nWired connection 1:802-3-ethernet\nlo:loopback\n")
+
+
 async def test_reset_level_2_leaves_pairable_without_token(env):
     (env / "etc" / "ha_token").write_text("tok")
     p, program, exits, _ = make(env)
@@ -249,14 +267,138 @@ async def test_reset_level_2_leaves_pairable_without_token(env):
     assert exits == [3]
 
 
-async def test_reset_level_1_is_a_hook_only(env):
+async def test_reset_level_2_wipes_personal_data_only(env):
+    (env / "voices" / "ana").mkdir()
+    (env / "voices" / "ana" / "a.wav").write_bytes(b"x")
+    (env / "voices" / "loose.wav").write_bytes(b"x")
+    (env / "models").mkdir(exist_ok=True)
+    (env / "models" / pv.VERIFIER).write_bytes(b"pkl")
+    (env / "models" / "friday.onnx").write_bytes(b"model")
+    (env / "gravacoes" / "ativacoes").mkdir(parents=True)
+    (env / "gravacoes" / "ativacoes" / "1.wav").write_bytes(b"x")
+    p, *_ = make(env)
+    p.voices_dir = str(env / "voices")
+    p._wipe_paths = [str(env / "voices" / "*"), str(env / "models" / pv.VERIFIER), str(env / "gravacoes" / "*")]
+    assert (await p.factory_reset(2)) == {"ok": True}
+    assert os.listdir(env / "voices") == [] and os.listdir(env / "gravacoes") == []
+    assert not (env / "models" / pv.VERIFIER).exists() and (env / "models" / "friday.onnx").exists()
+    await p._exit_task
+
+
+async def test_reset_level_1_goes_back_to_the_original_network(env):
     p, program, exits, _ = make(env)
+    log = with_run(p, LISTING)
     assert (await p.factory_reset(1)) == {"ok": True}
-    assert (env / "etc" / "reset-network").exists()
-    assert not (env / "etc" / "pairable").exists()
+    helper = pv.WIFI_HELPER
+    assert [*helper, "delete", "friday-wifi-1700000000"] in log and [*helper, "delete", "friday-wifi-1700000100"] in log
+    assert log[-1] == [*helper, "up", "ExampleNet"]
+    assert [c for c in log if "delete" in c and "ExampleNet" in c] == []
     assert program.calls == [{"acao": "play_phrases", "keys": ["reset_network"]}]
-    assert exits == []
+    assert not (env / "etc" / "pairable").exists() and exits == []
     assert (await p.factory_reset(3))["ok"] is False
+
+
+async def test_reset_level_1_without_original_network_deletes_nothing(env):
+    p, program, *_ = make(env)
+    log = with_run(p, "friday-wifi-1700000000:802-11-wireless\nlo:loopback\n")
+    r = await p.factory_reset(1)
+    assert r == {"ok": False, "error": "no_original_network"}
+    assert all(c[0] == "nmcli" for c in log) and program.calls == []
+
+
+async def test_reset_level_1_reports_a_failed_reconnect(env):
+    p, *_ = make(env)
+    with_run(p, LISTING, up_code=4)
+    assert (await p.factory_reset(1)) == {"ok": False, "error": "wifi_up"}
+
+
+def test_wifi_profiles_parsing_handles_escaped_colons():
+    own, original = pv.wifi_profiles("Casa\\:5G:802-11-wireless\nfriday-wifi-5:802-11-wireless\n")
+    assert own == ["friday-wifi-5"] and original == "Casa:5G"
+    assert pv.wifi_profiles("friday-wifi-x:802-11-wireless\n") == ([], "friday-wifi-x")
+
+
+async def test_reset_home_press_needs_a_second_press_within_ten_seconds(env):
+    clock = [100.0]
+    p, program, exits, _ = make(env)
+    p._monotonic = lambda: clock[0]
+    r = await p.press_reset_home()
+    assert r["ok"] and program.calls == [{"acao": "play_phrases", "keys": ["reset_confirm_ha"]}]
+    assert not (env / "etc" / "pairable").exists()
+    clock[0] += 9.5
+    assert (await p.press_reset_home()) == {"ok": True}
+    assert (env / "etc" / "pairable").exists()
+    assert program.calls[-1] == {"acao": "play_phrases", "keys": ["reset_home"]}
+    await p._exit_task
+
+
+async def test_reset_home_second_press_after_the_window_only_rearms(env):
+    clock = [100.0]
+    p, program, *_ = make(env)
+    p._monotonic = lambda: clock[0]
+    await p.press_reset_home()
+    clock[0] += 10.5
+    await p.press_reset_home()
+    assert not (env / "etc" / "pairable").exists()
+    assert [c["keys"] for c in program.calls] == [["reset_confirm_ha"], ["reset_confirm_ha"]]
+    clock[0] += 5
+    await p.press_reset_home()  # inside the new window
+    assert (env / "etc" / "pairable").exists()
+    await p._exit_task
+
+
+async def test_update_speaks_updating_and_cancels_the_slow_notice(env):
+    blob = tar_bytes(UPDATE)
+    p, program, *_ = make(env, {"http://vm/b": blob})
+    never = asyncio.Event()
+    waits = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+        if seconds == pv.UPDATE_SLOW_S:
+            await never.wait()  # the 180 s timer never gets to expire
+
+    p._sleep = sleep
+    r = await p.apply_bundle("update", "http://vm/b", sha(blob))
+    assert r["ok"]
+    await asyncio.sleep(0)
+    assert [c["keys"] for c in program.calls] == [["updating"]]
+    assert pv.UPDATE_SLOW_S in waits
+    p._exit_task.cancel()
+
+
+async def test_update_slow_is_spoken_once_when_the_update_takes_too_long(env):
+    blob = tar_bytes(UPDATE)
+    p, program, *_ = make(env, {"http://vm/b": blob})
+    release = asyncio.Event()
+
+    async def sleep(seconds):
+        if seconds == pv.UPDATE_SLOW_S:
+            release.set()  # the deadline passes at once...
+            return None
+        await asyncio.sleep(0)
+
+    p._sleep = sleep
+    orig = p._apply_update
+
+    async def late(parts, stamp):  # ...while the update is still working
+        await release.wait()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return await orig(parts, stamp)
+
+    p._apply_update = late
+    r = await p.apply_bundle("update", "http://vm/b", sha(blob))
+    assert r["ok"]
+    assert [c["keys"] for c in program.calls] == [["updating"], ["update_slow"]]
+    p._exit_task.cancel()
+
+
+async def test_voices_bundle_is_silent(env):
+    blob = tar_bytes(VOICES)
+    p, program, *_ = make(env, {"http://vm/v": blob})
+    await p.apply_bundle("voices", "http://vm/v", sha(blob))
+    assert program.calls == []
 
 
 async def test_reset_does_not_depend_on_the_program(env):
