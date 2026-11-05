@@ -84,6 +84,7 @@ class Orchestrator:
         self._lock = asyncio.Lock()
         self.info: dict = {}
         self.people: list[str] = []
+        self.ready_pending = False  # the area was chosen; waiting for the presentation conversation to close
 
     # ---- helpers
     def _entry(self):
@@ -124,6 +125,16 @@ class Orchestrator:
 
     async def steps_state(self) -> dict:
         return ((await self._load()).get(self.sat_id) or {}).get("steps", {})
+
+    async def say(self, keys: list[str]) -> None:
+        """Pre-recorded phrase on the satellite; if it is not connected or refuses, nothing else depends on it."""
+        c = self.connection()
+        if c is None or not c.connected:
+            return
+        try:
+            await c.send("say", timeout=15, keys=keys)
+        except HomeAssistantError as err:
+            _LOGGER.debug("Satellite %s phrase %s not played: %s", self.sat_id, keys, err)
 
     def _log(self, message: str) -> None:
         async_log_entry(self.hass, f"Satellite {self.sat_id}", message, DOMAIN)
@@ -200,6 +211,7 @@ class Orchestrator:
         reason = str(last) or type(last).__name__
         await self._save_step(step, FAILED, reason)
         self._log(f"provisioning step {step} failed: {reason}")
+        await self.say(["step_failed"])
         persistent_notification.async_create(
             self.hass, f"Satellite {self.sat_id}: the step '{step}' failed ({reason}). "
                        "Call friday.retry_provisioning to try again.",
@@ -240,6 +252,20 @@ class Orchestrator:
             config_entry_id=entry.entry_id, config_subentry_id=self.subentry_id, identifiers={(DOMAIN, self.sat_id)})
         dr.async_get(self.hass).async_update_device(dev.id, area_id=area_id)
         self._log(f"placed in {area.name}")
-        # last: this reloads the entry
+        self.ready_pending = True
+        # last: this reloads the entry; `provisioned` flips when the presentation conversation closes
         self.hass.config_entries.async_update_subentry(
-            entry, sub, title=f"Satellite {area.name}", data={**sub.data, CONF_AREA_ID: area_id, "provisioned": True})
+            entry, sub, title=f"Satellite {area.name}", data={**sub.data, CONF_AREA_ID: area_id})
+
+    async def conversation_closed(self) -> None:
+        """Called when the satellite's program_state goes back to idle: the satellite says `ready` once (only when no
+        step failed) and the subentry becomes provisioned."""
+        if not self.ready_pending:
+            return
+        self.ready_pending = False
+        failed = any(v == FAILED for v in (await self.steps_state()).values())
+        if not failed:
+            await self.say(["ready"])
+        entry = self._entry()
+        sub = entry.subentries[self.subentry_id]
+        self.hass.config_entries.async_update_subentry(entry, sub, data={**sub.data, "provisioned": True})

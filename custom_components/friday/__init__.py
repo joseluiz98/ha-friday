@@ -162,8 +162,13 @@ def _watch_new_satellite(hass, entry, subentry_id, subentry, connection) -> None
         if key == "onboarding" and event_type == "area_selected" and isinstance(data.get("area_id"), str):
             hass.async_create_background_task(orch.area_selected(data["area_id"]), f"friday area {sat_id}")
 
+    def _on_state(changes: dict, origin: str) -> None:
+        if changes.get("program_state") == "idle":
+            hass.async_create_background_task(orch.conversation_closed(), f"friday ready {sat_id}")
+
     entry.async_on_unload(connection.add_availability_listener(_on_up))
     entry.async_on_unload(connection.add_event_listener(_on_event))
+    entry.async_on_unload(connection.add_listener(_on_state))
     if connection.connected:
         _on_up(True)
 

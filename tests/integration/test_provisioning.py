@@ -82,7 +82,11 @@ def good_server():
 
 
 def good_sat():
-    return Conn("satellite", {"provision_info": INFO, "apply_bundle": {}, "start_onboarding": {}})
+    return Conn("satellite", {"provision_info": INFO, "apply_bundle": {}, "start_onboarding": {}, "say": {}})
+
+
+def said(conn):
+    return [c[1]["keys"] for c in conn.calls if c[0] == "say"]
 
 
 async def test_steps_run_in_order_and_register_the_satellite(hass, reg, notes):
@@ -181,10 +185,10 @@ async def test_retry_redoes_only_the_failed_steps(hass, reg, notes):
     await orch._save_step("sync_key", "failed", "x")
     orch2 = pv.Orchestrator(hass, SAT, "s1", sleep=orch._sleep)
     await orch2.run(retry=True)
-    assert [c[0] for c in sat.calls[before_sat:]] == ["provision_info"]
+    assert [c[0] for c in sat.calls[before_sat:] if c[0] != "say"] == ["provision_info"]
 
 
-async def test_area_selected_sets_area_title_registry_and_marks_provisioned(hass, reg, notes):
+async def test_area_selected_sets_area_title_and_registry(hass, reg, notes):
     sat, server = good_sat(), good_server()
     entry, orch, _ = make(hass, sat, server)
     area = ar.async_get(hass).async_create("Sala de estar")
@@ -193,12 +197,56 @@ async def test_area_selected_sets_area_title_registry_and_marks_provisioned(hass
         await orch.area_selected(area.id)
     sub = entry.subentries["s1"]
     assert sub.title == "Satellite Sala de estar"
-    assert sub.data["area_id"] == area.id and sub.data["provisioned"] is True
+    assert sub.data["area_id"] == area.id and sub.data["provisioned"] is False  # flips when the conversation closes
     data = json.loads(reg.read_text())
     assert data[SAT]["comodo"] == "Sala de estar" and data[SAT]["senha"] == "pw-from-pi"
     assert data["sat-0a1b2c"]["comodo"] == "Escritório"  # others untouched
     device = _device(hass, entry)
     assert device.area_id == area.id
+
+
+async def test_ready_is_said_once_when_the_conversation_closes_and_marks_provisioned(hass, reg, notes):
+    sat = good_sat()
+    entry, orch, _ = make(hass, sat, good_server())
+    area = ar.async_get(hass).async_create("Sala")
+    await orch.run()
+    await orch.conversation_closed()  # before the area: nothing happens
+    assert said(sat) == [] and entry.subentries["s1"].data["provisioned"] is False
+    with patch.object(hass.config_entries, "async_schedule_reload"):
+        await orch.area_selected(area.id)
+        assert said(sat) == []  # the conversation is still open
+        await orch.conversation_closed()
+        await orch.conversation_closed()
+    assert said(sat) == [["ready"]]
+    assert entry.subentries["s1"].data["provisioned"] is True
+
+
+async def test_ready_is_not_said_when_a_step_failed_but_provisioned_flips(hass, reg, notes):
+    server = good_server()
+    server.responses["register_sync_key"] = HomeAssistantError("io")
+    sat = good_sat()
+    entry, orch, _ = make(hass, sat, server)
+    area = ar.async_get(hass).async_create("Sala")
+    await orch.run()
+    with patch.object(hass.config_entries, "async_schedule_reload"):
+        await orch.area_selected(area.id)
+        await orch.conversation_closed()
+    assert "ready" not in [k for keys in said(sat) for k in keys]
+    assert entry.subentries["s1"].data["provisioned"] is True
+
+
+async def test_step_failed_is_said_for_each_final_failure_and_offline_is_ignored(hass, reg, notes):
+    server = good_server()
+    server.responses["register_sync_key"] = HomeAssistantError("io")
+    sat = good_sat()
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    assert said(sat) == [["step_failed"]]
+    sat2 = good_sat()
+    sat2.connected = False
+    _, orch2, _ = make(hass, sat2, good_server())
+    await orch2.say(["step_failed"])  # no raise, nothing sent
+    assert said(sat2) == []
 
 
 async def test_unknown_area_changes_nothing(hass, reg, notes):
@@ -276,8 +324,13 @@ async def test_new_satellite_is_provisioned_on_first_connect_and_area_event_appl
     # the satellite reports the area picked in the presentation
     await sat.sockets[-1].send_json({"type": "event", "key": "onboarding", "event_type": "area_selected",
                                      "data": {"area_id": area.id}})
+    await wait_for(lambda: entry.subentries["s0"].title == "Satellite Sala", timeout=5)
+    assert entry.subentries["s0"].data.get("provisioned") is False  # the presentation is still going
+    # the conversation closes: the satellite is told `ready` and the subentry is provisioned
+    await wait_for(lambda: sat.sockets and sat.sockets[-1].closed is False, timeout=5)
+    await sat.sockets[-1].send_json({"type": "state", "changes": {"program_state": "idle"}, "origin": "voice"})
     await wait_for(lambda: entry.subentries["s0"].data.get("provisioned") is True, timeout=5)
-    assert entry.subentries["s0"].title == "Satellite Sala"
+    assert "say" in sat_got
     assert json.loads(reg.read_text())[SAT]["comodo"] == "Sala"
     await hass.async_block_till_done()
     await hass.config_entries.async_unload(entry.entry_id)
