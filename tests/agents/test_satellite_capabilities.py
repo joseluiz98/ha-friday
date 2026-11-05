@@ -221,3 +221,13 @@ def test_rejected_event_carries_cause_and_counts():
     t = cap.Tracker()
     ev = t.on_event("ativacao", {"palavra": "friday", "nota": 0.86, "resultado": "barrada", "causa": "sem_voz"})
     assert ev["event"][1] == "rejected" and ev["event"][2]["cause"] == "no_voice" and ev["state"]["rejected_today"] == 1
+
+
+def test_close_mic_awaiting_reply_switch():
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    d = keys["close_mic_awaiting_reply"]
+    assert d["platform"] == "switch" and d["name"] == "Close mic while awaiting reply"
+    m = cap.Mapper()
+    assert m.state(CFG, WW, None)["close_mic_awaiting_reply"] is False  # absent = off (program default)
+    assert m.state(dict(CFG, close_mic_awaiting_reply=True), WW, None)["close_mic_awaiting_reply"] is True
+    assert m.to_program(CFG, "close_mic_awaiting_reply", True) == {"config": {"close_mic_awaiting_reply": True}}

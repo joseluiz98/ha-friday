@@ -49,6 +49,8 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("sounds_volume", "number", "Sounds volume", min=-40, max=0, step=1, unit="dB", category=c, mode="slider"),
         _d("whisper_mode", "switch", "Whisper mode", category=c, icon="mdi:account-voice"),
         _d("follow_up", "number", "Follow-up wait", min=2, max=30, step=1, unit="s", category=c, mode="box"),
+        _d("close_mic_awaiting_reply", "switch", "Close mic while awaiting reply", category=c,
+           icon="mdi:microphone-message-off"),
         _d("ducking", "switch", "Music ducking", category=c, icon="mdi:music-note-minus"),
         _d("ducking_level", "number", "Ducking level", min=1, max=25, step=1, unit="%", category=c, mode="box"),
         _d("ducking_restore", "number", "Ducking restore delay", min=0, max=10, step=0.5, unit="s",
@@ -129,6 +131,7 @@ class Mapper:
             "sounds_volume": cfg.get("volume_sons"),
             "whisper_mode": cfg.get("whisper_min_ratio_db") is not None,
             "follow_up": cfg.get("espera_resposta_s"),
+            "close_mic_awaiting_reply": cfg.get("close_mic_awaiting_reply") is True,
             "ducking": bool(duck),
             "ducking_level": duck if duck else self.last_duck,
             "ducking_restore": cfg.get("music_restore_s"),
@@ -147,7 +150,8 @@ class Mapper:
         """Translate a `set` into {"config": {...}} or {"wakeword": (name, mode)}; None = unknown key."""
         simple = {"do_not_disturb": "nao_perturbe", "mute": "mudo", "turn_sounds": "sons_turno", "alarm_volume": "volume_alertas", "alarm_ramp": "alarm_ramp_s",
                   "sounds_volume": "volume_sons", "follow_up": "espera_resposta_s",
-                  "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s"}
+                  "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s",
+                  "close_mic_awaiting_reply": "close_mic_awaiting_reply"}
         if key in simple:
             if key in INT_KEYS and isinstance(value, float) and value.is_integer():
                 value = int(value)  # HA number entities send 20.0; the program accepts only int here
