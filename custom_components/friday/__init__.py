@@ -9,7 +9,7 @@ from homeassistant.const import Platform
 from homeassistant.components.logbook import async_log_entry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import slugify
 
 from .connection import FridayConnection
@@ -66,10 +66,39 @@ async def _async_register_card(hass: HomeAssistant) -> None:
 
 LEGACY_TITLE_PREFIX = "F.R.I.D.A.Y. "
 
+# 04/11: entities whose descriptor key was renamed (old -> new); the registry entry is migrated so the entity keeps
+# its history and the user's settings
+RENAMED_KEYS = {"follow_up": "reply_wait"}
+
+
+def _migrate_renamed_keys(hass: HomeAssistant, entry: FridayConfigEntry) -> None:
+    """Move registry entries from an old descriptor key to its new one. The default entity_id follows the key; an
+    entity_id the user renamed is kept."""
+    reg = er.async_get(hass)
+    for entity in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+        for old, new in RENAMED_KEYS.items():
+            suffix = f"_{old}"
+            if not entity.unique_id.endswith(suffix):
+                continue
+            device_id = entity.unique_id.removesuffix(suffix)
+            new_unique_id = f"{device_id}_{new}"
+            default_old = f"{entity.domain}.friday_{slugify(device_id)}_{slugify(old)}"
+            kwargs = {"new_unique_id": new_unique_id}
+            if entity.entity_id == default_old:
+                new_entity_id = f"{entity.domain}.friday_{slugify(device_id)}_{slugify(new)}"
+                if reg.async_get(new_entity_id) is None:
+                    kwargs["new_entity_id"] = new_entity_id
+            try:
+                reg.async_update_entity(entity.entity_id, **kwargs)
+            except ValueError:  # the new unique_id already exists: leave the old entry alone
+                _LOGGER.warning("Could not migrate %s to %s", entity.entity_id, new_unique_id)
+            break
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bool:
     """Start one connection per subentry; entities appear once each hello arrives."""
     connections: dict[str, FridayConnection] = {}
+    _migrate_renamed_keys(hass, entry)
     for subentry in list(entry.subentries.values()):
         # 31/10: titles no longer repeat the integration name ("F.R.I.D.A.Y. Server" -> "Server")
         if subentry.title.startswith(LEGACY_TITLE_PREFIX):

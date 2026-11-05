@@ -284,3 +284,47 @@ async def test_attributes_key_applies_to_binary_sensor_and_updates(hass):
     await wait_for(lambda: hass.states.get("binary_sensor.friday_dev1_busy").attributes.get("brain_turns") == 1)
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
+
+
+RW_CAPS = [{"key": "reply_wait", "platform": "number", "name": "Reply wait", "min": 2, "max": 30, "step": 1}]
+
+
+async def _setup_with_old_entity(hass, entity_id):
+    agent = FakeAgent(hello(RW_CAPS, {"reply_wait": 8}))
+    await agent.start()
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=DOMAIN, title="F.R.I.D.A.Y.",
+        subentries_data=[ConfigSubentryData(
+            data={"host": "127.0.0.1", "port": agent.port, "token": "t"},
+            subentry_type="server", title="Server", unique_id=None, subentry_id="sub1")],
+    )
+    entry.add_to_hass(hass)
+    reg = er.async_get(hass)
+    reg.async_get_or_create("number", DOMAIN, "dev1_follow_up", config_entry=entry,
+                            suggested_object_id=entity_id.split(".", 1)[1])
+    assert reg.async_get(entity_id) is not None
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return agent, entry, reg
+
+
+async def test_follow_up_entity_migrates_to_reply_wait(hass):
+    agent, entry, reg = await _setup_with_old_entity(hass, "number.friday_dev1_follow_up")
+    await wait_for(lambda: hass.states.get("number.friday_dev1_reply_wait") is not None)
+    e = reg.async_get("number.friday_dev1_reply_wait")
+    assert e is not None and e.unique_id == "dev1_reply_wait"
+    assert reg.async_get("number.friday_dev1_follow_up") is None
+    assert not [x for x in er.async_entries_for_config_entry(reg, entry.entry_id) if x.unique_id == "dev1_follow_up"]
+    assert hass.states.get("number.friday_dev1_reply_wait") is not None
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_migration_keeps_user_entity_id(hass):
+    agent, entry, reg = await _setup_with_old_entity(hass, "number.espera_do_jose")
+    await wait_for(lambda: hass.states.get("number.espera_do_jose") is not None)
+    e = reg.async_get("number.espera_do_jose")
+    assert e is not None and e.unique_id == "dev1_reply_wait"
+    assert reg.async_get("number.friday_dev1_reply_wait") is None
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
