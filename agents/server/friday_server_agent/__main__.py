@@ -21,6 +21,7 @@ from . import diagnostics as diagmod
 from . import embeddings as embmod
 from . import models as modelsmod
 from . import provisioning as provmod
+from . import voices as voicesmod
 from . import reminders as remmod
 from . import voice_switch as vsw
 
@@ -146,7 +147,7 @@ async def main() -> None:
     store.reindexer = embmod.Reindexer(store)
     store.read_activity = read_activity
 
-    bundles = provmod.BundleStore()
+    bundles = provmod.BundleStore(consolidate=voicesmod.consolidate)
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,

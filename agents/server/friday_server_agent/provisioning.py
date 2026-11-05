@@ -125,6 +125,14 @@ def newest_verifier(voices: str) -> str | None:
     return best
 
 
+def people_of(data: str) -> list[str]:
+    folder = os.path.join(data, "voices")
+    try:
+        return sorted(n for n in os.listdir(folder) if os.path.isdir(os.path.join(folder, n)))
+    except OSError:
+        return []
+
+
 class BundleStore:
     """Builds bundles and hands out single-use tokens (10 minutes)."""
 
@@ -203,7 +211,10 @@ class BundleStore:
                 h.update(chunk)
         token = secrets.token_urlsafe(32)
         self._tokens[token] = (path, self._clock() + EXPIRES_S)
-        return {"url": f"http://{bundle_host()}/v1/bundles/{token}", "sha256": h.hexdigest(), "expires_in": EXPIRES_S}
+        out = {"url": f"http://{bundle_host()}/v1/bundles/{token}", "sha256": h.hexdigest(), "expires_in": EXPIRES_S}
+        if kind == "voices":  # additive: who the voices belong to (the presentation only offers the others)
+            out["people"] = people_of(data_dir())
+        return out
 
     def take(self, token: str) -> bytes | None:
         """Single use: the token is consumed and the file removed whether or not it was still valid."""
