@@ -18,6 +18,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from homeassistant.helpers.selector import (
     AreaSelector,
@@ -38,12 +39,14 @@ from .const import (
     CONF_PROXMOX_TOKEN_SECRET, CONF_PROXMOX_URL, CONF_PROXMOX_VMID, CONF_TOKEN,
     DEFAULT_PORT_SATELLITE, DEFAULT_PORT_SERVER, DEFAULT_PROXMOX_NODE, DEFAULT_PROXMOX_URL, DOMAIN,
 )
-from . import room_climate
+from . import pairing, room_climate
 from .const import SOURCE_HA_ENTITY, SOURCE_SATELLITE
 from .wifi import async_set_wifi
 
 CONF_SSID = "ssid"  # form field names only; neither value is ever stored
 CONF_WIFI_PASSWORD = "password"
+CONF_CODE = "code"
+CONF_PROVISIONED = "provisioned"  # False until the provisioning orchestrator finishes
 
 _PASSWORD = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD))
 
@@ -118,12 +121,64 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
         host = str(discovery_info.ip_address)
         sat_id = props.get("id") or f"{host}:{port}"
         await self.async_set_unique_id(f"satellite:{sat_id}")
-        for sub in entries[0].subentries.values():
-            if sub.unique_id in (sat_id, f"{host}:{port}"):
-                return self.async_abort(reason="already_configured")
+        state = props.get("state")
+        existing = next((sub for sub in entries[0].subentries.values()
+                         if sub.unique_id in (sat_id, f"{host}:{port}")), None)
+        if state == "pairable":
+            # a pairable satellite is adoptable even if we know it: it forgot its home (reset) and needs a new token
+            self._discovered = {CONF_HOST: host, CONF_PORT: port, "id": sat_id, "existing": existing}
+            self.context["title_placeholders"] = {"name": props.get("id", host)}
+            return await self.async_step_pair()
+        if existing is not None:
+            return self.async_abort(reason="already_configured")
         self._discovered = {CONF_HOST: host, CONF_PORT: port, "id": sat_id}
         self.context["title_placeholders"] = {"name": props.get("id", host)}
         return await self.async_step_zeroconf_confirm()
+
+    async def async_step_pair(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Adopt a pairable satellite: the code it speaks proves presence; HA issues the token."""
+        errors: dict[str, str] = {}
+        placeholders = {"id": self._discovered["id"], "attempts_left": ""}
+        if user_input is not None:
+            try:
+                token, sat_id = await pairing.pair(
+                    async_get_clientsession(self.hass), self._discovered[CONF_HOST],
+                    self._discovered[CONF_PORT], user_input[CONF_CODE])
+            except pairing.BadCode as err:
+                errors["base"] = "bad_code"
+                placeholders["attempts_left"] = str(err.attempts_left)
+            except pairing.Locked:
+                errors["base"] = "locked"
+            except pairing.PairingError:
+                errors["base"] = "cannot_connect"
+            else:
+                return self._finish_pairing(token, sat_id, user_input.get(CONF_AREA_ID))
+        existing = self._discovered.get("existing")
+        fields: dict = {vol.Required(CONF_CODE): vol.All(str, vol.Match(r"^\d{4}$"))}
+        if existing is None:
+            fields[vol.Optional(CONF_AREA_ID)] = AreaSelector()
+        return self.async_show_form(step_id="pair", errors=errors, description_placeholders=placeholders,
+                                    data_schema=vol.Schema(fields))
+
+    def _finish_pairing(self, token: str, sat_id: str, area_id: str | None) -> ConfigFlowResult:
+        entry = self.hass.config_entries.async_entries(DOMAIN)[0]
+        host, port = self._discovered[CONF_HOST], self._discovered[CONF_PORT]
+        existing = self._discovered.get("existing")
+        if existing is not None:  # readoption: keep the subentry (and its area), replace host and token
+            self.hass.config_entries.async_update_subentry(
+                entry, existing, data={**existing.data, CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token})
+            return self.async_abort(reason="reauth_successful")
+        data = {CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token, CONF_PROVISIONED: False}
+        if area_id:
+            data[CONF_AREA_ID] = area_id
+        self.hass.config_entries.async_add_subentry(
+            entry,
+            ConfigSubentry(data=MappingProxyType(data), subentry_type="satellite",
+                           title=f"Satellite {sat_id}", unique_id=sat_id),
+        )
+        return self.async_abort(reason="satellite_added")
 
     async def async_step_zeroconf_confirm(
         self, user_input: dict[str, Any] | None = None
