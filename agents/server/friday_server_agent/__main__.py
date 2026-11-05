@@ -20,6 +20,7 @@ from . import cost as costmod
 from . import diagnostics as diagmod
 from . import embeddings as embmod
 from . import models as modelsmod
+from . import provisioning as provmod
 from . import reminders as remmod
 from . import voice_switch as vsw
 
@@ -145,10 +146,13 @@ async def main() -> None:
     store.reindexer = embmod.Reindexer(store)
     store.read_activity = read_activity
 
+    bundles = provmod.BundleStore()
+
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,
                       "diagnostics": diagmod.make_handler(lambda: dict(state), lambda: diagmod.load_literals(SECRETS, OPENCLAW_JSON, ENV_FILE) + tuple(x for x in (token, status_token, pve) if x)),
                       **modelsmod.make_handlers(store),
+                      **provmod.make_handlers(bundles),
                       **cmds.make_handlers(_log_tail, cmds.compose_restart,
                                            lambda m, d: core.push_log(m, d), read_activity)})
 
@@ -185,7 +189,9 @@ async def main() -> None:
             await asyncio.sleep(30)
 
     tasks.append(pending_loop())
-    runner = web.AppRunner(core.app())
+    app = core.app()
+    provmod.add_routes(app, bundles)  # GET /v1/bundles/{one_time_token}: its own single-use token, no other auth
+    runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     await asyncio.gather(*tasks)
