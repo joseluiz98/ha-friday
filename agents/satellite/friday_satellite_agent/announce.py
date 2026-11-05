@@ -18,14 +18,14 @@ def lan_ip() -> str:
         s.close()
 
 
-def announce(sat_id: str, port: int):
+def announce(sat_id: str, port: int, state: str = "paired"):
     try:
         from zeroconf import IPVersion, ServiceInfo, Zeroconf
 
         info = ServiceInfo(
             "_friday._tcp.local.", f"{sat_id}._friday._tcp.local.",
             addresses=[socket.inet_aton(lan_ip())], port=port,
-            properties={"id": sat_id, "kind": "satellite", "port": str(port)},
+            properties={"id": sat_id, "kind": "satellite", "port": str(port), "state": state},
             server=f"{socket.gethostname()}.local.")
         zc = Zeroconf(ip_version=IPVersion.V4Only)
         zc.register_service(info)

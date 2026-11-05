@@ -1,3 +1,5 @@
 pytest-homeassistant-custom-component==0.13.375
 aiohttp
 pytest-aiohttp
+spake2==0.9
+cryptography
