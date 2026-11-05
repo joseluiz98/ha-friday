@@ -17,10 +17,11 @@ from . import capabilities as cap
 from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
-from . import local, pairing, recordings
+from . import local, pairing, provision, recordings
 from . import room_sensors
 from . import wifi
-from .announce import announce
+from .announce import announce, lan_ip as _lan_ip
+from . import power as power_mod
 from .power import Power
 from .program import ProgramClient, ProgramError
 
@@ -37,6 +38,9 @@ def read_timers() -> list | None:
         return None
 ETC_DIR = os.path.dirname(CONFIG)  # /etc/friday-satelite: pairable, ha_token, mic
 _exit = os._exit  # replaced in tests
+PROGRAM_DIR = os.environ.get("FRIDAY_SAT_PROGRAM_DIR", "/home/jose/satelite")
+BUNDLES = os.path.expanduser("~/.friday-agent/bundles")
+APPLY_AGENT = ["sudo", "-n", "/usr/local/sbin/friday-agent-apply"]
 ID_FILE = os.environ.get("FRIDAY_SAT_ID_FILE", "/etc/friday-satelite/id")
 RECORDINGS = os.environ.get("FRIDAY_SAT_RECORDINGS", "/home/jose/gravacoes/ativacoes")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8701"))
@@ -102,8 +106,37 @@ async def main() -> None:
             off_task.append(asyncio.create_task(voice_off()))
         return {"ok": True}
 
+    async def apply_agent(stage: str) -> int:
+        return await power_mod.run_command(APPLY_AGENT + [stage])
+
+    prov = provision.Provisioner(
+        etc_dir=ETC_DIR, config_path=CONFIG, ssh_dir=os.path.expanduser("~/.ssh"), program_dir=PROGRAM_DIR,
+        bundles_dir=BUNDLES, voices_dir=os.path.expanduser("~/vozes"), models_dir=os.path.expanduser("~/modelos"),
+        program=program, restart_program=power.restart_program, apply_agent=apply_agent,
+        exit_fn=lambda code: _exit(code), ip_fn=lambda: _lan_ip())
+
+    def _args(cmd: dict) -> dict:
+        return cmd["args"] if isinstance(cmd.get("args"), dict) else cmd
+
+    async def do_provision_info(cmd: dict) -> dict:
+        return await prov.info()
+
+    async def do_apply_bundle(cmd: dict) -> dict:
+        a = _args(cmd)
+        return await prov.apply_bundle(a.get("kind"), a.get("url"), a.get("sha256"))
+
+    async def do_start_onboarding(cmd: dict) -> dict:
+        return await prov.start_onboarding(_args(cmd).get("facts"))
+
+    async def do_factory_reset(cmd: dict) -> dict:
+        return await prov.factory_reset(_args(cmd).get("level"))
+
     async def do_press(cmd: dict) -> dict:
         key = cmd.get("key")
+        if key == "reset_network":
+            return await prov.factory_reset(1)
+        if key == "reset_home":
+            return await prov.factory_reset(2)
         if key == "reboot":
             return await power.reboot()
         if key == "restart_program":
@@ -214,6 +247,8 @@ async def main() -> None:
 
     async def on_event(tipo: str, dados: dict) -> None:
         out = tracker.on_event(tipo, dados)
+        if tipo == "onboarding":
+            asyncio.create_task(prov.on_onboarding(dados.get("resultado")))
         if not out:
             return
         if "config" in out:
@@ -226,6 +261,8 @@ async def main() -> None:
             await core.push_event(*out["event"])
 
     core = AgentCore(ha_token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi,
+                      "provision_info": do_provision_info, "apply_bundle": do_apply_bundle,
+                      "start_onboarding": do_start_onboarding, "factory_reset": do_factory_reset,
                       "diagnostics": diagmod.make_handler(CONFIG, lambda: dict(memo["state"]))})
 
     async def timers_watch() -> None:

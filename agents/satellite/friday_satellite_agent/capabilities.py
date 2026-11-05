@@ -22,6 +22,7 @@ MODES = {"ativa": "active", "sombra": "shadow", "desligada": "off"}
 MODES_BACK = {v: k for k, v in MODES.items()}
 STATES = {"parada": "idle", "alarme": "idle", "cadastro": "idle", "conectando": "listening",
           "ouvindo": "conversation", "aguardando": "conversation", "cortada": "conversation"}
+ONBOARDING_RESULTS = ("wake_word_ok", "wake_word_failed", "area_selected")
 ORIGINS = {"voz": "voice", "botao": "button", "porta": "agent"}
 RESULTS = {"conversa": "conversation", "barrada": "rejected", "sombra": "shadow"}
 _WW = re.compile(r"^wakeword_(.+)_(mode|sensitivity)$")
@@ -66,6 +67,8 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("turn_sounds", "switch", "Turn sounds", category=c, icon="mdi:bell-ring"),
         _d("reboot", "button", "Reboot", device_class="restart", category=c),
         _d("restart_program", "button", "Restart program", hidden=True, available=False, category=c),
+        _d("reset_network", "button", "Reset network", category=c, icon="mdi:wifi-cog"),
+        _d("reset_home", "button", "Forget home", category=c, icon="mdi:home-remove"),
     ]
     for w in wakewords:
         n = w["nome"]
@@ -84,6 +87,8 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("activation", "event", "Activation", event_types=["conversation", "rejected", "shadow"]),
         _d("next_timer", "sensor", "Next timer", device_class="timestamp", icon="mdi:timer-outline"),
         _d("timer", "event", "Timer", event_types=["finished"], icon="mdi:timer-check-outline"),
+        _d("onboarding", "event", "Onboarding", event_types=list(ONBOARDING_RESULTS), category="diagnostic",
+           icon="mdi:account-voice"),
     ]
     return out + hw.descriptors()
 
@@ -300,6 +305,11 @@ class Tracker:
             state.update(self.counters())
             data = activation_data(dados)
             return {"event": ("activation", kind, data), "state": state}
+        if tipo == "onboarding":
+            result = dados.get("resultado")
+            if result not in ONBOARDING_RESULTS:
+                return None
+            return {"event": ("onboarding", result, {k: v for k, v in dados.items() if k != "resultado"})}
         if tipo == "timer":
             return {"event": ("timer", "finished", {"name": dados.get("nome"), "id": dados.get("id"),
                                                     "duration_s": dados.get("duracao_s")})}

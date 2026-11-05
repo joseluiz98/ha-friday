@@ -19,6 +19,7 @@ cp satellite/friday-satellite-agent.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable friday-satellite-agent
 install -m 0755 -o root -g root satellite/friday-wifi-apply /usr/local/sbin/friday-wifi-apply
+install -m 0755 -o root -g root satellite/friday-agent-apply /usr/local/sbin/friday-agent-apply
 # sudoers: validate before installing so a bad rule can never lock sudo out
 TMP="$(mktemp)"
 cp satellite/sudoers.friday-satellite-agent "$TMP"
