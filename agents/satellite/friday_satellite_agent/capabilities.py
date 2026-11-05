@@ -79,6 +79,7 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("activations_today", "sensor", "Activations today", category="diagnostic"),
         _d("rejected_today", "sensor", "Rejected today", category="diagnostic"),
         _d("last_activation", "sensor", "Last activation", device_class="timestamp", category="diagnostic"),
+        _d("last_wake_word", "sensor", "Last wake word", category="diagnostic", icon="mdi:account-voice"),
         _d("sw_version", "sensor", "Software version", category="diagnostic"),
         _d("activation", "event", "Activation", event_types=["conversation", "rejected", "shadow"]),
         _d("next_timer", "sensor", "Next timer", device_class="timestamp", icon="mdi:timer-outline"),
@@ -224,6 +225,7 @@ class Tracker:
         self._pending: dict[str, float] = {}
         self._act = 0
         self._rej = 0
+        self._by_word: dict[str, int] = {}
         self._last = None
         self._conv = False
         self._load()
@@ -237,6 +239,9 @@ class Tracker:
                 saved = json.load(f)
             if saved.get("date") == self._today():
                 self._act, self._rej = int(saved.get("act", 0)), int(saved.get("rej", 0))
+                words = saved.get("by_word")
+                if isinstance(words, dict):
+                    self._by_word = {str(k): int(v) for k, v in words.items()}
         except (OSError, ValueError, TypeError, AttributeError):
             pass
 
@@ -247,7 +252,8 @@ class Tracker:
             os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
             tmp = self._path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"date": self._today(), "act": self._act, "rej": self._rej}, f)
+                json.dump({"date": self._today(), "act": self._act, "rej": self._rej,
+                           "by_word": self._by_word}, f)
             os.replace(tmp, self._path)
         except OSError:
             pass
@@ -264,10 +270,12 @@ class Tracker:
         return bool(keys) and all(k in self._pending for k in keys)
 
     def counters(self) -> dict:
-        return {"activations_today": self._act, "rejected_today": self._rej}
+        return {"activations_today": self._act, "rejected_today": self._rej,
+                "activations_today_attributes": {"by_word": dict(self._by_word)}}
 
     def reset_day(self) -> dict:
         self._act = self._rej = 0
+        self._by_word = {}
         self._save()
         return self.counters()
 
@@ -281,6 +289,11 @@ class Tracker:
                 self._act += 1
                 self._last = datetime.now(timezone.utc).isoformat()
                 state["last_activation"] = self._last
+                word = dados.get("palavra")
+                if isinstance(word, str) and word:
+                    self._by_word[word] = self._by_word.get(word, 0) + 1
+                    state["last_wake_word"] = word
+                    state["last_wake_word_attributes"] = {"score": dados.get("nota"), "at": self._last}
             elif kind == "rejected":
                 self._rej += 1
             self._save()

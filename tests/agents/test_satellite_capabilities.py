@@ -25,6 +25,10 @@ def test_volume_percent_position_roundtrip():
     assert cap.percent_from_position(0) == 0
 
 
+def _nums(c):
+    return {k: v for k, v in c.items() if not k.endswith("_attributes")}
+
+
 def test_controls_cover_existing_settings():
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     for k in ("volume", "do_not_disturb", "alarm_volume", "alarm_ramp", "sounds_volume", "whisper_mode",
@@ -100,7 +104,7 @@ def test_activation_events_idempotent_conversation_state():
     assert t.on_event("config", {"mudancas": {}, "origem": "porta"})["origin"] == "agent"
     assert t.on_event("config", {"mudancas": {"volume": 3}, "origem": "porta"})["origin"] == "agent"
     t.reset_day()
-    assert t.counters() == {"activations_today": 0, "rejected_today": 0}
+    assert _nums(t.counters()) == {"activations_today": 0, "rejected_today": 0}
 
 
 async def test_local_event_requires_localhost_and_token(aiohttp_client):
@@ -149,18 +153,18 @@ def test_daily_counters_survive_agent_restart_and_reset_on_new_day(tmp_path):
     t.on_event("ativacao", {"palavra": "friday", "resultado": "barrada"})
     t.on_event("ativacao", {"palavra": "friday", "resultado": "barrada"})
     again = cap.Tracker(path=path, today=lambda: day[0])  # agent restart, same day
-    assert again.counters() == {"activations_today": 1, "rejected_today": 2}
+    assert _nums(again.counters()) == {"activations_today": 1, "rejected_today": 2}
     day[0] = "2026-10-31"
-    assert cap.Tracker(path=path, today=lambda: day[0]).counters() == {"activations_today": 0, "rejected_today": 0}
+    assert _nums(cap.Tracker(path=path, today=lambda: day[0]).counters()) == {"activations_today": 0, "rejected_today": 0}
     again.reset_day()
     day[0] = "2026-10-30"
-    assert cap.Tracker(path=path, today=lambda: day[0]).counters() == {"activations_today": 0, "rejected_today": 0}
+    assert _nums(cap.Tracker(path=path, today=lambda: day[0]).counters()) == {"activations_today": 0, "rejected_today": 0}
 
 
 def test_daily_counters_corrupt_file_is_ignored(tmp_path):
     p = tmp_path / "c.json"
     p.write_text("not json")
-    assert cap.Tracker(path=str(p)).counters() == {"activations_today": 0, "rejected_today": 0}
+    assert _nums(cap.Tracker(path=str(p)).counters()) == {"activations_today": 0, "rejected_today": 0}
 
 
 def test_daily_counters_have_no_state_class():
@@ -265,3 +269,47 @@ def test_follow_up_entities_names_and_mapping():
         "config": {"no_follow_up_after_home_commands": True}}
     assert m.to_program(CFG, "end_of_speech_pause", 1.2) == {"config": {"end_of_speech_pause_s": 1.2}}
     assert m.to_program(CFG, "follow_up", 9) is None
+
+
+def test_last_wake_word_from_conversation():
+    t = cap.Tracker()
+    ev = t.on_event("ativacao", {"palavra": "sexta_feira", "nota": 0.8, "resultado": "conversa"})
+    assert ev["state"]["last_wake_word"] == "sexta_feira"
+    attrs = ev["state"]["last_wake_word_attributes"]
+    assert attrs["score"] == 0.8 and attrs["at"]
+    d = {x["key"]: x for x in cap.controls_from_config({}, [])}
+    assert d["last_wake_word"]["platform"] == "sensor" and d["last_wake_word"]["category"] == "diagnostic"
+
+
+def test_rejected_does_not_change_last_word():
+    t = cap.Tracker()
+    t.on_event("ativacao", {"palavra": "friday", "nota": 0.8, "resultado": "conversa"})
+    ev = t.on_event("ativacao", {"palavra": "sexta_feira", "nota": 0.3, "resultado": "barrada"})
+    assert "last_wake_word" not in ev["state"]
+    ev = t.on_event("ativacao", {"palavra": "sexta_feira", "resultado": "sombra"})
+    assert "last_wake_word" not in (ev.get("state") or {})
+
+
+def test_counts_by_word_and_reset_day():
+    t = cap.Tracker()
+    for w in ("friday", "friday", "sexta_feira"):
+        t.on_event("ativacao", {"palavra": w, "resultado": "conversa"})
+    assert t.counters()["activations_today_attributes"] == {"by_word": {"friday": 2, "sexta_feira": 1}}
+    t.reset_day()
+    assert t.counters()["activations_today_attributes"] == {"by_word": {}}
+
+
+def test_counts_by_word_survive_restart(tmp_path):
+    path, day = str(tmp_path / "c.json"), ["2026-11-05"]
+    t = cap.Tracker(path=path, today=lambda: day[0])
+    t.on_event("ativacao", {"palavra": "friday", "resultado": "conversa"})
+    again = cap.Tracker(path=path, today=lambda: day[0])
+    assert again.counters()["activations_today_attributes"] == {"by_word": {"friday": 1}}
+    day[0] = "2026-11-06"
+    assert cap.Tracker(path=path, today=lambda: day[0]).counters()["activations_today_attributes"] == {"by_word": {}}
+    # old file format without the new key still loads
+    import json
+    (tmp_path / "old.json").write_text(json.dumps({"date": "2026-11-05", "act": 3, "rej": 1}))
+    old = cap.Tracker(path=str(tmp_path / "old.json"), today=lambda: "2026-11-05")
+    assert _nums(old.counters()) == {"activations_today": 3, "rejected_today": 1}
+    assert old.counters()["activations_today_attributes"] == {"by_word": {}}
