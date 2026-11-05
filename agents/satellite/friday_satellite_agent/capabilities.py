@@ -17,7 +17,7 @@ from . import hardware as hw
 VERSION = "0.1.0"
 WHISPER_DEFAULT_DB = 5.5
 DUCK_DEFAULT = 15
-INT_KEYS = {"ducking_level", "alarm_volume"}
+INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window"}
 MODES = {"ativa": "active", "sombra": "shadow", "desligada": "off"}
 MODES_BACK = {v: k for k, v in MODES.items()}
 STATES = {"parada": "idle", "alarme": "idle", "cadastro": "idle", "conectando": "listening",
@@ -48,7 +48,13 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("alarm_ramp", "number", "Alarm ramp", min=0, max=120, step=1, unit="s", category=c, mode="box"),
         _d("sounds_volume", "number", "Sounds volume", min=-40, max=0, step=1, unit="dB", category=c, mode="slider"),
         _d("whisper_mode", "switch", "Whisper mode", category=c, icon="mdi:account-voice"),
-        _d("follow_up", "number", "Follow-up wait", min=2, max=30, step=1, unit="s", category=c, mode="box"),
+        _d("reply_wait", "number", "Reply wait", min=2, max=30, step=1, unit="s", category=c, mode="box"),
+        _d("follow_up_window", "number", "Follow-up window", min=0, max=30, step=1, unit="s", category=c, mode="box"),
+        _d("no_follow_up_while_music", "switch", "No follow-up while music plays", category=c, icon="mdi:music-off"),
+        _d("no_follow_up_after_home_commands", "switch", "No follow-up after home commands", category=c,
+           icon="mdi:home-export-outline"),
+        _d("end_of_speech_pause", "number", "End-of-speech pause", min=0.5, max=2.0, step=0.1, unit="s",
+           category=c, mode="box"),
         _d("close_mic_awaiting_reply", "switch", "Close mic while awaiting reply", category=c,
            icon="mdi:microphone-message-off"),
         _d("ducking", "switch", "Music ducking", category=c, icon="mdi:music-note-minus"),
@@ -130,7 +136,11 @@ class Mapper:
             "alarm_ramp": cfg.get("alarm_ramp_s"),
             "sounds_volume": cfg.get("volume_sons"),
             "whisper_mode": cfg.get("whisper_min_ratio_db") is not None,
-            "follow_up": cfg.get("espera_resposta_s"),
+            "reply_wait": cfg.get("espera_resposta_s"),
+            "follow_up_window": cfg.get("continuacao_s"),
+            "no_follow_up_while_music": cfg.get("no_follow_up_while_music", True) is not False,
+            "no_follow_up_after_home_commands": cfg.get("no_follow_up_after_home_commands", True) is not False,
+            "end_of_speech_pause": cfg.get("end_of_speech_pause_s", 0.8),
             "close_mic_awaiting_reply": cfg.get("close_mic_awaiting_reply") is True,
             "ducking": bool(duck),
             "ducking_level": duck if duck else self.last_duck,
@@ -149,7 +159,10 @@ class Mapper:
     def to_program(self, cfg: dict, key: str, value) -> dict | None:
         """Translate a `set` into {"config": {...}} or {"wakeword": (name, mode)}; None = unknown key."""
         simple = {"do_not_disturb": "nao_perturbe", "mute": "mudo", "turn_sounds": "sons_turno", "alarm_volume": "volume_alertas", "alarm_ramp": "alarm_ramp_s",
-                  "sounds_volume": "volume_sons", "follow_up": "espera_resposta_s",
+                  "sounds_volume": "volume_sons", "reply_wait": "espera_resposta_s",
+                  "follow_up_window": "continuacao_s", "no_follow_up_while_music": "no_follow_up_while_music",
+                  "no_follow_up_after_home_commands": "no_follow_up_after_home_commands",
+                  "end_of_speech_pause": "end_of_speech_pause_s",
                   "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s",
                   "close_mic_awaiting_reply": "close_mic_awaiting_reply"}
         if key in simple:

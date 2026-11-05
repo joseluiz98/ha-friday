@@ -9,7 +9,7 @@ from friday_satellite_agent import capabilities as cap  # noqa: E402
 from friday_satellite_agent import local  # noqa: E402
 
 CFG = {"volume": 6, "nao_perturbe": False, "volume_alertas": 6, "alarm_ramp_s": 0, "volume_sons": -12,
-       "whisper_min_ratio_db": 5.5, "espera_resposta_s": 8, "music_duck_percent": 15, "music_restore_s": 1.0,
+       "whisper_min_ratio_db": 5.5, "espera_resposta_s": 8, "continuacao_s": 5, "music_duck_percent": 15, "music_restore_s": 1.0,
        "limiar_palavra": 0.5, "modo_friday": "ativa",
        "palavras_extras": [{"nome": "sexta_feira", "modo": "sombra", "limiar": 0.35}]}
 WW = [{"nome": "friday", "modo": "ativa", "limiar": 0.5, "principal": True, "treinada": True},
@@ -28,12 +28,12 @@ def test_volume_percent_position_roundtrip():
 def test_controls_cover_existing_settings():
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     for k in ("volume", "do_not_disturb", "alarm_volume", "alarm_ramp", "sounds_volume", "whisper_mode",
-              "follow_up", "ducking", "ducking_level", "ducking_restore", "wakeword_friday_mode",
+              "reply_wait", "ducking", "ducking_level", "ducking_restore", "wakeword_friday_mode",
               "wakeword_sexta_feira_sensitivity", "program_state", "activations_today", "rejected_today",
               "last_activation", "sw_version", "activation"):
         assert k in keys, k
     assert keys["volume"].get("category") is None and keys["do_not_disturb"].get("category") is None
-    assert keys["follow_up"]["category"] == "config"
+    assert keys["reply_wait"]["category"] == "config"
     assert keys["activation"]["event_types"] == ["conversation", "rejected", "shadow"]
     assert keys["wakeword_friday_mode"]["options"] == ["active", "shadow", "off"]
 
@@ -231,3 +231,37 @@ def test_close_mic_awaiting_reply_switch():
     assert m.state(CFG, WW, None)["close_mic_awaiting_reply"] is False  # absent = off (program default)
     assert m.state(dict(CFG, close_mic_awaiting_reply=True), WW, None)["close_mic_awaiting_reply"] is True
     assert m.to_program(CFG, "close_mic_awaiting_reply", True) == {"config": {"close_mic_awaiting_reply": True}}
+
+
+def test_follow_up_entities_names_and_mapping():
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    assert "follow_up" not in keys
+    spec = {
+        "reply_wait": ("number", "Reply wait", (2, 30, 1)),
+        "follow_up_window": ("number", "Follow-up window", (0, 30, 1)),
+        "no_follow_up_while_music": ("switch", "No follow-up while music plays", None),
+        "no_follow_up_after_home_commands": ("switch", "No follow-up after home commands", None),
+        "end_of_speech_pause": ("number", "End-of-speech pause", (0.5, 2.0, 0.1)),
+    }
+    for k, (plat, name, rng) in spec.items():
+        assert keys[k]["platform"] == plat and keys[k]["name"] == name, k
+        assert keys[k]["category"] == "config", k
+        if rng:
+            assert (keys[k]["min"], keys[k]["max"], keys[k]["step"]) == rng, k
+    m = cap.Mapper()
+    st = m.state(dict(CFG, no_follow_up_while_music=False, no_follow_up_after_home_commands=False,
+                      end_of_speech_pause_s=1.2), WW, None)
+    assert (st["reply_wait"], st["follow_up_window"]) == (8, 5)
+    assert st["no_follow_up_while_music"] is False and st["no_follow_up_after_home_commands"] is False
+    assert st["end_of_speech_pause"] == 1.2
+    st = m.state(CFG, WW, None)  # absent = defaults
+    assert st["no_follow_up_while_music"] is True and st["no_follow_up_after_home_commands"] is True
+    assert st["end_of_speech_pause"] == 0.8
+    assert m.to_program(CFG, "reply_wait", 9) == {"config": {"espera_resposta_s": 9}}
+    assert m.to_program(CFG, "follow_up_window", 7.0) == {"config": {"continuacao_s": 7}}
+    assert isinstance(m.to_program(CFG, "follow_up_window", 7.0)["config"]["continuacao_s"], int)
+    assert m.to_program(CFG, "no_follow_up_while_music", False) == {"config": {"no_follow_up_while_music": False}}
+    assert m.to_program(CFG, "no_follow_up_after_home_commands", True) == {
+        "config": {"no_follow_up_after_home_commands": True}}
+    assert m.to_program(CFG, "end_of_speech_pause", 1.2) == {"config": {"end_of_speech_pause_s": 1.2}}
+    assert m.to_program(CFG, "follow_up", 9) is None
