@@ -104,6 +104,14 @@ def _skip(name: str) -> bool:
     return name.startswith("test_") or ".bak" in name or name == "__pycache__" or name.endswith(".pyc")
 
 
+def _public(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    """Sources read through the HAOS mount look like 0600: what lands on the satellite must be readable by its user."""
+    info.mode = 0o755 if info.isdir() else 0o644
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    return info
+
+
 def _add_tree(tar: tarfile.TarFile, src: str, arcname: str) -> None:
     for root, dirs, files in os.walk(src):
         dirs[:] = sorted(d for d in dirs if not _skip(d))
@@ -111,7 +119,7 @@ def _add_tree(tar: tarfile.TarFile, src: str, arcname: str) -> None:
             if _skip(name):
                 continue
             full = os.path.join(root, name)
-            tar.add(full, arcname=os.path.join(arcname, os.path.relpath(full, src)), recursive=False)
+            tar.add(full, arcname=os.path.join(arcname, os.path.relpath(full, src)), recursive=False, filter=_public)
 
 
 def newest_verifier(voices: str) -> str | None:
@@ -161,7 +169,7 @@ class BundleStore:
                 for name in sorted(os.listdir(prog)):
                     p = os.path.join(prog, name)
                     if os.path.isfile(p) and name.endswith(".py") and not _skip(name):
-                        tar.add(p, arcname=f"program/{name}", recursive=False)
+                        tar.add(p, arcname=f"program/{name}", recursive=False, filter=_public)
                     elif os.path.isdir(p) and name in ("vendor", "sons"):
                         _add_tree(tar, p, f"program/{name}")
                 repo = os.path.join(cfg, "dev/ha-friday/agents")
@@ -182,10 +190,10 @@ class BundleStore:
                         if name.endswith(".pkl") or ".bak" in name:
                             continue
                         full = os.path.join(root, name)
-                        tar.add(full, arcname=os.path.join("vozes", os.path.relpath(full, voices)), recursive=False)
+                        tar.add(full, arcname=os.path.join("vozes", os.path.relpath(full, voices)), recursive=False, filter=_public)
                 ver = newest_verifier(voices)
                 if ver:
-                    tar.add(ver, arcname=VERIFIER, recursive=False)
+                    tar.add(ver, arcname=VERIFIER, recursive=False, filter=_public)
 
     def prepare(self, kind, sat_id) -> dict:
         if kind not in KINDS:

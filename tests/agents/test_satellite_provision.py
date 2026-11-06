@@ -453,9 +453,11 @@ def test_agent_apply_helper_installs_and_refuses_outside_staging(tmp_path):
     (stage / "friday_agent_core" / "__init__.py").write_text("CORE")
     (dest / "friday_satellite_agent").mkdir(parents=True)
     (dest / "friday_satellite_agent" / "old.py").write_text("OLD")
+    (stage / "friday_satellite_agent" / "__main__.py").chmod(0o600)  # 06/11: a 0600 file kept the agent from starting
     r = _run_helper(stage, dest, bundles)
     assert r.returncode == 0, r.stderr
     assert (dest / "friday_satellite_agent" / "__main__.py").read_text() == "NEW"
+    assert (dest / "friday_satellite_agent" / "__main__.py").stat().st_mode & 0o777 == 0o644
     assert not (dest / "friday_satellite_agent" / "old.py").exists()
     assert (dest / "friday_agent_core" / "__init__.py").read_text() == "CORE"
     other = tmp_path / "elsewhere" / "agent"

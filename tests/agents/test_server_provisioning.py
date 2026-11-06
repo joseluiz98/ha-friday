@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import os
 import sys
 import tarfile
 from pathlib import Path
@@ -116,6 +117,20 @@ def test_update_bundle_layout_and_filters(dirs):
         "agent/friday_agent_core/__init__.py", "agent/friday_satellite_agent/__main__.py",
         "program/friday_satelite.py", "program/maestro.py", "program/sons/onboarding/ready.wav",
         "program/vendor/xvf_host.py"]
+
+
+def test_update_bundle_files_are_readable_whatever_the_source_mode(dirs):
+    """06/11: through the HAOS mount the sources look like 0600 and the satellite agent could not read itself."""
+    _, cfg, _ = dirs
+    _make_sources(cfg)
+    for root, _d, files in os.walk(cfg):
+        for f in files:
+            os.chmod(os.path.join(root, f), 0o600)
+    store = pv.BundleStore()
+    token = store.prepare("update", "sat-abc123")["url"].rsplit("/", 1)[1]
+    with tarfile.open(fileobj=io.BytesIO(store.take(token))) as tar:
+        members = tar.getmembers()
+    assert members and all(m.mode == 0o644 and m.uid == 0 for m in members)
 
 
 def test_token_is_single_use_and_file_removed(dirs):

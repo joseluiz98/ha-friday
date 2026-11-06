@@ -19,6 +19,7 @@ for d in friday_satellite_agent friday_agent_core; do
   rm -rf "$DEST/$d.new"
   cp -r "$SRC/$d" "$DEST/$d.new"
   find "$DEST/$d.new" -name __pycache__ -prune -exec rm -rf {} +
+  chmod -R u=rwX,go=rX "$DEST/$d.new"   # the agent runs as jose: root-only files would keep it from starting
   [ "$(id -u)" != 0 ] || chown -R root:root "$DEST/$d.new"
 done
 for d in friday_satellite_agent friday_agent_core; do
