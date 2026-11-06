@@ -313,3 +313,47 @@ def test_counts_by_word_survive_restart(tmp_path):
     old = cap.Tracker(path=str(tmp_path / "old.json"), today=lambda: "2026-11-05")
     assert _nums(old.counters()) == {"activations_today": 3, "rejected_today": 1}
     assert old.counters()["activations_today_attributes"] == {"by_word": {}}
+
+
+class _Zc:
+    def __init__(self): self.closed = False
+    def close(self): self.closed = True
+
+
+async def test_keeper_waits_for_the_network_then_announces_and_follows_the_address():
+    from friday_satellite_agent import announce as an
+    ips = [OSError("unreachable"), "127.0.0.1", "192.0.2.34", "192.0.2.34", "192.0.2.35"]
+    made = []
+
+    def ip_fn():
+        v = ips.pop(0)
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    def fake(sat_id, port, state):
+        made.append((sat_id, port, state, _Zc()))
+        return made[-1][3]
+
+    box = []
+    k = an.Keeper("sat-1", 8701, "pairable", box, announce_fn=fake, ip_fn=ip_fn)
+    await k.step(); await k.step()
+    assert made == [] and box == []  # no route, then only loopback: nothing announced
+    await k.step()
+    assert len(made) == 1 and made[0][:3] == ("sat-1", 8701, "pairable") and box == [made[0][3]]
+    await k.step()
+    assert len(made) == 1  # same address: nothing to do
+    await k.step()
+    assert len(made) == 2 and made[0][3].closed and box == [made[1][3]]
+
+
+async def test_keeper_tries_again_when_the_announcement_fails():
+    from friday_satellite_agent import announce as an
+    box, results = [], [None, _Zc()]
+    k = an.Keeper("sat-1", 8701, "paired", box, announce_fn=lambda *a: results.pop(0), ip_fn=lambda: "192.0.2.34")
+    await k.step()
+    assert box == [] and len(results) == 1
+    await k.step()
+    assert len(box) == 1 and results == []
+    k.close()
+    assert box == []

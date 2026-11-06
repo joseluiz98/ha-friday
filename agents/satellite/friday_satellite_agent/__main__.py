@@ -20,7 +20,7 @@ from . import hardware as hw
 from . import local, pairing, provision, recordings, server_watch
 from . import room_sensors
 from . import wifi
-from .announce import announce, lan_ip as _lan_ip
+from .announce import Keeper, lan_ip as _lan_ip
 from . import power as power_mod
 from .power import Power
 from .program import ProgramClient, ProgramError
@@ -368,18 +368,15 @@ async def main() -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
-    zc = await asyncio.to_thread(announce, sat_id, PORT, "pairable" if pairable else "paired")
-    if zc:
-        zc_box.append(zc)
+    keeper = Keeper(sat_id, PORT, "pairable" if pairable else "paired", zc_box)
     try:
         tasks = [poll(), midnight(), hardware_loop(), room_loop(), timers_watch(),
-                 server_watch.ServerWatch(CONFIG, program).run()]
+                 server_watch.ServerWatch(CONFIG, program).run(), keeper.run()]
         if pairable:
             tasks.append(speak_code())
         await asyncio.gather(*tasks)
     finally:
-        if zc:
-            zc.close()
+        keeper.close()
 
 
 if __name__ == "__main__":
