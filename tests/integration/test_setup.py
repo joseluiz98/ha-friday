@@ -1,7 +1,7 @@
 import asyncio
 
 from homeassistant.config_entries import ConfigSubentryData
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.friday.const import DOMAIN
@@ -326,5 +326,42 @@ async def test_migration_keeps_user_entity_id(hass):
     e = reg.async_get("number.espera_do_jose")
     assert e is not None and e.unique_id == "dev1_reply_wait"
     assert reg.async_get("number.friday_dev1_reply_wait") is None
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_satellite_settings_go_to_the_settings_area_not_the_room(hass):
+    """06/11: "desligar o escritório" turned off the turn sounds; a satellite's config entities live in their own area."""
+    caps = CAPS + [{"key": "turn_sounds", "platform": "switch", "name": "Turn sounds", "category": "config"},
+                   {"key": "manual", "platform": "switch", "name": "Manual", "category": "config"}]
+    sat = dict(DEVICE, id="sat1", kind="satellite")
+    h = hello(caps, dict(STATE, turn_sounds=True, manual=True))
+    h["device"] = sat
+    areas = ar.async_get(hass)
+    office, mine = areas.async_create("Escritório"), areas.async_create("Minha área")
+    reg = er.async_get(hass)
+    reg.async_get_or_create("switch", DOMAIN, "sat1_manual", suggested_object_id="friday_sat1_manual")
+    reg.async_update_entity("switch.friday_sat1_manual", area_id=mine.id)  # a choice of the user stays
+    agent = FakeAgent(h)
+    entry = await setup(hass, agent)
+    await entities(hass, 5)
+    dev = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, "sat1"), entry.entry_id)
+    dr.async_get(hass).async_update_device(dev.id, area_id=office.id)
+    settings = areas.async_get_area_by_name("Ajustes do Mark")
+    assert settings is not None and settings.floor_id is None
+    assert reg.async_get("switch.friday_sat1_turn_sounds").area_id == settings.id
+    assert reg.async_get("switch.friday_sat1_manual").area_id == mine.id
+    assert reg.async_get("switch.friday_sat1_dnd").area_id is None  # not a setting: follows the room
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_server_settings_are_left_alone(hass):
+    caps = CAPS + [{"key": "knob", "platform": "switch", "name": "Knob", "category": "config"}]
+    agent = FakeAgent(hello(caps, dict(STATE, knob=True)))
+    entry = await setup(hass, agent)
+    reg = await entities(hass, 4)
+    assert reg.async_get("switch.friday_dev1_knob").area_id is None
+    assert ar.async_get(hass).async_get_area_by_name("Ajustes do Mark") is None
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
