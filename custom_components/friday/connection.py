@@ -113,6 +113,10 @@ class FridayConnection:
         for cb in list(self._availability_listeners):
             cb(value)
 
+    @property
+    def subentry_id(self) -> str:
+        return self._subentry_id
+
     async def send(self, name: str, timeout: float = 10, **fields: Any) -> dict:
         """Send a command and wait for its result."""
         ws = self._ws

@@ -30,7 +30,8 @@ _SHA = re.compile(r"^[0-9a-f]{64}$")
 VERIFIER = "friday_verificador.pkl"
 RESTART_WAIT_S = 120
 UPDATE_SLOW_S = 180  # spoken "this is taking longer" if a bundle update has not finished by then
-RESET_CONFIRM_S = 10  # window between the first and the second press of "forget home"
+RESET_CONFIRM_S = 10  # the countdown the person sees after the spoken request to press again
+RESET_PHRASE_S = 9  # length of the phrase `reset_confirm_ha` (8.8 s): the countdown starts when it ends
 WIFI_HELPER = ["sudo", "-n", "/usr/local/sbin/friday-wifi-apply"]
 OWN_WIFI = re.compile(r"friday-wifi-[0-9]+")
 
@@ -383,15 +384,25 @@ class Provisioner:
         code, _ = await self._run([*WIFI_HELPER, "up", original])
         return {"ok": code == 0, **({} if code == 0 else {"error": "wifi_up"})}
 
+    async def _ring_countdown(self, seconds: int, delay_s: int = 0) -> None:
+        try:
+            await self.program.command({"acao": "ring_countdown", "seconds": seconds, "delay_s": delay_s})
+        except Exception as err:  # noqa: BLE001 - the countdown is only a visual aid
+            LOG.warning("countdown failed: %s", type(err).__name__)
+
     async def press_reset_home(self) -> dict:
-        """Level 2 needs a confirmation: the first press arms for RESET_CONFIRM_S and asks for the second one."""
+        """Level 2 needs a confirmation: the first press asks for a second one, with a visible countdown after the
+        spoken request. A second press at any point of that time confirms."""
         now = self._monotonic()
         if self._armed_until is not None and now <= self._armed_until:
             self._armed_until = None
+            await self._ring_countdown(0)
             return await self.factory_reset(2)
-        self._armed_until = now + RESET_CONFIRM_S
+        armed_for = RESET_PHRASE_S + RESET_CONFIRM_S
+        self._armed_until = now + armed_for
         await self.say(["reset_confirm_ha"])
-        return {"ok": True, "data": {"armed_for_s": RESET_CONFIRM_S}}
+        await self._ring_countdown(RESET_CONFIRM_S, RESET_PHRASE_S)
+        return {"ok": True, "data": {"armed_for_s": armed_for}}
 
     def _wipe_personal_data(self) -> None:
         for pattern in self._wipe_paths:
@@ -429,7 +440,7 @@ class Provisioner:
             await asyncio.to_thread(forget)
             await self.say(["reset_home"])
             self._schedule_agent_exit(delay=3.0)  # let the phrase start; the restart comes back pairable
-            return {"ok": True}
+            return {"ok": True, "data": {"forgot_home": True}}  # Home Assistant drops the device when it reads this
         return {"ok": False, "error": "invalid"}
 
     async def say(self, keys: list[str]) -> bool:

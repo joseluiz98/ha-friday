@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from homeassistant.config_entries import ConfigSubentryData
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import area_registry as ar, device_registry as dr
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.friday import provisioning as pv
@@ -186,6 +186,39 @@ async def test_retry_redoes_only_the_failed_steps(hass, reg, notes):
     orch2 = pv.Orchestrator(hass, SAT, "s1", sleep=orch._sleep)
     await orch2.run(retry=True)
     assert [c[0] for c in sat.calls[before_sat:] if c[0] != "say"] == ["provision_info"]
+
+
+async def test_factory_reset_removes_the_satellite_from_home_assistant(hass, reg, notes):
+    hello = _hello("satellite", SAT)
+    hello["capabilities"] = [{"key": "reset_home", "platform": "button", "name": "Forget home"}]
+    hello["state"] = {}
+    sat = FakeAgent(hello, answering([], {"press": {"forgot_home": True}}))
+    server = FakeAgent(_hello("server", "server"))
+    entry = await _setup(hass, [("satellite", sat, {"provisioned": True}), ("server", server, {})], [SAT, None])
+    button = "button.friday_sat_abc123_reset_home"
+    await wait_for(lambda: er.async_get(hass).async_get(button) is not None, timeout=5)
+    other = json.loads(reg.read_text())["sat-0a1b2c"]
+    pv.write_registry(str(reg), SAT, {"comodo": "Sala"})
+    await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
+    await wait_for(lambda: all(s.unique_id != SAT for s in entry.subentries.values()), timeout=5)
+    await hass.async_block_till_done()
+    assert dr.async_get(hass).async_get_device_by_identifier((DOMAIN, SAT), entry.entry_id) is None
+    assert er.async_get(hass).async_get(button) is None
+    data = json.loads(reg.read_text())
+    assert SAT not in data and data["sat-0a1b2c"] == other
+    await hass.config_entries.async_unload(entry.entry_id)
+    await sat.stop()
+    await server.stop()
+
+
+async def test_settings_area_is_not_offered_as_a_room(hass, reg, notes):
+    sat = good_sat()
+    entry, orch, _ = make(hass, sat, good_server())
+    ar.async_get(hass).async_create("Sala")
+    ar.async_get(hass).async_create("Ajustes do Mark")
+    await orch.run()
+    facts = [c for c in sat.calls if c[0] == "start_onboarding"][0][1]["facts"]
+    assert [a["name"] for a in facts["areas"]] == ["Sala"]
 
 
 async def test_area_selected_sets_area_title_and_registry(hass, reg, notes):

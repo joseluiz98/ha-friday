@@ -8,6 +8,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.util import slugify
 
+from . import provisioning
 from .const import DEVICE_KIND_SATELLITE, DOMAIN
 from .entity import FridayEntity, setup_platform
 from .proxmox import log_action, proxmox_configured, reboot_vm
@@ -52,12 +53,16 @@ class FridayButton(FridayEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         try:
-            await self._connection.send("press", key=self.descriptor.key)
+            res = await self._connection.send("press", key=self.descriptor.key)
         except HomeAssistantError as err:
             log_action(self.hass, self.name or self.descriptor.key,
                        f"{self.descriptor.name} failed: {err}", self.entity_id)
             raise
         log_action(self.hass, self.descriptor.name, f"{self.descriptor.name} pressed", self.entity_id)
+        if res.get("forgot_home") and self._entry is not None:
+            # in a task: removing the subentry unloads this very entity
+            self.hass.async_create_task(provisioning.forget_satellite(
+                self.hass, self._entry, self._connection.subentry_id, self._connection.hello.device["id"]))
         if self.descriptor.key == RESTART_FRIDAY and self._entry is not None:
             failed = await restart_satellites(self._entry)
             if failed:

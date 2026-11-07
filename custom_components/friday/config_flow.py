@@ -39,7 +39,7 @@ from .const import (
     CONF_PROXMOX_TOKEN_SECRET, CONF_PROXMOX_URL, CONF_PROXMOX_VMID, CONF_TOKEN,
     DEFAULT_PORT_SATELLITE, DEFAULT_PORT_SERVER, DEFAULT_PROXMOX_NODE, DEFAULT_PROXMOX_URL, DOMAIN,
 )
-from . import pairing, room_climate
+from . import pairing, provisioning, room_climate
 from .const import SOURCE_HA_ENTITY, SOURCE_SATELLITE
 from .wifi import async_set_wifi
 
@@ -154,7 +154,7 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
             except pairing.PairingError:
                 errors["base"] = "cannot_connect"
             else:
-                return self._finish_pairing(token, sat_id, user_input.get(CONF_AREA_ID))
+                return await self._finish_pairing(token, sat_id, user_input.get(CONF_AREA_ID))
         existing = self._discovered.get("existing")
         fields: dict = {vol.Required(CONF_CODE): vol.All(str, vol.Match(r"^\d{4}$"))}
         if existing is None:
@@ -162,13 +162,14 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="pair", errors=errors, description_placeholders=placeholders,
                                     data_schema=vol.Schema(fields))
 
-    def _finish_pairing(self, token: str, sat_id: str, area_id: str | None) -> ConfigFlowResult:
+    async def _finish_pairing(self, token: str, sat_id: str, area_id: str | None) -> ConfigFlowResult:
         entry = self.hass.config_entries.async_entries(DOMAIN)[0]
         host, port = self._discovered[CONF_HOST], self._discovered[CONF_PORT]
         existing = self._discovered.get("existing")
-        if existing is not None:  # readoption: keep the subentry (and its area), replace host and token
-            self.hass.config_entries.async_update_subentry(
-                entry, existing, data={**existing.data, CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token})
+        if existing is not None:  # readoption: keep the subentry (and its area), new token, provisioning from the start
+            await provisioning.forget_steps(self.hass, sat_id)
+            self.hass.config_entries.async_update_subentry(entry, existing, data={
+                **existing.data, CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token, CONF_PROVISIONED: False})
             return self.async_abort(reason="reauth_successful")
         data = {CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token, CONF_PROVISIONED: False}
         if area_id:

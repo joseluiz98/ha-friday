@@ -27,6 +27,7 @@ from homeassistant.helpers import area_registry as ar, device_registry as dr
 from homeassistant.helpers.storage import Store
 
 from .const import CONF_AREA_ID, DEVICE_KIND_SERVER, DOMAIN
+from .entity import SETTINGS_AREA
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,6 +61,21 @@ def write_registry(path: str, sat_id: str, fields: dict[str, Any], defaults: dic
     if data.get(sat_id) == entry:
         return
     data[sat_id] = entry
+    _save_registry(path, data)
+
+
+def remove_from_registry(path: str, sat_id: str) -> None:
+    """The satellite left the house: its line (with the port password) goes away; other entries untouched."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return
+    if isinstance(data, dict) and data.pop(sat_id, None) is not None:
+        _save_registry(path, data)
+
+
+def _save_registry(path: str, data: dict) -> None:
     if os.path.exists(path):
         bak = f"{path}.bak.{time.strftime('%Y%m%d')}"
         if not os.path.exists(bak):
@@ -75,6 +91,24 @@ def write_registry(path: str, sat_id: str, fields: dict[str, Any], defaults: dic
 
 
 CLOSE_SETTLE_S = 3  # the voice enrollment opens right after the presentation closes; `ready` waits for it
+
+
+async def forget_steps(hass, sat_id: str) -> None:
+    """The satellite forgot its home: everything has to run again when it is adopted back."""
+    store: Store = Store(hass, 1, STORE_KEY)
+    data = await store.async_load() or {}
+    if data.pop(sat_id, None) is not None:
+        await store.async_save(data)
+
+
+async def forget_satellite(hass, entry, subentry_id: str, sat_id: str) -> None:
+    """Factory reset confirmed by the satellite itself: device, entities, registry line and steps go away. It comes back
+    as a new device, through the spoken code."""
+    await forget_steps(hass, sat_id)
+    hass.data.get(DOMAIN, {}).get("orchestrators", {}).pop(sat_id, None)
+    await hass.async_add_executor_job(remove_from_registry, SATELLITES_JSON, sat_id)
+    hass.config_entries.async_remove_subentry(entry, subentry_id)
+    async_log_entry(hass, f"Satellite {sat_id}", "factory reset: removed from Home Assistant", DOMAIN)
 
 
 class Orchestrator:
@@ -192,7 +226,8 @@ class Orchestrator:
 
     async def _step_onboarding(self) -> None:
         failed = sorted((await self._load()).get(self.sat_id, {}).get("failed", {}), key=STEPS.index)
-        areas = [{"id": a.id, "name": a.name} for a in ar.async_get(self.hass).async_list_areas()]
+        areas = [{"id": a.id, "name": a.name} for a in ar.async_get(self.hass).async_list_areas()
+                 if a.name != SETTINGS_AREA]  # it is not a room
         c = await self._wait_connected()
         await c.send("start_onboarding", timeout=30,
                      facts={"areas": areas, "known_voices": self.people, "failed_steps": failed})

@@ -261,3 +261,13 @@ async def test_known_satellite_announcing_pairable_is_readopted_with_new_token(h
     assert list(entry.subentries) == [sub_id]
     sub = entry.subentries[sub_id]
     assert sub.data["token"] == received[0] != "old" and sub.data["area_id"] == "sala"
+    assert sub.data["provisioned"] is False  # the voice setup runs again, not only the token
+
+
+async def test_readoption_forgets_the_finished_provisioning_steps(hass):
+    from homeassistant.helpers.storage import Store
+    from custom_components.friday import provisioning as pv
+    store = Store(hass, 1, pv.STORE_KEY)
+    await store.async_save({"sat-1": {"steps": {"info": "done"}, "failed": {}}, "sat-2": {"steps": {"info": "done"}, "failed": {}}})
+    await pv.forget_steps(hass, "sat-1")
+    assert set(await Store(hass, 1, pv.STORE_KEY).async_load()) == {"sat-2"}

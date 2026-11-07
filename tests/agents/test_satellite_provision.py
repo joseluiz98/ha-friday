@@ -257,7 +257,7 @@ async def test_reset_level_2_leaves_pairable_without_token(env):
     (env / "etc" / "ha_token").write_text("tok")
     p, program, exits, _ = make(env)
     r = await p.factory_reset(2)
-    assert r == {"ok": True}
+    assert r["ok"] is True
     assert (env / "etc" / "pairable").exists() and not (env / "etc" / "ha_token").exists()
     cfg = json.loads((env / "etc" / "config.json").read_text())
     assert cfg["comodo"] is None and cfg["senha_porta_local"] == "pw-secret"
@@ -279,7 +279,7 @@ async def test_reset_level_2_wipes_personal_data_only(env):
     p, *_ = make(env)
     p.voices_dir = str(env / "voices")
     p._wipe_paths = [str(env / "voices" / "*"), str(env / "models" / pv.VERIFIER), str(env / "gravacoes" / "*")]
-    assert (await p.factory_reset(2)) == {"ok": True}
+    assert (await p.factory_reset(2))["data"] == {"forgot_home": True}
     assert os.listdir(env / "voices") == [] and os.listdir(env / "gravacoes") == []
     assert not (env / "models" / pv.VERIFIER).exists() and (env / "models" / "friday.onnx").exists()
     await p._exit_task
@@ -318,16 +318,19 @@ def test_wifi_profiles_parsing_handles_escaped_colons():
     assert pv.wifi_profiles("friday-wifi-x:802-11-wireless\n") == ([], "friday-wifi-x")
 
 
-async def test_reset_home_press_needs_a_second_press_within_ten_seconds(env):
+async def test_reset_home_press_asks_for_a_second_press_with_a_countdown(env):
     clock = [100.0]
     p, program, exits, _ = make(env)
     p._monotonic = lambda: clock[0]
     r = await p.press_reset_home()
-    assert r["ok"] and program.calls == [{"acao": "play_phrases", "keys": ["reset_confirm_ha"]}]
+    assert r["ok"] and r["data"] == {"armed_for_s": 19}
+    assert program.calls == [{"acao": "play_phrases", "keys": ["reset_confirm_ha"]},
+                             {"acao": "ring_countdown", "seconds": 10, "delay_s": 9}]
     assert not (env / "etc" / "pairable").exists()
-    clock[0] += 9.5
-    assert (await p.press_reset_home()) == {"ok": True}
+    clock[0] += 18.5  # the phrase (9 s) plus almost all of the countdown
+    assert (await p.press_reset_home()) == {"ok": True, "data": {"forgot_home": True}}
     assert (env / "etc" / "pairable").exists()
+    assert {"acao": "ring_countdown", "seconds": 0, "delay_s": 0} in program.calls
     assert program.calls[-1] == {"acao": "play_phrases", "keys": ["reset_home"]}
     await p._exit_task
 
@@ -337,10 +340,10 @@ async def test_reset_home_second_press_after_the_window_only_rearms(env):
     p, program, *_ = make(env)
     p._monotonic = lambda: clock[0]
     await p.press_reset_home()
-    clock[0] += 10.5
+    clock[0] += 19.5
     await p.press_reset_home()
     assert not (env / "etc" / "pairable").exists()
-    assert [c["keys"] for c in program.calls] == [["reset_confirm_ha"], ["reset_confirm_ha"]]
+    assert [c["keys"] for c in program.calls if "keys" in c] == [["reset_confirm_ha"], ["reset_confirm_ha"]]
     clock[0] += 5
     await p.press_reset_home()  # inside the new window
     assert (env / "etc" / "pairable").exists()
@@ -407,7 +410,7 @@ async def test_reset_does_not_depend_on_the_program(env):
             raise OSError("down")
 
     p, *_ = make(env, program=Down())
-    assert (await p.factory_reset(2)) == {"ok": True}
+    assert (await p.factory_reset(2))["data"] == {"forgot_home": True}
     assert (env / "etc" / "pairable").exists()
     await p._exit_task
 
