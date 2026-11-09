@@ -1,0 +1,25 @@
+# Path-scoped exceptions for scripts/sweep.py: <path-glob>:<regex on the line>. Every line says why.
+# Translation/strings texts that describe a token field (not a token).
+*/custom_components/friday/strings.json:"token"\s*:\s*"
+*/custom_components/friday/translations/*.json:"token"\s*:\s*"
+# Redaction code and its docs: the patterns themselves.
+*/friday_agent_core/diagnostics.py:PVEAPIToken|Bearer
+*/custom_components/friday/redact.py:PVEAPIToken|Bearer
+*/custom_components/friday/proxmox.py:PVEAPIToken=\{
+*/docs/protocol.md:PVEAPIToken
+# The scanner and the sweep define the patterns they look for.
+*/scripts/inventory_scan.py:.
+*/scripts/sweep.py:.
+# Test fixtures with fake values.
+*/tests/*:hunter2|s3cr3t|pw-secret|legacy-pw|abc\.def-123|SflKxwRJ|uuid-1|PVEAPIToken=ha@pve!friday-reboot=s3cr3t
+*/test_essentials_backup.sh:SEGREDO_
+# The author's name in the license (authorship, public on purpose).
+*/LICENSE:Copyright
+# This file names the patterns it allows.
+*/.sweep-allow:.
+# The GitHub account in URLs and codeowners (public by nature).
+*:joseluiz98
+# Fake Telegram bot token in the redaction tests.
+*/tests/agents/test_diagnostics.py:bot\d{6,}:
+# Fixtures of the scanner/sweep tests: fake values built to match the generic patterns.
+*/tests/tools/*:192\.168\.77\.|02:00:5E:|Bearer abcdefghij|eyJhbGciOiJIUzI1NiJ9|PVEAPIToken=ha@pve!x|"token": "Leave blank|/home/zelda

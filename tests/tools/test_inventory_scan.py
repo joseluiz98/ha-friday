@@ -13,24 +13,24 @@ def _cats(findings):
 
 
 def test_finds_value_from_known_list_in_json_and_md(tmp_path):
-    (tmp_path / "a.json").write_text('{\n "who": "Bia"\n}\n')
-    (tmp_path / "b.md").write_text("line one\nask Bia first\n")
-    found = _cats(scan_mod.scan([str(tmp_path)], ["Bia"]))
+    (tmp_path / "a.json").write_text('{\n "who": "Zelda"\n}\n')
+    (tmp_path / "b.md").write_text("line one\nask Zelda first\n")
+    found = _cats(scan_mod.scan([str(tmp_path)], ["Zelda"]))
     assert ("person_name", "a.json", 2) in found
     assert ("person_name", "b.md", 2) in found
 
 
 def test_finds_private_ipv4_and_mac(tmp_path):
-    (tmp_path / "c.py").write_text('HOST = "192.0.2.9"\nMAC = "02:00:00:00:00:00"\n')
+    (tmp_path / "c.py").write_text('HOST = "192.168.77.9"\nMAC = "02:00:5E:AA:BB:CC"\n')
     found = _cats(scan_mod.scan([str(tmp_path)], []))
     assert ("ip_mac", "c.py", 1) in found
     assert ("ip_mac", "c.py", 2) in found
 
 
 def test_finds_sensitive_value_in_file_name(tmp_path):
-    (tmp_path / "bia_notes.txt").write_text("nothing\n")
-    found = scan_mod.scan([str(tmp_path)], ["Bia"])
-    assert any(f.line is None and f.path.endswith("bia_notes.txt") for f in found)
+    (tmp_path / "zelda_notes.txt").write_text("nothing\n")
+    found = scan_mod.scan([str(tmp_path)], ["Zelda"])
+    assert any(f.line is None and f.path.endswith("zelda_notes.txt") for f in found)
 
 
 def test_secret_patterns_match_current_sweep(tmp_path):
@@ -42,22 +42,22 @@ def test_secret_patterns_match_current_sweep(tmp_path):
 
 
 def test_report_masks_excerpts(tmp_path):
-    (tmp_path / "a.py").write_text('NAME = "Bia"\n')
-    report = scan_mod.report(scan_mod.scan([str(tmp_path)], ["Bia"]))
-    assert "Bia" not in report and "Ka" in report
+    (tmp_path / "a.py").write_text('NAME = "Zelda"\n')
+    report = scan_mod.report(scan_mod.scan([str(tmp_path)], ["Zelda"]))
+    assert "Zelda" not in report and "Ze" in report
 
 
 def test_skips_bak_pycache_and_binary(tmp_path):
-    (tmp_path / "x.py.bak.20261101").write_text('n = "Bia"\n')
+    (tmp_path / "x.py.bak.20261101").write_text('n = "Zelda"\n')
     (tmp_path / "__pycache__").mkdir()
-    (tmp_path / "__pycache__" / "y.pyc").write_text('n = "Bia"\n')
-    (tmp_path / "z.bin").write_bytes(b"\x00\x01Bia\x00")
-    assert scan_mod.scan([str(tmp_path)], ["Bia"]) == []
+    (tmp_path / "__pycache__" / "y.pyc").write_text('n = "Zelda"\n')
+    (tmp_path / "z.bin").write_bytes(b"\x00\x01Zelda\x00")
+    assert scan_mod.scan([str(tmp_path)], ["Zelda"]) == []
 
 
 def test_long_string_with_known_value_is_house_fact(tmp_path):
-    (tmp_path / "p.py").write_text('PROMPT = "Quando a Bia pedir música na sala, prefira o Deezer sempre"\n')
-    found = _cats(scan_mod.scan([str(tmp_path)], ["Bia"]))
+    (tmp_path / "p.py").write_text('PROMPT = "Quando a Zelda pedir música na sala, prefira o streaming sempre"\n')
+    found = _cats(scan_mod.scan([str(tmp_path)], ["Zelda"]))
     assert ("house_fact_text", "p.py", 1) in found
 
 
