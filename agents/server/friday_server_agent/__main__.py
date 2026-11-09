@@ -37,6 +37,18 @@ PVE = os.environ.get("FRIDAY_PVE_API", "")  # e.g. https://<proxmox>:8006/api2/j
 # Written by the bot (activity.py): open sessions, brain turns in flight, heartbeat (minor 13 of 19/10).
 ACTIVITY_FILE = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")
 MEMORY_INDEX_STAMP = os.environ.get("FRIDAY_MEMORY_INDEX_STAMP", "/srv/friday/state/memory-index.ok")
+# 09/11/2026: nightly wake-word pipeline. The Pi writes .sync_ok only after a fully OK upload; featcache_nightly.sh
+# touches the cache stamp only after caching every pending day. The office satellite id comes from local.env.
+WAKEWORD_SYNC_STAMP = os.environ.get(
+    "FRIDAY_WAKEWORD_SYNC_STAMP", f"/srv/wakeword-data/incoming/{os.environ.get('FRIDAY_SAT_OFFICE', '')}/.sync_ok")
+WAKEWORD_CACHE_STAMP = os.environ.get("FRIDAY_WAKEWORD_CACHE_STAMP", "/srv/friday/state/wwt-featcache.ok")
+
+
+def _mtime(path: str):
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
 
 
 def _read(path: str) -> str:
@@ -68,7 +80,8 @@ def sample_vm() -> dict:
     return {**c.vm_metrics(_proc("meminfo"), _proc("loadavg"),
                            (v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail),
                            _proc("uptime"), os.cpu_count() or 1),
-            **c.memory_index_metrics(stamp)}
+            **c.memory_index_metrics(stamp),
+            **c.wakeword_pipeline_metrics(_mtime(WAKEWORD_SYNC_STAMP), _mtime(WAKEWORD_CACHE_STAMP))}
 
 
 def _log_tail() -> str:

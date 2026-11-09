@@ -57,10 +57,16 @@ def test_memory_index_last_success_from_stamp_mtime():
     assert c.memory_index_metrics(None) == {"memory_index_last_success": None}
 
 
+def test_wakeword_pipeline_stamps():
+    assert c.wakeword_pipeline_metrics(1761700000.7, None) == {
+        "wakeword_sync_last_ok": "2025-10-29T01:06:40+00:00", "wakeword_cache_last_ok": None}
+
+
 def test_capabilities_keys_match_metrics():
     keys = {d["key"] for d in c.capabilities(proxmox=True)}
     produced = set(c.status_metrics({})) | set(c.proxmox_metrics({}, {}, {})) | set(
-        c.vm_metrics(MEMINFO, "0 0 0", (1, 1, 1, 1), "1 1", 1)) | set(c.memory_index_metrics(None))
+        c.vm_metrics(MEMINFO, "0 0 0", (1, 1, 1, 1), "1 1", 1)) | set(c.memory_index_metrics(None)) | set(
+        c.wakeword_pipeline_metrics(None, None))
     attrs = {k for k in produced if k.endswith("_attributes")}
     assert produced - attrs <= keys
     assert {k.removesuffix("_attributes") for k in attrs} <= keys

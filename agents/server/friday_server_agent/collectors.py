@@ -145,6 +145,16 @@ def memory_index_metrics(stamp_mtime: float | None) -> dict:
     return {"memory_index_last_success": when}
 
 
+def stamp_iso(mtime: float | None) -> str | None:
+    return datetime.fromtimestamp(int(mtime), timezone.utc).isoformat() if mtime is not None else None
+
+
+def wakeword_pipeline_metrics(sync_mtime: float | None, cache_mtime: float | None) -> dict:
+    """09/11/2026: nightly wake-word pipeline. sync = mark the Pi writes only after a fully OK upload
+    (incoming/<sat>/.sync_ok); cache = stamp featcache_nightly.sh touches only after caching every pending day."""
+    return {"wakeword_sync_last_ok": stamp_iso(sync_mtime), "wakeword_cache_last_ok": stamp_iso(cache_mtime)}
+
+
 VOICE_DESCRIPTOR = DESCRIPTOR
 
 
@@ -167,6 +177,8 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("lucid_last_run", "Lucid Dreaming last run", device_class="timestamp"),
         s("memory_views_mode", "Memory views mode", **diag),
         s("memory_index_last_success", "Memory index last success", device_class="timestamp", **diag),
+        s("wakeword_sync_last_ok", "Wake word recordings sync last OK", device_class="timestamp", **diag),
+        s("wakeword_cache_last_ok", "Wake word feature cache last OK", device_class="timestamp", **diag),
         s("conversation_open", "Conversation open", platform="binary_sensor"),
         s("host_available_mb", "Proxmox host available memory", unit="MB", available=proxmox, **m),
         s("nvme_temperature", "Proxmox NVMe temperature", unit="°C", device_class="temperature",
