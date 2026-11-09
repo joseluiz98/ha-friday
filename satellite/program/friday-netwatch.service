@@ -1,0 +1,9 @@
+[Unit]
+Description=F.R.I.D.A.Y. satellite network recovery
+
+[Service]
+Type=oneshot
+User=jose
+StateDirectory=friday-netwatch
+WorkingDirectory=/home/jose/satelite
+ExecStart=/home/jose/oww/bin/python -u /home/jose/satelite/netwatch.py
