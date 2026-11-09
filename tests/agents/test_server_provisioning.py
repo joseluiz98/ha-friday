@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 import os
 import sys
 import tarfile
@@ -118,6 +119,8 @@ def _make_sources(cfg, monkeypatch=None, tamper=False):
     vault.put(str(src / "alarme.wav"), "satellite/sounds/alarme.wav", root=str(root), manifest=str(man))
     if tamper:
         (root / "sha256" / sha).write_bytes(b"tampered")
+    (rel / "vault").mkdir()
+    (rel / "vault" / "manifest.json").write_text(man.read_text())   # the manifest travels with the release ref
     if monkeypatch:
         monkeypatch.setenv("FRIDAY_VAULT", str(root))
         monkeypatch.setenv("FRIDAY_VAULT_MANIFEST", str(man))
@@ -320,3 +323,28 @@ def test_bundle_carries_the_version_for_program_and_agent(dirs, monkeypatch):
     with tarfile.open(fileobj=io.BytesIO(body)) as tar:
         for arc in ("program/FRIDAY_VERSION", "agent/friday_agent_core/FRIDAY_VERSION"):
             assert tar.extractfile(arc).read().decode().split()[0] == "v9.9.9"
+
+
+def test_update_bundle_uses_the_vault_manifest_of_the_release_ref(dirs, monkeypatch, tmp_path):
+    _, cfg, _ = dirs
+    archive, asked = _make_sources(cfg, monkeypatch)
+    empty = tmp_path / "installed-manifest.json"
+    empty.write_text('{"files": {}}')
+    monkeypatch.setenv("FRIDAY_VAULT_MANIFEST", str(empty))      # a stale installed manifest must not matter
+    store = pv.BundleStore(archive=archive)
+    body = store.take(store.prepare("update", "sat-abc123")["url"].rsplit("/", 1)[1])
+    assert "program/vendor/xvf_host.py" in _names(body)
+    assert "vault/manifest.json" in asked[0][1]
+
+
+def test_update_bundle_aborts_when_a_required_vault_set_is_empty(dirs, monkeypatch):
+    _, cfg, _ = dirs
+    archive, _ = _make_sources(cfg, monkeypatch)
+    rel_manifest = cfg.parent / "release" / "vault" / "manifest.json"
+    data = json.loads(rel_manifest.read_text())
+    data["files"] = {k: v for k, v in data["files"].items() if not k.startswith("satellite/sounds/onboarding/")}
+    rel_manifest.write_text(json.dumps(data))
+    store = pv.BundleStore(archive=archive)
+    with pytest.raises(pv.ProvisioningError) as e:
+        store.prepare("update", "sat-abc123")
+    assert e.value.code == "vault_error"

@@ -35,7 +35,7 @@ class TestFill(unittest.TestCase):
         vp.vault.put(os.path.join(src, "old.wav"), "satellite/sounds/atuais-20261012/so_antigo.wav", root=self.root, manifest=self.man)
 
     def test_top_level_sound_wins_over_snapshot(self):
-        vp.fill(self.out, root=self.root, manifest=self.man)
+        vp.fill(self.out, root=self.root, manifest=self.man, required=())
         with open(os.path.join(self.out, "programa/sons/fim_a.wav"), "rb") as f:
             self.assertEqual(f.read(), b"top")
         self.assertTrue(os.path.exists(os.path.join(self.out, "programa/sons/so_antigo.wav")))
@@ -51,3 +51,21 @@ class TestFill(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRequired(unittest.TestCase):
+    def test_missing_required_set_aborts_before_writing(self):
+        d = tempfile.mkdtemp()
+        root, man, out = (os.path.join(d, x) for x in ("vault", "manifest.json", "payload"))
+        src = os.path.join(d, "a.wav")
+        with open(src, "wb") as f:
+            f.write(b"a")
+        vp.vault.put(src, "satellite/sounds/a.wav", root=root, manifest=man)
+        with self.assertRaises(vp.vault.VaultError) as cm:
+            vp.fill(out, root=root, manifest=man)
+        self.assertIn("satellite/models/", str(cm.exception))
+        self.assertFalse(os.path.exists(out))
+
+    def test_default_required_sets(self):
+        self.assertEqual(set(vp.REQUIRED), {"satellite/program/vendor/", "satellite/sounds/", "satellite/sounds/onboarding/",
+                                            "satellite/models/", "satellite/sendspin/", "satellite/image/ha_authorized_key.pub"})

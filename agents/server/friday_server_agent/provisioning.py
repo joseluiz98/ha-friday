@@ -87,7 +87,8 @@ def _vault():
     return mod
 
 
-RELEASE_PATHS = ["satellite/program", "agents/satellite/friday_satellite_agent", "agents/common/friday_agent_core"]
+RELEASE_PATHS = ["satellite/program", "agents/satellite/friday_satellite_agent", "agents/common/friday_agent_core",
+                 "vault/manifest.json"]  # the vault manifest travels with the ref: what this version needs
 VAULT_FOR_BUNDLE = {"satellite/program/vendor/": "program/vendor/", "satellite/sounds/onboarding/": "program/sons/onboarding/"}
 
 
@@ -255,9 +256,16 @@ class BundleStore:
                              ("agents/common/friday_agent_core", "agent/friday_agent_core")):
                 _add_tree(tar, os.path.join(tmp, src), arc)
             vault = _vault()
-            manifest = os.environ.get("FRIDAY_VAULT_MANIFEST", "/opt/friday/agent/vault-manifest.json")
+            manifest = os.path.join(tmp, "vault/manifest.json")
+            if not os.path.exists(manifest):
+                LOG.error("bundle: the release ref has no vault/manifest.json")
+                raise ProvisioningError("vault_error")
             names = [n for n in vault._load(manifest).get("files", {})
                      if any(n.startswith(p) and "/" not in n[len(p):] for p in VAULT_FOR_BUNDLE)]
+            empty = [p for p in VAULT_FOR_BUNDLE if not any(n.startswith(p) for n in names)]
+            if empty:  # every set the bundle carries must exist in the manifest: never ship without them
+                LOG.error("bundle: vault manifest has nothing under %s", ", ".join(empty))
+                raise ProvisioningError("vault_error")
             vdir = os.path.join(tmp, "_vault")
             try:
                 vault.fetch_all(sorted(names), vdir, manifest=manifest)

@@ -35,9 +35,16 @@ def payload_path(name: str):
     return None
 
 
-def fill(payload_dir: str, root=None, manifest=None) -> int:
+REQUIRED = ("satellite/program/vendor/", "satellite/sounds/", "satellite/sounds/onboarding/", "satellite/models/",
+            "satellite/sendspin/", "satellite/image/ha_authorized_key.pub")
+
+
+def fill(payload_dir: str, root=None, manifest=None, required=REQUIRED) -> int:
     names = sorted(vault._load(vault._manifest(manifest)).get("files", {}))
     wanted = [n for n in names if payload_path(n)]
+    empty = [p for p in required if not any(n.startswith(p) for n in wanted)]
+    if empty:  # the image never ships without one of its private sets
+        raise vault.VaultError("vault manifest has nothing under " + ", ".join(empty))
     tmp = tempfile.mkdtemp()
     try:
         vault.fetch_all(wanted, tmp, root=root, manifest=manifest)
