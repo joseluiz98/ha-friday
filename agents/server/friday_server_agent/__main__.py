@@ -32,7 +32,7 @@ PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8801"))
 # sent verbatim as Authorization. Format: see the Proxmox API token docs (user@realm!tokenid, then the token value).
 OPENCLAW_JSON = os.environ.get("FRIDAY_OPENCLAW_JSON", "/srv/friday/home/.openclaw/openclaw.json")
 ENV_FILE = "/srv/friday/friday.env"
-PVE = "https://192.0.2.252:8006/api2/json/nodes/hypervisor"
+PVE = os.environ.get("FRIDAY_PVE_API", "")  # e.g. https://<proxmox>:8006/api2/json/nodes/<node>; from /srv/friday/state/local.env
 # Touched by friday-memory-index.service (ExecStartPost) after each successful reindex.
 # Written by the bot (activity.py): open sessions, brain turns in flight, heartbeat (minor 13 of 19/10).
 ACTIVITY_FILE = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")

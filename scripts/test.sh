@@ -4,7 +4,8 @@
 # Usage: scripts/test.sh [pytest args...]
 set -euo pipefail
 cd "$(dirname "$0")/.."
-VM="${FRIDAY_TEST_VM:-friday@192.0.2.251}"
+VM="${FRIDAY_TEST_VM:-$(cat /config/.friday/test-vm 2>/dev/null)}"
+[ -n "$VM" ] || { echo "set FRIDAY_TEST_VM=user@host (or /config/.friday/test-vm)" >&2; exit 2; }
 rsync -az --delete \
   --exclude .git --exclude __pycache__ --exclude .pytest_cache \
   --exclude venv --exclude .venv \

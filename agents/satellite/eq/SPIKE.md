@@ -1,4 +1,4 @@
-# EQ spike runbook (step 1, live, on the Pi 192.0.2.15)
+# EQ spike runbook (step 1, live, on the satellite Pi)
 
 State found 30/10: asound.conf = dmix `mixer_out` (Jabra) + `voice` / `music_vol` (softvol) / `music`;
 no `/usr/lib/ladspa`, no caps, no alsaequal installed. `amixer -D equal` -> "Invalid CTL equal".

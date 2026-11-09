@@ -23,3 +23,9 @@
 */tests/agents/test_diagnostics.py:bot\d{6,}:
 # Fixtures of the scanner/sweep tests: fake values built to match the generic patterns.
 */tests/tools/*:192\.168\.77\.|02:00:5E:|Bearer abcdefghij|eyJhbGciOiJIUzI1NiJ9|PVEAPIToken=ha@pve!x|"token": "Leave blank|/home/zelda
+# Fake service-account e-mail in the cost tests.
+*/server/cost/test_official.py:svc@x\.iam
+# Fake Raspberry Pi MAC in the satellite hardware tests.
+*/tests/agents/test_satellite_hardware.py:B8:27:EB:00:00:01
+*/tests/tools/test_sweep.py:02\\\\\\\\:00
+*/tests/agents/test_satellite_hardware.py:B8\\\\:27\\\\:EB\\\\:00

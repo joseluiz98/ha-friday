@@ -42,7 +42,7 @@ def bundles_dir() -> str:
 
 
 def bundle_host() -> str:
-    return os.environ.get("FRIDAY_BUNDLE_HOST", "192.0.2.251:8801")
+    return os.environ.get("FRIDAY_BUNDLE_HOST") or f"{os.environ.get('FRIDAY_VM_IP', '127.0.0.1')}:8801"
 
 
 class ProvisioningError(Exception):

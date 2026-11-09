@@ -2,7 +2,7 @@
 
 The server agent publishes the hidden `reminders` state (upcoming reminders that ring at home, sorted). A reminder
 that leaves the list at or after its time has rung: the event fires on every satellite, since reminders go to
-whichever satellite Alex is near.
+whichever satellite the owner is near.
 """
 
 from __future__ import annotations

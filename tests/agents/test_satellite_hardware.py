@@ -60,7 +60,7 @@ def fake_run(devices):
         if "IP4.ADDRESS" in argv:
             return "192.0.2.15/24\n"
         if "GENERAL.HWADDR" in argv:
-            return "02\\:00\\:00\\:00\\:00\\:00\n"
+            return "B8\\:27\\:EB\\:00\\:00\\:01\n"
         if argv[:4] == ["nmcli", "-t", "-f", "ACTIVE,SIGNAL"]:
             return "yes:80\n"
         if argv[:4] == ["nmcli", "-t", "-f", "ACTIVE,SSID"]:
@@ -75,7 +75,7 @@ def test_sample_wifi_only():
     assert out == {"cpu_temperature": 51.0, "cpu_load": 50.0, "throttled": False,
                    "uptime_since": "2026-10-29T11:00:00+00:00",
                    "network_interface": "wifi", "ip_address": "192.0.2.15",
-                   "mac_address": "02:00:00:00:00:00", "wifi_ssid": "ExampleNet", "wifi_signal": -48}
+                   "mac_address": "B8:27:EB:00:00:01", "wifi_ssid": "ExampleNet", "wifi_signal": -48}
 
 
 def test_sample_signal_falls_back_to_nmcli_percent():
