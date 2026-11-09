@@ -1,0 +1,4 @@
+#!/bin/sh
+# CLI do OpenClaw da F.R.I.D.A.Y. na VM: roda dentro do container (mesma versão, mesmo estado), com o mesmo HOME
+# do gateway (FRIDAY_OC_HOME do compose; ver run.sh).
+exec docker exec -i friday sh -c 'HOME="${FRIDAY_OC_HOME:-$HOME}" exec openclaw "$@"' oc "$@"

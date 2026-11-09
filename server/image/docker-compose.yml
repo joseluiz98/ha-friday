@@ -1,0 +1,35 @@
+# F.R.I.D.A.Y. em produção (spec 2026-10-18 §4.2). cd /opt/friday/image && docker compose up -d --build
+services:
+  friday:
+    build: .
+    image: friday:2026.9.9
+    container_name: friday
+    network_mode: host
+    restart: unless-stopped
+    # o log cobre as 6 h que a porta de status lê (~80 KB/10 min com uma sessão); sem isso cresce sem fim (revisão 19/10)
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "5"
+    stop_grace_period: 30s
+    environment:
+      FRIDAY_BASE: /srv/friday
+      FRIDAY_OC_HOME: /share/openclaw-poc/home
+      TZ: America/Sao_Paulo
+    volumes:
+      - /srv/friday:/srv/friday
+      - /srv/friday/cache:/data
+      # Samba do HAOS (desacoplamento de 19/10): só a pasta-mãe LOCAL /mnt/haos, com as montagens automáticas do host
+      # dentro (share e config). O container sobe sem o Samba e o recebe quando ele aparece (rslave). /share e
+      # /homeassistant no container são locais/atalhos (Dockerfile e haos_links.sh).
+      - type: bind
+        source: /mnt/haos
+        target: /mnt/haos
+        bind:
+          propagation: rslave
+      # Apelido do HOME: o OpenClaw guarda caminhos absolutos /share/openclaw-poc no SQLite (agendamentos,
+      # workspaces, memória) e o doctor não os migra (testado em 19/10). Desde 19/10 fica no /share LOCAL do container.
+      - type: bind
+        source: /srv/friday
+        target: /share/openclaw-poc
