@@ -1,0 +1,9 @@
+[Unit]
+Description=F.R.I.D.A.Y. - reindexa a memoria todo dia as 04:15
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

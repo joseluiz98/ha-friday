@@ -1,0 +1,11 @@
+[Unit]
+Description=Envio noturno das gravações do satélite para a VM
+
+[Timer]
+# 03:30 + até 30 min aleatórios: vários satélites não chegam juntos na VM
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

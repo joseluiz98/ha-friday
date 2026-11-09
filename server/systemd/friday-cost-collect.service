@@ -1,0 +1,8 @@
+# Copies the brain's Gemini usage (OpenClaw SQLite, read-only) into the usage ledger. Spec 2026-10-23 gemini-cost-instrumentation.
+[Unit]
+Description=F.R.I.D.A.Y. - cost: collect brain usage
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/friday/cost/collect_brain.py
+TimeoutStartSec=600

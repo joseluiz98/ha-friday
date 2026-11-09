@@ -1,0 +1,8 @@
+# Pulls the official Gemini API cost from the BigQuery billing export. Without /srv/friday/state/cost/gcp.json it does nothing and exits 0.
+[Unit]
+Description=F.R.I.D.A.Y. - cost: pull official cost (BigQuery)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/friday/cost/official.py
+TimeoutStartSec=600

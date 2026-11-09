@@ -1,0 +1,13 @@
+# Reindexa a memória da F.R.I.D.A.Y. (spec 2026-10-18; plano Task 11 Step 5).
+# Os extraPaths vêm do HAOS pelo Samba, e o CIFS não avisa mudança de arquivo: sem isto, um arquivo novo ou alterado
+# lá só entra no índice quando algo mais o marca (medido em 19/10: 11 min sem indexar; o comando leva ~10 s).
+[Unit]
+Description=F.R.I.D.A.Y. - reindexa a memoria (extraPaths pelo Samba)
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/oc memory index --agent friday
+# Carimbo do último reindex bem-sucedido (lido pelo agente do servidor; vigia no HA, minor 15 de 19/10).
+ExecStartPost=/usr/bin/touch /srv/friday/state/memory-index.ok

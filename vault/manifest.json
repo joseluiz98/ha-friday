@@ -1,0 +1,264 @@
+{
+  "files": {
+    "satellite/image/ha_authorized_key.pub": {
+      "sha256": "757680e278b936fde809304d20d0afedd310d25def8cc82358c2a5dea1552009",
+      "size": 96,
+      "source": "HAOS /data/.ssh/id_ed25519.pub"
+    },
+    "satellite/models/friday.onnx": {
+      "sha256": "d40b067f9d2e5d06d653e24f91db002e7e7e765d2743d58e27f8d4c33dc5af80",
+      "size": 790682,
+      "source": "tools/satelite/modelos/friday.onnx"
+    },
+    "satellite/models/sexta_feira.onnx": {
+      "sha256": "d102fdc43d8bbda9ea470b3ca9d0a2ddc9f2599aa4b53dabf19844a1b53a7713",
+      "size": 790682,
+      "source": "tools/satelite/modelos/sexta_feira.onnx"
+    },
+    "satellite/program/vendor/xvf_host.py": {
+      "sha256": "5772c25f789288db9c4c9a1f74d98736f96b9289acea990194dcbfec220424f7",
+      "size": 32161,
+      "source": "tools/satelite/programa/vendor/xvf_host.py"
+    },
+    "satellite/sendspin/sendspin-cli.tar.gz": {
+      "sha256": "49035b279d140d099c89b496837379bd9be50ecb3a89fe62a2b60c8f5243e264",
+      "size": 728829,
+      "source": "sendspin-cli 0.3.0 linux-arm64 (upstream release)"
+    },
+    "satellite/sounds/alarme_elevenlabs.wav": {
+      "sha256": "4363a99a5d2ee90c06ee6f6672132590b21f184e404c5276192adfda8488c397",
+      "size": 316878,
+      "source": "tools/satelite/sons/alarme_elevenlabs.wav"
+    },
+    "satellite/sounds/aprendizagem_cancelada.wav": {
+      "sha256": "0b2835cd58a4809f880ce93a30b775da0fabf10fb91ded57f6d17ebbff4fda31",
+      "size": 497324,
+      "source": "tools/satelite/sons/aprendizagem_cancelada.wav"
+    },
+    "satellite/sounds/aprendizagem_fala_livre.wav": {
+      "sha256": "f708b0ba07ab8cafb55b937ef255e0f07fcf61173951585e33015dc2207df1fc",
+      "size": 1739572,
+      "source": "tools/satelite/sons/aprendizagem_fala_livre.wav"
+    },
+    "satellite/sounds/aprendizagem_fim.wav": {
+      "sha256": "09267f66eba459857e8694c0f2ea1c1878be13d5ac873922fd6a1a4111674765",
+      "size": 1263412,
+      "source": "tools/satelite/sons/aprendizagem_fim.wav"
+    },
+    "satellite/sounds/aprendizagem_intro.wav": {
+      "sha256": "978e2536eb2d5da195990d26a2653a0b198338219c55f8f17723dbbcdaa04eb8",
+      "size": 2396212,
+      "source": "tools/satelite/sons/aprendizagem_intro.wav"
+    },
+    "satellite/sounds/aprendizagem_mudar_lugar.wav": {
+      "sha256": "f0c5561f89acca0d5e60634f892bae0dfaaa1269e1c791f83c10da159046e187",
+      "size": 1609004,
+      "source": "tools/satelite/sons/aprendizagem_mudar_lugar.wav"
+    },
+    "satellite/sounds/atuais-20261012/bipe.wav": {
+      "sha256": "1a83b6b1b6be8b3786fba551a843366cfcb5de07b0403221d75f045a3a134ba4",
+      "size": 23084,
+      "source": "tools/satelite/sons/atuais-20261012/bipe.wav"
+    },
+    "satellite/sounds/atuais-20261012/erro_a.wav": {
+      "sha256": "364a1ab742456f798c26651161835bf1bfe1d2b08fabfdbbda88837bab58a9d3",
+      "size": 69164,
+      "source": "tools/satelite/sons/atuais-20261012/erro_a.wav"
+    },
+    "satellite/sounds/atuais-20261012/erro_b.wav": {
+      "sha256": "411174e723b238653b5fd99c8dcacdecc745ce72468a39b550dcfcd95c6628b5",
+      "size": 85484,
+      "source": "tools/satelite/sons/atuais-20261012/erro_b.wav"
+    },
+    "satellite/sounds/atuais-20261012/erro_c.wav": {
+      "sha256": "46b3c710cf606352c7ccdc247d95254fa39defaacdb91fb3c1c59553a65a20b4",
+      "size": 61484,
+      "source": "tools/satelite/sons/atuais-20261012/erro_c.wav"
+    },
+    "satellite/sounds/atuais-20261012/fim_a.wav": {
+      "sha256": "17e7fc271fc00234a36b557ddeeeb8c837c1f83901c01467729b658546aeec14",
+      "size": 40364,
+      "source": "tools/satelite/sons/atuais-20261012/fim_a.wav"
+    },
+    "satellite/sounds/atuais-20261012/fim_b.wav": {
+      "sha256": "3aa2883432d9be2e7666987e511b30fc241291f7eeb77c51aff9b6581c70b438",
+      "size": 46124,
+      "source": "tools/satelite/sons/atuais-20261012/fim_b.wav"
+    },
+    "satellite/sounds/atuais-20261012/fim_c.wav": {
+      "sha256": "96aee35d0f73f5b0a386eae179d7826aecec12bd141c3e6a67ffeac74ff0a3b3",
+      "size": 26924,
+      "source": "tools/satelite/sons/atuais-20261012/fim_c.wav"
+    },
+    "satellite/sounds/atuais-20261012/inicio_a.wav": {
+      "sha256": "c388c77689290fbcf17e3b1e1b335cae2b3ba051647f06cacc2ce97fa8ff290f",
+      "size": 40364,
+      "source": "tools/satelite/sons/atuais-20261012/inicio_a.wav"
+    },
+    "satellite/sounds/atuais-20261012/inicio_b.wav": {
+      "sha256": "9ed5fcb8fde98388d8c0cd0520745e2826a2133512947af952fa33e4fb37aba0",
+      "size": 46124,
+      "source": "tools/satelite/sons/atuais-20261012/inicio_b.wav"
+    },
+    "satellite/sounds/atuais-20261012/inicio_c.wav": {
+      "sha256": "6b22d77235dddc47d5774120c0cad97ee2ada84fc20c6dd22c2f30ec522cdc1d",
+      "size": 26924,
+      "source": "tools/satelite/sons/atuais-20261012/inicio_c.wav"
+    },
+    "satellite/sounds/fim_elevenlabs.wav": {
+      "sha256": "8339cc8e2a5dc43f8a641a72bd1de751ed7360564967901d908a8be6f5554021",
+      "size": 211244,
+      "source": "tools/satelite/sons/fim_elevenlabs.wav"
+    },
+    "satellite/sounds/fim_elevenlabs_20261020.wav": {
+      "sha256": "57f18b64640891c4600a23639d291692d8b4809fef3c6260bee3491b6484901e",
+      "size": 108236,
+      "source": "tools/satelite/sons/fim_elevenlabs_20261020.wav"
+    },
+    "satellite/sounds/inicio_elevenlabs.wav": {
+      "sha256": "d3f3a2d05905fd739b3e9d68b77fbeb263c0b654e2335a77a8b3cf7c44bf7765",
+      "size": 86444,
+      "source": "tools/satelite/sons/inicio_elevenlabs.wav"
+    },
+    "satellite/sounds/lembrete_elevenlabs.wav": {
+      "sha256": "e36130a5a3dfe16bedc8ea3d265b6ba64be814640acf7ecdf95055c417a50b94",
+      "size": 182444,
+      "source": "tools/satelite/sons/lembrete_elevenlabs.wav"
+    },
+    "satellite/sounds/nao_perturbe_desligou.wav": {
+      "sha256": "c2ee8c03992347ef7e2bfde77c1dd68274269b0187ea7b5a235591ab58e60471",
+      "size": 100416,
+      "source": "tools/satelite/sons/nao_perturbe_desligou.wav"
+    },
+    "satellite/sounds/nao_perturbe_ligou.wav": {
+      "sha256": "948ad987e42c45d372e571ec3592a8f5b9a47d9e923b468bc47429a1fd5875d2",
+      "size": 145112,
+      "source": "tools/satelite/sons/nao_perturbe_ligou.wav"
+    },
+    "satellite/sounds/onboarding/digit_0.wav": {
+      "sha256": "16e0674347c4513e3d122ab938bdb9943d70febbb42cd59701592bbbbe512725",
+      "size": 161324,
+      "source": "tools/satelite/sons/onboarding/digit_0.wav"
+    },
+    "satellite/sounds/onboarding/digit_1.wav": {
+      "sha256": "c5ba9a998fd7205d45e2baba16e9ef75eaa4e8f42f44eac8bed85e2a1144d1f4",
+      "size": 153652,
+      "source": "tools/satelite/sons/onboarding/digit_1.wav"
+    },
+    "satellite/sounds/onboarding/digit_2.wav": {
+      "sha256": "64a76ed59a74544718a2c51d2c39eb74fc7eca55af5c78a7e1a21a0753278f52",
+      "size": 161332,
+      "source": "tools/satelite/sons/onboarding/digit_2.wav"
+    },
+    "satellite/sounds/onboarding/digit_3.wav": {
+      "sha256": "046a970efd32f18cc7a087e91521d387c896301c5e01f55c909313ed7c514be4",
+      "size": 167092,
+      "source": "tools/satelite/sons/onboarding/digit_3.wav"
+    },
+    "satellite/sounds/onboarding/digit_4.wav": {
+      "sha256": "1ff703e2fc576e92b106b0794b7a11e6f74d185f902c4d7ed6ca623d7e4d05bd",
+      "size": 176684,
+      "source": "tools/satelite/sons/onboarding/digit_4.wav"
+    },
+    "satellite/sounds/onboarding/digit_5.wav": {
+      "sha256": "8a9d2571423bf5b293b1941824e031759b3994ec1bdd37bd1b346782d101de4d",
+      "size": 172852,
+      "source": "tools/satelite/sons/onboarding/digit_5.wav"
+    },
+    "satellite/sounds/onboarding/digit_6.wav": {
+      "sha256": "628797e051c3bd356fa1bcaa64ff7222e0f88842b79ee97c5a1853c147966eba",
+      "size": 178604,
+      "source": "tools/satelite/sons/onboarding/digit_6.wav"
+    },
+    "satellite/sounds/onboarding/digit_7.wav": {
+      "sha256": "13a73c805965e07c3eb6cb0326e01085ef819bdf121feb5fc09e52ef9c13cd77",
+      "size": 169004,
+      "source": "tools/satelite/sons/onboarding/digit_7.wav"
+    },
+    "satellite/sounds/onboarding/digit_8.wav": {
+      "sha256": "63a427dbf38046310b876d90112510c841147e4835231de9af0b67247358d716",
+      "size": 207412,
+      "source": "tools/satelite/sons/onboarding/digit_8.wav"
+    },
+    "satellite/sounds/onboarding/digit_9.wav": {
+      "sha256": "070c730a6ec813d544db3a41bf378903b0878e40cca9e2cf024af3e3fe70f41f",
+      "size": 151732,
+      "source": "tools/satelite/sons/onboarding/digit_9.wav"
+    },
+    "satellite/sounds/onboarding/heard_it.wav": {
+      "sha256": "744301ca8e14013b0ce89e9ff34600ecf5830b3cf9a9c93727068c852322bf93",
+      "size": 729652,
+      "source": "tools/satelite/sons/onboarding/heard_it.wav"
+    },
+    "satellite/sounds/onboarding/mic_muted.wav": {
+      "sha256": "e60cf2856dd611a59da1b005f8e2717acadc78e9428ff67fcae8b40c04b79f24",
+      "size": 583732,
+      "source": "tools/satelite/sons/onboarding/mic_muted.wav"
+    },
+    "satellite/sounds/onboarding/no_server.wav": {
+      "sha256": "aa1eb6b008f782a4968ef0bc167de7116cd7aba0a2c0d46c667d2b62f14bb49a",
+      "size": 568372,
+      "source": "tools/satelite/sons/onboarding/no_server.wav"
+    },
+    "satellite/sounds/onboarding/no_wifi.wav": {
+      "sha256": "a955537aeb0610c6cc55b381fa5de89a8b6dac7c5c367a034c8b920a0633e0d1",
+      "size": 883252,
+      "source": "tools/satelite/sons/onboarding/no_wifi.wav"
+    },
+    "satellite/sounds/onboarding/pairing_code.wav": {
+      "sha256": "1c281985f20dd0aac517944960aa103dfa8867d4456707031c4c7d9b834d02db",
+      "size": 908204,
+      "source": "tools/satelite/sons/onboarding/pairing_code.wav"
+    },
+    "satellite/sounds/onboarding/ready.wav": {
+      "sha256": "0a7d9f79fde8edc15e9e641a20226fc0bc0fda02e044cbe87561a13af5120e96",
+      "size": 1081012,
+      "source": "tools/satelite/sons/onboarding/ready.wav"
+    },
+    "satellite/sounds/onboarding/reset_confirm_button.wav": {
+      "sha256": "cf22299096ee81730047a9e3f6bc810fd740267a9a6083bcbb57e4d471251b30",
+      "size": 1157804,
+      "source": "tools/satelite/sons/onboarding/reset_confirm_button.wav"
+    },
+    "satellite/sounds/onboarding/reset_confirm_ha.wav": {
+      "sha256": "5a44b7a45a5006a3b3d92435c179bf9796e6a64316ee239ad10e557a83381269",
+      "size": 1685804,
+      "source": "tools/satelite/sons/onboarding/reset_confirm_ha.wav"
+    },
+    "satellite/sounds/onboarding/reset_home.wav": {
+      "sha256": "58b31dba563929a9b630c031a814f1a7f3188d62432578607bc876f9b8799e8b",
+      "size": 537644,
+      "source": "tools/satelite/sons/onboarding/reset_home.wav"
+    },
+    "satellite/sounds/onboarding/reset_network.wav": {
+      "sha256": "c224b767ded2c2e23674465b550987e14421505360f989a73768302f4546fd9f",
+      "size": 551084,
+      "source": "tools/satelite/sons/onboarding/reset_network.wav"
+    },
+    "satellite/sounds/onboarding/say_wake_word.wav": {
+      "sha256": "ba99cb172adaf131a4a88eda7441aa78261570adb3dfe250041b28220ae88691",
+      "size": 785332,
+      "source": "tools/satelite/sons/onboarding/say_wake_word.wav"
+    },
+    "satellite/sounds/onboarding/setup_mode.wav": {
+      "sha256": "626a636c68f078cbb19eb58a579d5ad4870411588d96e511183a70eaf49a4d4f",
+      "size": 1102124,
+      "source": "tools/satelite/sons/onboarding/setup_mode.wav"
+    },
+    "satellite/sounds/onboarding/step_failed.wav": {
+      "sha256": "ff633f055acd6b9fb09ca90584e25a0c66b1a13ae6e3046d78489688372113b7",
+      "size": 560684,
+      "source": "tools/satelite/sons/onboarding/step_failed.wav"
+    },
+    "satellite/sounds/onboarding/update_slow.wav": {
+      "sha256": "49c1db2fd8251b63360b49ee885eec995a2151d4f1493306e1f441d1330d068c",
+      "size": 994604,
+      "source": "tools/satelite/sons/onboarding/update_slow.wav"
+    },
+    "satellite/sounds/onboarding/updating.wav": {
+      "sha256": "102a9c545b9870d42b6e245fb8816964e5e1aee715e56739b4c8b02e099b7010",
+      "size": 1113644,
+      "source": "tools/satelite/sons/onboarding/updating.wav"
+    }
+  }
+}

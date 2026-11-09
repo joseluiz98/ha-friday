@@ -1,0 +1,14 @@
+[Unit]
+Description=Satélite de voz da F.R.I.D.A.Y. (Jabra + palavra "Friday")
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=jose
+WorkingDirectory=/home/jose/satelite
+ExecStart=/home/jose/oww/bin/python -u /home/jose/satelite/friday_satelite.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

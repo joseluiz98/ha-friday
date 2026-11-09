@@ -1,0 +1,14 @@
+[Unit]
+Description=F.R.I.D.A.Y. satellite first boot (identity only)
+ConditionPathExists=!/etc/friday-satelite/.firstboot-done
+Before=friday-satelite.service friday-satellite-agent.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/jose/satelite
+ExecStart=/home/jose/oww/bin/python -u /home/jose/satelite/firstboot.py
+
+[Install]
+WantedBy=multi-user.target

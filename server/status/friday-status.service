@@ -1,0 +1,12 @@
+[Unit]
+Description=F.R.I.D.A.Y. status port (spec 2026-10-18 §4.10)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -I /opt/friday/status/friday_status.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

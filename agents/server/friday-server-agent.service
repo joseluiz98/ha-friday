@@ -7,6 +7,7 @@ User=root
 WorkingDirectory=/opt/friday/agent
 Environment=PYTHONPATH=/opt/friday/agent
 Environment=FRIDAY_AGENT_TOKEN_FILE=/srv/friday/secrets/agent_token
+EnvironmentFile=-/srv/friday/state/local.env
 ExecStart=/opt/friday/agent/venv/bin/python -m friday_server_agent
 Restart=always
 RestartSec=5

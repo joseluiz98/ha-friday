@@ -1,0 +1,46 @@
+{
+ "model_name": "friday",
+ "target_phrase": [
+  "friday"
+ ],
+ "custom_negative_phrases": [
+  "fried",
+  "fry",
+  "fright",
+  "freight",
+  "frida",
+  "friendly",
+  "monday",
+  "sunday",
+  "today",
+  "payday",
+  "holiday",
+  "birthday",
+  "my day",
+  "by day",
+  "tidy",
+  "fry pan",
+  "five day",
+  "free day"
+ ],
+ "ptbr_texts": [
+  "Friday",
+  "Fraidei",
+  "Fráidei"
+ ],
+ "real_pos_copies": 10,
+ "real_neg_copies": 3,
+ "n_samples": 20000,
+ "n_samples_val": 2000,
+ "augmentation_rounds": 3,
+ "steps": 50000,
+ "smoke": false,
+ "real_copies_by_tag": {
+  "positive": {
+   "_music_": 30
+  },
+  "negative": {
+   "_music_": 10
+  }
+ }
+}
