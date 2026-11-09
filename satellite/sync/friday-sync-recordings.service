@@ -1,0 +1,14 @@
+[Unit]
+Description=Envio noturno das gravações do satélite para a VM (treino das palavras)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=jose
+ExecStart=/home/jose/satelite-sync/sync_recordings.sh
+Nice=19
+IOSchedulingClass=idle
+CPUQuota=50%
+MemoryMax=150M
+TimeoutStartSec=2h
