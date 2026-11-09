@@ -1,0 +1,97 @@
+{
+  "model_name": "sexta_feira",
+  "target_phrase": [
+    "sesta fayra",
+    "sesta fera"
+  ],
+  "custom_negative_phrases": [
+    "sesta",
+    "fayra",
+    "fera",
+    "festa",
+    "testa",
+    "fiesta",
+    "siesta",
+    "sister",
+    "kinta fayra",
+    "segoonda fayra",
+    "tairsa fayra",
+    "kwarta fayra",
+    "sabadoo",
+    "domingo",
+    "sesta passada"
+  ],
+  "ptbr_texts": [
+    "Sexta-feira",
+    "Sexta feira",
+    "Sesta-feira"
+  ],
+  "real_pos_copies": 10,
+  "real_neg_copies": 3,
+  "n_samples": 20000,
+  "n_samples_val": 2000,
+  "augmentation_rounds": 3,
+  "steps": 50000,
+  "smoke": false,
+  "ptbr_negatives": {
+    "n_clips": 6000,
+    "dur_s": 2.0
+  },
+  "real_copies_by_tag": {
+    "positive": {
+      "cv27__": 10,
+      "xttsvar__": 2,
+      "xtts__": 3,
+      "ambiente__": 30,
+      "ativou__": 30,
+      "sombra__": 30
+    },
+    "negative": {
+      "sombra__": 10,
+      "ativou__": 10,
+      "acervo_f__": 10,
+      "xttsneg__": 3
+    }
+  },
+  "acav_train_frac": 0.4,
+  "max_negative_weight": 1500,
+  "ptbr_neg_texts": [
+    "Segunda-feira",
+    "Terça-feira",
+    "Quarta-feira",
+    "Quinta-feira",
+    "Hoje é segunda-feira",
+    "Hoje é terça-feira",
+    "Hoje é quarta-feira",
+    "Hoje é quinta-feira",
+    "Quinta-feira que vem",
+    "Quarta-feira passada",
+    "Na segunda-feira",
+    "Na quinta-feira",
+    "Até quinta-feira",
+    "Feira",
+    "Na feira",
+    "Feira livre",
+    "Festa",
+    "Uma festa",
+    "Testa",
+    "Cesta",
+    "Cesta básica",
+    "Besta",
+    "Sexta",
+    "Na sexta",
+    "Sexta passada",
+    "Sexta série",
+    "Sexto andar",
+    "Sábado",
+    "Domingo",
+    "Cadeira",
+    "Bandeira",
+    "Madeira",
+    "Primeira",
+    "Certeira",
+    "Sete e meia",
+    "Seis e meia"
+  ],
+  "ptbr_neg_frac": 0.1
+}
