@@ -1,0 +1,9 @@
+# Lucid Dreaming: destila as conversas de voz do dia na memória da friday (spec 2026-10-21, revisão de 21/10).
+# Programa `cataloger`: uma chamada ao Gemini 3.8 Flash por dia de voz; o código grava. Não depende do Docker.
+[Unit]
+Description=F.R.I.D.A.Y. - Lucid Dreaming (cataloger)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/friday/cataloger/run_lucid.py
+TimeoutStartSec=3600

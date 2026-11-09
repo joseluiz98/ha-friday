@@ -1,0 +1,10 @@
+# Cópia do essencial da F.R.I.D.A.Y. para /share/friday/backup, que o backup do Drive do HAOS leva às 03:00
+# (spec 2026-10-18 §9; plano Task 12). Sem segredos: ver essentials_backup.sh.
+[Unit]
+Description=F.R.I.D.A.Y. - copia do essencial para o backup do Drive
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/bin/sh /opt/friday/essentials/essentials_backup.sh

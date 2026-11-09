@@ -1,0 +1,11 @@
+# Spec docs/superpowers/specs/2026-10-21-friday-memoria-compartilhada-design.md (§5.2): 00:30, antes do
+# religamento das 01:40 e do sonho nativo das 02:00.
+[Unit]
+Description=F.R.I.D.A.Y. - Lucid Dreaming todo dia as 00:30
+
+[Timer]
+OnCalendar=*-*-* 00:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

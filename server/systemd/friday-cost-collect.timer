@@ -1,0 +1,9 @@
+[Unit]
+Description=F.R.I.D.A.Y. - cost: collect brain usage every 15 min
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

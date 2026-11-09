@@ -1,0 +1,9 @@
+[Unit]
+Description=F.R.I.D.A.Y. - copia do essencial todo dia as 02:45 (depois do sonho das 02:00, antes do Drive das 03:00)
+
+[Timer]
+OnCalendar=*-*-* 02:45:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
