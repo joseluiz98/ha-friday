@@ -8,11 +8,14 @@ Every path comes from an environment variable with the production default, so te
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import io
 import logging
 import os
 import re
 import secrets
 import shutil
+import subprocess
 import tarfile
 import tempfile
 import time
@@ -39,6 +42,44 @@ def haos_config() -> str:
 
 def bundles_dir() -> str:
     return os.environ.get("FRIDAY_BUNDLES_DIR", "/srv/nobackup/bundles")
+
+
+def repo_dir() -> str:
+    return os.environ.get("FRIDAY_REPO", os.path.join(haos_config(), "dev/ha-friday"))
+
+
+def release_ref() -> str | None:
+    """The repo version the satellites get: FRIDAY_RELEASE_REF, else the version this server agent was installed from."""
+    ref = os.environ.get("FRIDAY_RELEASE_REF")
+    if ref:
+        return ref
+    try:
+        with open(os.environ.get("FRIDAY_AGENT_VERSION_FILE", "/opt/friday/agent/FRIDAY_VERSION"), encoding="utf-8") as f:
+            parts = f.read().split()
+        return parts[1] if len(parts) > 1 else (parts[0] if parts else None)
+    except OSError:
+        return None
+
+
+def git_archive(ref: str, paths: list[str]) -> bytes:
+    """Uncompressed tar of `paths` at `ref` (the repo is read through the HAOS mount, hence safe.directory)."""
+    r = subprocess.run(["git", "-c", "safe.directory=*", "-C", repo_dir(), "archive", "--format=tar", ref, *paths],
+                       capture_output=True, timeout=120)
+    if r.returncode != 0:
+        raise ProvisioningError("source_missing")
+    return r.stdout
+
+
+def _vault():
+    path = os.environ.get("FRIDAY_VAULT_PY", "/opt/friday/agent/vault.py")
+    spec = importlib.util.spec_from_file_location("friday_vault", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+RELEASE_PATHS = ["satellite/program", "agents/satellite/friday_satellite_agent", "agents/common/friday_agent_core"]
+VAULT_FOR_BUNDLE = {"satellite/program/vendor/": "program/vendor/", "satellite/sounds/onboarding/": "program/sons/onboarding/"}
 
 
 def bundle_host() -> str:
@@ -144,8 +185,10 @@ def people_of(data: str) -> list[str]:
 class BundleStore:
     """Builds bundles and hands out single-use tokens (10 minutes)."""
 
-    def __init__(self, clock: Callable[[], float] = time.time, consolidate: Callable[[str], None] | None = None) -> None:
+    def __init__(self, clock: Callable[[], float] = time.time, consolidate: Callable[[str], None] | None = None,
+                 archive: Callable[[str, list], bytes] | None = None) -> None:
         self._clock = clock
+        self._archive = archive
         self._tokens: dict[str, tuple[str, float]] = {}
         self._consolidate = consolidate
 
@@ -163,21 +206,7 @@ class BundleStore:
         cfg, data = haos_config(), data_dir()
         with tarfile.open(dest, "w:gz") as tar:
             if kind == "update":
-                prog = os.path.join(cfg, "tools/satelite/programa")
-                if not os.path.isdir(prog):
-                    raise ProvisioningError("source_missing")
-                for name in sorted(os.listdir(prog)):
-                    p = os.path.join(prog, name)
-                    if os.path.isfile(p) and name.endswith(".py") and not _skip(name):
-                        tar.add(p, arcname=f"program/{name}", recursive=False, filter=_public)
-                    elif os.path.isdir(p) and name in ("vendor", "sons"):
-                        _add_tree(tar, p, f"program/{name}")
-                repo = os.path.join(cfg, "dev/ha-friday/agents")
-                for src, arc in ((os.path.join(repo, "satellite/friday_satellite_agent"), "agent/friday_satellite_agent"),
-                                 (os.path.join(repo, "common/friday_agent_core"), "agent/friday_agent_core")):
-                    if not os.path.isdir(src):
-                        raise ProvisioningError("source_missing")
-                    _add_tree(tar, src, arc)
+                self._pack_update(tar)
             else:
                 if self._consolidate:
                     self._consolidate(data)
@@ -194,6 +223,47 @@ class BundleStore:
                 ver = newest_verifier(voices)
                 if ver:
                     tar.add(ver, arcname=VERIFIER, recursive=False, filter=_public)
+
+    def _pack_update(self, tar: tarfile.TarFile) -> None:
+        """Program and agent from a version of the repo (never the HAOS working folder) plus the vault files."""
+        ref = release_ref()
+        if not ref:
+            raise ProvisioningError("source_missing")
+        raw = (self._archive or git_archive)(ref, RELEASE_PATHS)
+        tmp = tempfile.mkdtemp()
+        try:
+            with tarfile.open(fileobj=io.BytesIO(raw)) as src:
+                src.extractall(tmp, filter="data")
+            prog = os.path.join(tmp, "satellite/program")
+            for name in sorted(os.listdir(prog)):
+                p = os.path.join(prog, name)
+                if os.path.isfile(p) and name.endswith(".py") and not _skip(name):
+                    tar.add(p, arcname=f"program/{name}", recursive=False, filter=_public)
+                elif os.path.isdir(p) and name == "vendor":
+                    _add_tree(tar, p, "program/vendor")
+            for src, arc in (("agents/satellite/friday_satellite_agent", "agent/friday_satellite_agent"),
+                             ("agents/common/friday_agent_core", "agent/friday_agent_core")):
+                _add_tree(tar, os.path.join(tmp, src), arc)
+            vault = _vault()
+            manifest = os.environ.get("FRIDAY_VAULT_MANIFEST", "/opt/friday/agent/vault-manifest.json")
+            names = [n for n in vault._load(manifest).get("files", {})
+                     if any(n.startswith(p) and "/" not in n[len(p):] for p in VAULT_FOR_BUNDLE)]
+            vdir = os.path.join(tmp, "_vault")
+            try:
+                vault.fetch_all(sorted(names), vdir, manifest=manifest)
+            except vault.VaultError as e:
+                LOG.error("bundle: vault: %s", e)
+                raise ProvisioningError("vault_error")
+            for n in sorted(names):
+                prefix = next(p for p in VAULT_FOR_BUNDLE if n.startswith(p))
+                tar.add(os.path.join(vdir, n), arcname=VAULT_FOR_BUNDLE[prefix] + n[len(prefix):], recursive=False,
+                        filter=_public)
+            info = tarfile.TarInfo("program/FRIDAY_VERSION")
+            data = (ref + "\n").encode()
+            info.size = len(data)
+            tar.addfile(_public(info), io.BytesIO(data))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def prepare(self, kind, sat_id) -> dict:
         if kind not in KINDS:
