@@ -19,7 +19,9 @@ CATEGORIES = ("secret", "person_name", "ip_mac", "device_id", "email_phone", "pe
 
 SECRET = [re.compile(p) for p in (
     r"Bearer [A-Za-z0-9._-]{20,}", r"amzn1\.ask\.account\.[A-Z0-9]{40,}", r"eyJ[A-Za-z0-9._-]{20,}",
-    r"\"token\"\s*:\s*\"[^\"]{16,}\"", r"PVEAPIToken=\S+", r"\bbot\d{6,}:[A-Za-z0-9_-]{20,}")]
+    r"\"token\"\s*:\s*\"[^\"]{16,}\"", r"PVEAPIToken=\S+", r"\bbot\d{6,}:[A-Za-z0-9_-]{20,}",
+    r"\bAIza[0-9A-Za-z_-]{35}\b", r"-----BEGIN [A-Z ]*PRIVATE KEY-----", r"\bsk-[A-Za-z0-9_-]{32,}",
+    r"\bghp_[A-Za-z0-9]{36}\b", r"\bgithub_pat_[A-Za-z0-9_]{40,}", r"\bsk_[0-9a-f]{48}\b")]
 IP_MAC = [re.compile(p) for p in (
     r"\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", r"\b192\.168\.\d{1,3}\.\d{1,3}\b",
     r"\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", r"\b(?:[0-9A-Fa-f]{2}\\*:){5}[0-9A-Fa-f]{2}\b")]
@@ -100,17 +102,21 @@ def _scan_line(text: str, known) -> list[tuple[str, str]]:
 def scan(paths: list[str], known: list) -> list[Finding]:
     pairs = _known_pairs(known)
     findings: list[Finding] = []
-    for path in _files(paths):
-        name = os.path.basename(path)
-        for cat, val in pairs:
-            if val and val.lower() in name.lower():
-                findings.append(Finding(cat, path, None, mask(val)))
-        if not _is_text(path):
-            continue
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for n, text in enumerate(f, 1):
-                for cat, val in _scan_line(text, pairs):
-                    findings.append(Finding(cat, path, n, mask(val)))
+    for root in paths:
+        for path in _files([root]):
+            findings += _scan_file(path, os.path.relpath(path, root) if os.path.isdir(root) else os.path.basename(path), pairs)
+    return findings
+
+
+def _scan_file(path: str, rel: str, pairs) -> list:
+    findings = [Finding(cat, path, None, mask(val)) for cat, val in pairs
+                if val and any(val.lower() in part.lower() for part in rel.split(os.sep))]
+    if not _is_text(path):
+        return findings
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for n, text in enumerate(f, 1):
+            for cat, val in _scan_line(text, pairs):
+                findings.append(Finding(cat, path, n, mask(val)))
     return findings
 
 

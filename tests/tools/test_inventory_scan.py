@@ -64,3 +64,9 @@ def test_long_string_with_known_value_is_house_fact(tmp_path):
 def test_satellite_id_is_device_id(tmp_path):
     (tmp_path / "t.py").write_text('SAT = "sat-0a1b2c"\n')
     assert ("device_id", "t.py", 1) in _cats(scan_mod.scan([str(tmp_path)], []))
+
+
+def test_folder_name_is_scanned(tmp_path):
+    (tmp_path / "zelda").mkdir()
+    (tmp_path / "zelda" / "a.txt").write_text("x\n")
+    assert any(f.line is None for f in scan_mod.scan([str(tmp_path)], ["Zelda"]))

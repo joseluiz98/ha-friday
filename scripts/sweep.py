@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sweep: fail (exit 1) when the tree, or any commit of the history, carries a secret or house data.
 
-  python3 scripts/sweep.py [--history] [PATH...]      (default PATH: the repo root)
+  python3 scripts/sweep.py [--history | --staged] [PATH...]      (default PATH: the repo root)
 
 Private list: FRIDAY_SENSITIVE_LIST (default /config/.friday/sensitive.txt), used when present; without it (CI) only
 the generic patterns run. Exceptions: `.sweep-allow` at the repo root, one `<path-glob>:<regex>` per line.
@@ -37,6 +37,15 @@ GENERIC = {
 class AllowRule(NamedTuple):
     glob: str
     regex: re.Pattern
+    private: bool = False   # "private:<glob>:<regex>" also lets a private-list value through (explicit, e.g. LICENSE)
+
+
+LETTER = "A-Za-zÀ-ÖØ-öø-ÿ"
+
+
+def _has_value(text: str, val: str) -> bool:
+    """`val` as a whole word: not glued to another letter (so a handle like "xzelday98" is not the name "Zelda")."""
+    return re.search(rf"(?<![{LETTER}]){re.escape(val)}(?![{LETTER}])", text, re.I) is not None
 
 
 def parse_allow(lines) -> list[AllowRule]:
@@ -45,13 +54,14 @@ def parse_allow(lines) -> list[AllowRule]:
         s = raw.strip()
         if not s or s.startswith("#"):
             continue
-        glob, _, rx = s.partition(":")
-        rules.append(AllowRule(glob, re.compile(rx)))
+        private = s.startswith("private:")
+        glob, _, rx = s[len("private:"):].partition(":") if private else s.partition(":")
+        rules.append(AllowRule(glob, re.compile(rx), private))
     return rules
 
 
-def _allowed(path: str, text: str, allow) -> bool:
-    return any(fnmatch.fnmatch(path, r.glob) and r.regex.search(text) for r in allow)
+def _allowed(path: str, text: str, allow, private: bool = False) -> bool:
+    return any(fnmatch.fnmatch(path, r.glob) and r.regex.search(text) and (r.private or not private) for r in allow)
 
 
 def _line_hits(text: str, private) -> list[tuple[str, str]]:
@@ -66,16 +76,20 @@ def _line_hits(text: str, private) -> list[tuple[str, str]]:
     return hits
 
 
-def _scan_text(path: str, content: str, private, allow) -> list:
+def _scan_text(path: str, content: str, private, allow, rel: str | None = None) -> list:
+    """Private-list values are always reported (in the text and in every folder/file name of `rel`); an allow rule
+    only drops the GENERIC matches of its line."""
     out = []
-    name = os.path.basename(path)
+    parts = (rel or os.path.basename(path)).replace(os.sep, "/").split("/")
     for cat, val in private:
-        if val and val.lower() in name.lower() and not _allowed(path, name, allow):
+        if val and any(_has_value(p, val) for p in parts):
             out.append(scan.Finding(cat, path, None, scan.mask(val)))
     for n, line in enumerate(content.splitlines(), 1):
+        if not _allowed(path, line, allow, private=True):
+            out.extend(scan.Finding(cat, path, n, scan.mask(val)) for cat, val in private if val and _has_value(line, val))
         if _allowed(path, line, allow):
             continue
-        out.extend(scan.Finding(cat, path, n, scan.mask(v)) for cat, v in _line_hits(line, private))
+        out.extend(scan.Finding(cat, path, n, scan.mask(v)) for cat, v in _line_hits(line, []))
     return out
 
 
@@ -86,11 +100,14 @@ def _private(private) -> list[tuple[str, str]]:
 def sweep(paths: list[str], private: list, allow: list[AllowRule]) -> list:
     pv = _private(private)
     found = []
-    for path in scan._files([os.path.abspath(p) for p in paths]):
-        if not scan._is_text(path):
-            continue
-        with open(path, encoding="utf-8", errors="replace") as f:
-            found += _scan_text(path, f.read(), pv, allow)
+    for root in [os.path.abspath(p) for p in paths]:
+        for path in scan._files([root]):
+            rel = os.path.relpath(path, root) if os.path.isdir(root) else os.path.basename(path)
+            if not scan._is_text(path):
+                found += _scan_text(path, "", pv, allow, rel)
+                continue
+            with open(path, encoding="utf-8", errors="replace") as f:
+                found += _scan_text(path, f.read(), pv, allow, rel)
     return found
 
 
@@ -111,19 +128,33 @@ def sweep_history(repo: str, private: list, allow: list[AllowRule]) -> list:
         if b"\x00" in data[:8192]:
             continue
         found += [f._replace(path=f"{path}@{sha[:8]}") for f in
-                  _scan_text(os.path.join(repo, path), data.decode("utf-8", "replace"), pv, allow)]
+                  _scan_text(os.path.join(repo, path), data.decode("utf-8", "replace"), pv, allow, path)]
+    return found
+
+
+def sweep_staged(repo: str, private: list, allow: list[AllowRule]) -> list:
+    """What `git commit` would record: every staged blob (the index), not the working tree."""
+    pv = _private(private)
+    names = subprocess.run(["git", "-C", repo, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"],
+                           check=True, capture_output=True).stdout.decode().split("\0")
+    found = []
+    for path in filter(None, names):
+        data = subprocess.run(["git", "-C", repo, "show", f":{path}"], capture_output=True).stdout
+        text = "" if b"\x00" in data[:8192] else data.decode("utf-8", "replace")
+        found += _scan_text(os.path.join(repo, path), text, pv, allow, path)
     return found
 
 
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    history = "--history" in args
-    args = [a for a in args if a != "--history"] or [REPO]
+    history, staged = "--history" in args, "--staged" in args
+    args = [a for a in args if a not in ("--history", "--staged")] or [REPO]
     lst = os.environ.get("FRIDAY_SENSITIVE_LIST", DEFAULT_LIST)
     private = scan.load_known(lst) if os.path.exists(lst) else []
     allow_file = os.path.join(REPO, ".sweep-allow")
     allow = parse_allow(open(allow_file, encoding="utf-8")) if os.path.exists(allow_file) else []
-    found = sweep_history(args[0], private, allow) if history else sweep(args, private, allow)
+    found = (sweep_history(args[0], private, allow) if history else
+             sweep_staged(args[0], private, allow) if staged else sweep(args, private, allow))
     mode = "private list + generic" if private else "generic only"
     if found:
         print(f"❌ {len(found)} finding(s) ({mode}):")
