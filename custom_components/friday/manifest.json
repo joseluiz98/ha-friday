@@ -21,7 +21,7 @@
   "requirements": [
     "spake2==0.9"
   ],
-  "version": "0.1.0",
+  "version": "0.2.1",
   "zeroconf": [
     "_friday._tcp.local."
   ]
