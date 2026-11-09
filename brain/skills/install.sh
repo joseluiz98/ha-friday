@@ -28,7 +28,7 @@ def render(src, dst):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     with open(dst + ".new", "w", encoding="utf-8") as f:
         f.write(t)
-    shutil.copymode(src, dst + ".new")
+    os.chmod(dst + ".new", 0o755 if os.access(src, os.X_OK) else 0o644)
     os.replace(dst + ".new", dst)
 ours = sorted(d for d in os.listdir(here) if os.path.isdir(os.path.join(here, d)) and d != "__pycache__")
 for skill in ours:

@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 D=/opt/friday-satellite-agent
 VENV=/home/jose/oww
 if ! "$VENV/bin/python" -c "import zeroconf, spake2, cryptography" 2>/dev/null; then
-  nice -n 10 "$VENV/bin/pip" install -q -r satellite/requirements.lock
+  nice -n 10 "$VENV/bin/pip" install -q --no-deps -r satellite/requirements.lock   # the lock is complete (as in the image)
 fi
 mkdir -p "$D"
 rm -rf "$D/friday_satellite_agent" "$D/friday_agent_core"
