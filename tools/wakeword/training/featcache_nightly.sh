@@ -9,7 +9,7 @@
 set -uo pipefail
 [ -f /srv/friday/state/local.env ] && . /srv/friday/state/local.env   # FRIDAY_SAT_OFFICE (house value, never in the repo)
 C=/srv/wwt-featcache; A=/srv/wakeword-data/incoming/${FRIDAY_SAT_OFFICE:?set FRIDAY_SAT_OFFICE (local.env)}/gravacoes/ambiente
-CODE=/mnt/haos/config/tools/satelite/wakeword-training; TG=000000000; HOJE=$(date +%Y%m%d)
+CODE=/mnt/haos/config/tools/satelite/wakeword-training; TG=${FRIDAY_TELEGRAM_CHAT:?set FRIDAY_TELEGRAM_CHAT (local.env)}; HOJE=$(date +%Y%m%d)
 RETER_DIAS=30; CORTE=$(date -d "-$RETER_DIAS days" +%Y%m%d)
 falha() { oc message send --channel telegram --target "$TG" -m "Cache noturno das palavras falhou ($1). Log: journalctl -u friday-wwt-featcache" >/dev/null 2>&1; exit 1; }
 echo "marca da Pi: $(cat /srv/wakeword-data/incoming/${FRIDAY_SAT_OFFICE:?set FRIDAY_SAT_OFFICE (local.env)}/.sync_ok 2>/dev/null)"

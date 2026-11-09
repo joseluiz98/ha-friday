@@ -5,7 +5,7 @@
 # Uso: kaggle_watch.sh <owner/kernel> "<próximo passo>" [minutos] [horas_max]     DRY=1 não envia nem espera
 set -uo pipefail
 KID=${1:?kernel}; NEXT=${2:-}; MIN=${3:-15}; MAXH=${4:-8}
-SLUG=${KID##*/}; D=/srv/friday/state/kaggle-watch; ESTADO=$D/$SLUG; TG=000000000
+SLUG=${KID##*/}; D=/srv/friday/state/kaggle-watch; ESTADO=$D/$SLUG; TG=${FRIDAY_TELEGRAM_CHAT:?set FRIDAY_TELEGRAM_CHAT (local.env)}
 mkdir -p "$D"; rm -f "$ESTADO"
 LINK="https://www.kaggle.com/code/$KID"
 INICIO=$(date +%s)
