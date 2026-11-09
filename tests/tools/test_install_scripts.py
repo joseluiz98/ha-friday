@@ -65,7 +65,8 @@ def test_program_install_defers_when_satellite_busy(tmp_path):
     assert "restart deferred: satellite busy" in r.stdout and not marker.exists()
     prog = tmp_path / "satelite"
     assert (prog / "maestro.py").exists() and not (prog / "test_maestro.py").exists()
-    assert (prog / "FRIDAY_VERSION").read_text().strip() == LINE
+    # deferred restart: the running code is still the old one, so only the pending marker carries the new line
+    assert (prog / "FRIDAY_VERSION.pending").read_text().strip() == LINE and not (prog / "FRIDAY_VERSION").exists()
 
 
 def test_program_install_restarts_when_idle(tmp_path):

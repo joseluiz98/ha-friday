@@ -911,7 +911,13 @@ class Satelite:
 
 async def principal():
     loop = asyncio.get_running_loop()
+    cfgmod.promover_versao(os.path.dirname(os.path.abspath(__file__)))
     s = Satelite(loop)
+    try:
+        cfgmod.exigir_endereco(s.cfg)
+    except cfgmod.ConfiguracaoIncompleta as e:
+        print(json.dumps({"erro_fatal": str(e)}, ensure_ascii=False), flush=True)
+        raise SystemExit(2)
     n = s.vozes.limpar_novos()  # Review Focus 4: gravação ou treino interrompidos por um reinício
     if n:
         print(json.dumps({"aprendizagem": "pastas_novas_apagadas", "n": n}), flush=True)

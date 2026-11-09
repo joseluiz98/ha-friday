@@ -159,6 +159,25 @@ def _casa(caminho: str) -> dict:
         return {}
 
 
+def promover_versao(pasta: str) -> None:
+    """install.sh grava FRIDAY_VERSION.pending; só ao arrancar o código novo está carregado, então só aqui ele vira
+    FRIDAY_VERSION (que o agente informa à integração). Um reinício adiado deixa a versão antiga visível até lá."""
+    pend = os.path.join(pasta, "FRIDAY_VERSION.pending")
+    if os.path.exists(pend):
+        os.replace(pend, os.path.join(pasta, "FRIDAY_VERSION"))
+
+
+class ConfiguracaoIncompleta(RuntimeError):
+    """Falta um valor da casa sem o qual o satélite não fala com a F.R.I.D.A.Y."""
+
+
+def exigir_endereco(cfg: dict, casa: str = CASA) -> None:
+    """Sem `endereco_friday` o satélite liga e nunca conecta; parar já, dizendo qual chave e qual arquivo."""
+    if not cfg.get("endereco_friday"):
+        raise ConfiguracaoIncompleta(
+            f"endereco_friday ausente: grave-o em {casa} (a imagem o escreve no build) ou no config.json")
+
+
 def carregar(caminho: str, casa: str = CASA) -> dict:
     cfg = dict(PADROES)
     cfg.update(_casa(casa))

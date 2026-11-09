@@ -318,3 +318,37 @@ class TestDadosConexaoPausa(unittest.TestCase):
         self.assertNotIn("end_of_speech_pause_s", c.dados_conexao("sat-1", dict(c.PADROES)))
         cfg = dict(c.PADROES, end_of_speech_pause_s=1.2)
         self.assertEqual(c.dados_conexao("sat-1", cfg)["end_of_speech_pause_s"], 1.2)
+
+
+class TestEnderecoObrigatorio(unittest.TestCase):
+    def test_missing_server_address_names_key_and_file(self):
+        with self.assertRaises(c.ConfiguracaoIncompleta) as cm:
+            c.exigir_endereco({"endereco_friday": None})
+        self.assertIn("endereco_friday", str(cm.exception))
+        self.assertIn("/etc/friday-satelite/house.json", str(cm.exception))
+
+    def test_present_address_passes(self):
+        c.exigir_endereco({"endereco_friday": "https://192.0.2.20:7443"})
+
+
+class TestVersaoPendente(unittest.TestCase):
+    """install.sh grava FRIDAY_VERSION.pending; o programa só o promove ao arrancar, com o código novo carregado."""
+
+    def test_pending_promoted_at_start(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "FRIDAY_VERSION.pending"), "w") as f:
+                f.write("v0.2.2 abc\n")
+            with open(os.path.join(d, "FRIDAY_VERSION"), "w") as f:
+                f.write("v0.2.1 def\n")
+            c.promover_versao(d)
+            self.assertFalse(os.path.exists(os.path.join(d, "FRIDAY_VERSION.pending")))
+            with open(os.path.join(d, "FRIDAY_VERSION")) as f:
+                self.assertEqual(f.read(), "v0.2.2 abc\n")
+
+    def test_no_pending_keeps_version(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "FRIDAY_VERSION"), "w") as f:
+                f.write("v0.2.1 def\n")
+            c.promover_versao(d)
+            with open(os.path.join(d, "FRIDAY_VERSION")) as f:
+                self.assertEqual(f.read(), "v0.2.1 def\n")

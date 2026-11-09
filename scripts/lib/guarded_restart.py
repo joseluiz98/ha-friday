@@ -3,7 +3,7 @@
 
   guarded_restart.py gateway   POST FRIDAY_RESTART_URL (status port, Bearer token file); 202 = restarting, 409 = deferred
   guarded_restart.py program   GET :8700/status of the satellite program; idle = estado "parada", no timers, no alarm;
-                               idle -> `systemctl restart friday-satelite` (sudo), busy -> deferred
+                               idle -> `systemctl restart friday-satelite` (sudo), busy or unreachable -> deferred
 """
 import json
 import os
@@ -43,8 +43,13 @@ def program() -> int:
         cfg = json.load(f)
     base = os.environ.get("FRIDAY_PROGRAM_URL", f"http://127.0.0.1:{cfg.get('porta_local', 8700)}")
     req = urllib.request.Request(base + "/status", headers={"Authorization": f"Bearer {cfg['senha_porta_local']}"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        st = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            st = json.load(r)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # not running (or crashing): the new files load whenever systemd starts it; the deploy itself succeeded
+        print(f"restart deferred: program unreachable ({type(e).__name__})")
+        return 0
     if st.get("estado") != "parada" or st.get("timers") or st.get("alarme"):
         print("restart deferred: satellite busy")
         return 0
