@@ -98,6 +98,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         import sons
         sons.gerar(self.d)
         self.s = fs.Satelite(asyncio.get_running_loop())
+        import cadastro
+        self.s.vozes = cadastro.Vozes(os.path.join(self.d, "vozes"))  # never the Pi's /home/jose/vozes
         self.s.maestro.mudo = False  # a captura decidiria; aqui o microfone está liberado
 
     async def asyncTearDown(self):

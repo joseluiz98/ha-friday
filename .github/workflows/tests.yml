@@ -46,7 +46,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install numpy
+      - run: pip install numpy scipy zstandard
       - run: for d in status cataloger cost aec; do (cd server/$d && python -m unittest -q) || exit 1; done
       - run: for t in server/essentials/test_*.sh server/image/test_*.sh; do bash "$t" || exit 1; done
 

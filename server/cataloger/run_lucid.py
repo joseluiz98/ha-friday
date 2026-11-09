@@ -217,7 +217,8 @@ def record_usage(usage, day, started_at=None):
     """Appends the call's tokens to the cost usage ledger (spec 2026-10-23). Never raises: the dream goes on."""
     try:
         from datetime import timezone
-        sys.path.insert(0, "/opt/friday/cost")
+        sys.path.insert(0, "/opt/friday/cost")  # installed
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cost"))  # repo: server/cost next to server/cataloger
         import ledger
         prompt = int(usage.get("promptTokenCount") or 0)
         cached = int(usage.get("cachedContentTokenCount") or 0)

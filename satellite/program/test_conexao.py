@@ -1,8 +1,8 @@
 """cd ~/satelite && ~/oww/bin/python -m unittest test_conexao -v   (na Pi: precisa de aiortc/aiohttp)"""
 import asyncio, json, os, tempfile, unittest
 import importlib.util
-if importlib.util.find_spec("aiohttp") is None:  # the Pi venv and CI have it; a bare python does not
-    raise unittest.SkipTest("needs aiohttp")
+if importlib.util.find_spec("aiohttp") is None or importlib.util.find_spec("av") is None:  # Pi venv only (aiortc stack)
+    raise unittest.SkipTest("needs aiohttp and av")
 from aiohttp.test_utils import TestClient, TestServer
 import configuracao as c
 import porta_local
