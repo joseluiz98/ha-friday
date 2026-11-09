@@ -45,3 +45,7 @@ class ProgramClient:
 
     async def set_wakeword(self, name: str, **fields) -> dict:
         return await self._call("PUT", f"/wakewords/{name}", fields)
+
+    async def command(self, body: dict) -> dict:
+        """POST /command: provisioning commands (play_phrases, ring, wake_word_test, open_presentation)."""
+        return await self._call("POST", "/command", body)

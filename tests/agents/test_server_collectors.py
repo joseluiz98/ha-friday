@@ -18,14 +18,19 @@ def test_vm_metrics_from_proc_samples():
 
 def test_status_metrics_maps_fields():
     s = {"ready": True, "last_dream": "2026-10-29T05:00:00Z", "restarted_in_process": False,
-         "openclaw_version": "2026.9.9", "lucid": {"finished_at": "2026-10-29T03:31:00Z"},
+         "openclaw_version": "2026.9.9",
+         "lucid": {"finished_at": "2026-10-29T03:31:00Z", "date": "2026-10-28", "status": "ok",
+                   "cost_usd": 0.012, "facts_added": 2, "user_md_chars": 900},
          "memory_views": {"mode": "ab"}, "conversation_open": True}
     m = c.status_metrics(s)
     assert m == {"brain_ready": True, "brain_last_dream": "2026-10-29T05:00:00Z",
                  "brain_restarted_in_process": False, "brain_version": "2026.9.9",
-                 "lucid_last_run": "2026-10-29T03:31:00Z", "memory_views_mode": "ab",
-                 "conversation_open": True}
+                 "lucid_last_run": "2026-10-29T03:31:00Z",
+                 "lucid_last_run_attributes": {"date": "2026-10-28", "status": "ok", "cost_usd": 0.012,
+                                               "facts_added": 2},
+                 "memory_views_mode": "ab", "conversation_open": True, "conversation_open_attributes": None}
     assert c.status_metrics({})["lucid_last_run"] is None
+    assert c.status_metrics({})["lucid_last_run_attributes"] is None
 
 
 def test_conversation_open_logic():
@@ -41,15 +46,24 @@ def test_proxmox_metrics_maps_fields():
     assert m["host_available_mb"] == 2000
     assert m["nvme_temperature"] == 47
     assert m["last_backup"].startswith("2025-10-29")
+    assert m["last_backup_attributes"] == {"status": "OK"}
     empty = c.proxmox_metrics({}, {}, {})
-    assert empty == {"host_available_mb": None, "nvme_temperature": None, "last_backup": None}
+    assert empty == {"host_available_mb": None, "nvme_temperature": None, "last_backup": None,
+                     "last_backup_attributes": None}
+
+
+def test_memory_index_last_success_from_stamp_mtime():
+    assert c.memory_index_metrics(1761700000.7) == {"memory_index_last_success": "2025-10-29T01:06:40+00:00"}
+    assert c.memory_index_metrics(None) == {"memory_index_last_success": None}
 
 
 def test_capabilities_keys_match_metrics():
     keys = {d["key"] for d in c.capabilities(proxmox=True)}
     produced = set(c.status_metrics({})) | set(c.proxmox_metrics({}, {}, {})) | set(
-        c.vm_metrics(MEMINFO, "0 0 0", (1, 1, 1, 1), "1 1", 1))
-    assert produced <= keys
+        c.vm_metrics(MEMINFO, "0 0 0", (1, 1, 1, 1), "1 1", 1)) | set(c.memory_index_metrics(None))
+    attrs = {k for k in produced if k.endswith("_attributes")}
+    assert produced - attrs <= keys
+    assert {k.removesuffix("_attributes") for k in attrs} <= keys
 
 
 def test_proxmox_unavailable_without_token():
@@ -99,3 +113,30 @@ def test_reminders_only_home_enabled_future_sorted():
     assert [x["name"] for x in out] == ["a", "b"]
     assert out[0]["at"] == "1970-01-01T00:33:20+00:00"
     assert r.DESCRIPTOR in c.capabilities(False)
+
+
+def test_activity_view_counts_sessions_and_brain_turns():
+    a = {"updated_at": 1000.0, "sessions": ["voz-1", "voz-2"], "brain_turns": 1}
+    assert c.activity_view(a, 1010.0) == {"conversation_open": True, "sessions": 2, "brain_turns": 1}
+    assert c.activity_view({"updated_at": 1000.0, "sessions": [], "brain_turns": 0}, 1010.0)["conversation_open"] is False
+
+
+def test_activity_stale_heartbeat_means_nothing_open():
+    """Minor 13: a crash mid-session used to block restarts for up to 6 h (log rule)."""
+    a = {"updated_at": 1000.0, "sessions": ["voz-1"], "brain_turns": 2}
+    assert c.activity_view(a, 1000.0 + c.ACTIVITY_STALE_S + 1) == {
+        "conversation_open": False, "sessions": 0, "brain_turns": 0}
+    assert c.is_busy(a, 1000.0 + c.ACTIVITY_STALE_S + 1, lambda: "x cliente conectado\n") is False
+
+
+def test_is_busy_with_brain_turn_and_no_session():
+    a = {"updated_at": 1000.0, "sessions": [], "brain_turns": 1}
+    assert c.is_busy(a, 1001.0, lambda: None) is True
+
+
+def test_is_busy_falls_back_to_log_and_fails_closed():
+    assert c.is_busy(None, 0, lambda: "x cliente conectado\n") is True
+    assert c.is_busy({"bad": 1}, 0, lambda: "x cliente conectado\nx cliente desconectado\n") is False
+    import pytest
+    with pytest.raises(OSError):
+        c.is_busy(None, 0, lambda: None)

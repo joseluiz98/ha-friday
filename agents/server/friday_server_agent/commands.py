@@ -1,7 +1,8 @@
 """Button commands of the server agent: Restart F.R.I.D.A.Y. (the whole container).
 
 Rule copied from /opt/friday/status/friday_status.py POST /v1/restart: refuse while a voice
-conversation is open (decided from the container log) or when the log cannot be read.
+conversation is open or a brain turn is in flight (from the bot's activity file; the container log
+when the file is missing) or when neither can be read.
 
 Voice Gateway / Brain have no separate restart: see README ("Process restarts").
 """
@@ -10,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+import time
 
 COMPOSE = "/opt/friday/image/docker-compose.yml"
 RESTART_DESCRIPTOR = {"key": "restart_friday", "platform": "button", "name": "Restart F.R.I.D.A.Y.",
@@ -23,20 +25,18 @@ def compose_restart() -> None:
                      stderr=subprocess.DEVNULL, start_new_session=True)
 
 
-def make_handlers(log_tail, restart, push_log):
+def make_handlers(log_tail, restart, push_log, read_activity=lambda: None):
     """`log_tail()` returns the container log text (may raise OSError/SubprocessError);
+    `read_activity()` returns the bot's activity dict or None (then the log decides);
     `restart()` starts the restart; `push_log` is an async callable(message, data)."""
 
-    from .collectors import conversation_open
+    from .collectors import is_busy
 
     async def press(cmd: dict) -> dict:
         if cmd.get("key") != "restart_friday":
             return {"ok": False, "error": "unknown_key"}
         try:
-            text = await asyncio.to_thread(log_tail)
-            if text is None:
-                raise OSError("no log")
-            busy = conversation_open(text)
+            busy = await asyncio.to_thread(is_busy, read_activity(), time.time(), log_tail)
         except (OSError, subprocess.SubprocessError):
             await push_log("Restart F.R.I.D.A.Y. refused: container log unavailable", {})
             return {"ok": False, "error": "log_unavailable"}

@@ -18,6 +18,14 @@
           "token": "Senha",
           "area_id": "Área"
         }
+      },
+      "pair": {
+        "title": "Satellite {id}",
+        "description": "Digite o código de 4 dígitos que o satélite está falando.",
+        "data": {
+          "code": "Código",
+          "area_id": "Área"
+        }
       }
     },
     "abort": {
@@ -25,7 +33,13 @@
       "satellite_added": "Satélite adicionado.",
       "no_entry": "Adicione primeiro a integração F.R.I.D.A.Y.",
       "not_supported": "Dispositivo não suportado.",
-      "already_configured": "Já configurado."
+      "already_configured": "Já configurado.",
+      "reauth_successful": "Satélite adotado de novo, com um token novo."
+    },
+    "error": {
+      "bad_code": "Código errado. Restam {attempts_left} tentativas.",
+      "locked": "Tentativas demais: o satélite falou um código novo.",
+      "cannot_connect": "Não consegui falar com o satélite."
     }
   },
   "config_subentries": {
@@ -157,6 +171,16 @@
         "password": {
           "name": "Senha",
           "description": "Senha da rede (8 a 63 caracteres); nunca guardada."
+        }
+      }
+    },
+    "retry_provisioning": {
+      "name": "Refazer a instalação",
+      "description": "Refaz as etapas da instalação que falharam em um satélite.",
+      "fields": {
+        "device_id": {
+          "name": "Satélite",
+          "description": "O satélite."
         }
       }
     }

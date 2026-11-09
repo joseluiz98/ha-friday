@@ -9,7 +9,7 @@ from friday_satellite_agent import capabilities as cap  # noqa: E402
 from friday_satellite_agent import local  # noqa: E402
 
 CFG = {"volume": 6, "nao_perturbe": False, "volume_alertas": 6, "alarm_ramp_s": 0, "volume_sons": -12,
-       "whisper_min_ratio_db": 5.5, "espera_resposta_s": 8, "music_duck_percent": 15, "music_restore_s": 1.0,
+       "whisper_min_ratio_db": 5.5, "espera_resposta_s": 8, "continuacao_s": 5, "music_duck_percent": 15, "music_restore_s": 1.0,
        "limiar_palavra": 0.5, "modo_friday": "ativa",
        "palavras_extras": [{"nome": "sexta_feira", "modo": "sombra", "limiar": 0.35}]}
 WW = [{"nome": "friday", "modo": "ativa", "limiar": 0.5, "principal": True, "treinada": True},
@@ -25,15 +25,19 @@ def test_volume_percent_position_roundtrip():
     assert cap.percent_from_position(0) == 0
 
 
+def _nums(c):
+    return {k: v for k, v in c.items() if not k.endswith("_attributes")}
+
+
 def test_controls_cover_existing_settings():
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     for k in ("volume", "do_not_disturb", "alarm_volume", "alarm_ramp", "sounds_volume", "whisper_mode",
-              "follow_up", "ducking", "ducking_level", "ducking_restore", "wakeword_friday_mode",
+              "reply_wait", "ducking", "ducking_level", "ducking_restore", "wakeword_friday_mode",
               "wakeword_sexta_feira_sensitivity", "program_state", "activations_today", "rejected_today",
               "last_activation", "sw_version", "activation"):
         assert k in keys, k
     assert keys["volume"].get("category") is None and keys["do_not_disturb"].get("category") is None
-    assert keys["follow_up"]["category"] == "config"
+    assert keys["reply_wait"]["category"] == "config"
     assert keys["activation"]["event_types"] == ["conversation", "rejected", "shadow"]
     assert keys["wakeword_friday_mode"]["options"] == ["active", "shadow", "off"]
 
@@ -100,7 +104,7 @@ def test_activation_events_idempotent_conversation_state():
     assert t.on_event("config", {"mudancas": {}, "origem": "porta"})["origin"] == "agent"
     assert t.on_event("config", {"mudancas": {"volume": 3}, "origem": "porta"})["origin"] == "agent"
     t.reset_day()
-    assert t.counters() == {"activations_today": 0, "rejected_today": 0}
+    assert _nums(t.counters()) == {"activations_today": 0, "rejected_today": 0}
 
 
 async def test_local_event_requires_localhost_and_token(aiohttp_client):
@@ -149,18 +153,18 @@ def test_daily_counters_survive_agent_restart_and_reset_on_new_day(tmp_path):
     t.on_event("ativacao", {"palavra": "friday", "resultado": "barrada"})
     t.on_event("ativacao", {"palavra": "friday", "resultado": "barrada"})
     again = cap.Tracker(path=path, today=lambda: day[0])  # agent restart, same day
-    assert again.counters() == {"activations_today": 1, "rejected_today": 2}
+    assert _nums(again.counters()) == {"activations_today": 1, "rejected_today": 2}
     day[0] = "2026-10-31"
-    assert cap.Tracker(path=path, today=lambda: day[0]).counters() == {"activations_today": 0, "rejected_today": 0}
+    assert _nums(cap.Tracker(path=path, today=lambda: day[0]).counters()) == {"activations_today": 0, "rejected_today": 0}
     again.reset_day()
     day[0] = "2026-10-30"
-    assert cap.Tracker(path=path, today=lambda: day[0]).counters() == {"activations_today": 0, "rejected_today": 0}
+    assert _nums(cap.Tracker(path=path, today=lambda: day[0]).counters()) == {"activations_today": 0, "rejected_today": 0}
 
 
 def test_daily_counters_corrupt_file_is_ignored(tmp_path):
     p = tmp_path / "c.json"
     p.write_text("not json")
-    assert cap.Tracker(path=str(p)).counters() == {"activations_today": 0, "rejected_today": 0}
+    assert _nums(cap.Tracker(path=str(p)).counters()) == {"activations_today": 0, "rejected_today": 0}
 
 
 def test_daily_counters_have_no_state_class():
@@ -221,3 +225,135 @@ def test_rejected_event_carries_cause_and_counts():
     t = cap.Tracker()
     ev = t.on_event("ativacao", {"palavra": "friday", "nota": 0.86, "resultado": "barrada", "causa": "sem_voz"})
     assert ev["event"][1] == "rejected" and ev["event"][2]["cause"] == "no_voice" and ev["state"]["rejected_today"] == 1
+
+
+def test_close_mic_awaiting_reply_switch():
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    d = keys["close_mic_awaiting_reply"]
+    assert d["platform"] == "switch" and d["name"] == "Close mic while awaiting reply"
+    m = cap.Mapper()
+    assert m.state(CFG, WW, None)["close_mic_awaiting_reply"] is False  # absent = off (program default)
+    assert m.state(dict(CFG, close_mic_awaiting_reply=True), WW, None)["close_mic_awaiting_reply"] is True
+    assert m.to_program(CFG, "close_mic_awaiting_reply", True) == {"config": {"close_mic_awaiting_reply": True}}
+
+
+def test_follow_up_entities_names_and_mapping():
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    assert "follow_up" not in keys
+    spec = {
+        "reply_wait": ("number", "Reply wait", (2, 30, 1)),
+        "follow_up_window": ("number", "Follow-up window", (0, 30, 1)),
+        "no_follow_up_while_music": ("switch", "No follow-up while music plays", None),
+        "no_follow_up_after_home_commands": ("switch", "No follow-up after home commands", None),
+        "end_of_speech_pause": ("number", "End-of-speech pause", (0.5, 2.0, 0.1)),
+    }
+    for k, (plat, name, rng) in spec.items():
+        assert keys[k]["platform"] == plat and keys[k]["name"] == name, k
+        assert keys[k]["category"] == "config", k
+        if rng:
+            assert (keys[k]["min"], keys[k]["max"], keys[k]["step"]) == rng, k
+    m = cap.Mapper()
+    st = m.state(dict(CFG, no_follow_up_while_music=False, no_follow_up_after_home_commands=False,
+                      end_of_speech_pause_s=1.2), WW, None)
+    assert (st["reply_wait"], st["follow_up_window"]) == (8, 5)
+    assert st["no_follow_up_while_music"] is False and st["no_follow_up_after_home_commands"] is False
+    assert st["end_of_speech_pause"] == 1.2
+    st = m.state(CFG, WW, None)  # absent = defaults
+    assert st["no_follow_up_while_music"] is True and st["no_follow_up_after_home_commands"] is True
+    assert st["end_of_speech_pause"] == 0.8
+    assert m.to_program(CFG, "reply_wait", 9) == {"config": {"espera_resposta_s": 9}}
+    assert m.to_program(CFG, "follow_up_window", 7.0) == {"config": {"continuacao_s": 7}}
+    assert isinstance(m.to_program(CFG, "follow_up_window", 7.0)["config"]["continuacao_s"], int)
+    assert m.to_program(CFG, "no_follow_up_while_music", False) == {"config": {"no_follow_up_while_music": False}}
+    assert m.to_program(CFG, "no_follow_up_after_home_commands", True) == {
+        "config": {"no_follow_up_after_home_commands": True}}
+    assert m.to_program(CFG, "end_of_speech_pause", 1.2) == {"config": {"end_of_speech_pause_s": 1.2}}
+    assert m.to_program(CFG, "follow_up", 9) is None
+
+
+def test_last_wake_word_from_conversation():
+    t = cap.Tracker()
+    ev = t.on_event("ativacao", {"palavra": "sexta_feira", "nota": 0.8, "resultado": "conversa"})
+    assert ev["state"]["last_wake_word"] == "sexta_feira"
+    attrs = ev["state"]["last_wake_word_attributes"]
+    assert attrs["score"] == 0.8 and attrs["at"]
+    d = {x["key"]: x for x in cap.controls_from_config({}, [])}
+    assert d["last_wake_word"]["platform"] == "sensor" and d["last_wake_word"]["category"] == "diagnostic"
+
+
+def test_rejected_does_not_change_last_word():
+    t = cap.Tracker()
+    t.on_event("ativacao", {"palavra": "friday", "nota": 0.8, "resultado": "conversa"})
+    ev = t.on_event("ativacao", {"palavra": "sexta_feira", "nota": 0.3, "resultado": "barrada"})
+    assert "last_wake_word" not in ev["state"]
+    ev = t.on_event("ativacao", {"palavra": "sexta_feira", "resultado": "sombra"})
+    assert "last_wake_word" not in (ev.get("state") or {})
+
+
+def test_counts_by_word_and_reset_day():
+    t = cap.Tracker()
+    for w in ("friday", "friday", "sexta_feira"):
+        t.on_event("ativacao", {"palavra": w, "resultado": "conversa"})
+    assert t.counters()["activations_today_attributes"] == {"by_word": {"friday": 2, "sexta_feira": 1}}
+    t.reset_day()
+    assert t.counters()["activations_today_attributes"] == {"by_word": {}}
+
+
+def test_counts_by_word_survive_restart(tmp_path):
+    path, day = str(tmp_path / "c.json"), ["2026-11-05"]
+    t = cap.Tracker(path=path, today=lambda: day[0])
+    t.on_event("ativacao", {"palavra": "friday", "resultado": "conversa"})
+    again = cap.Tracker(path=path, today=lambda: day[0])
+    assert again.counters()["activations_today_attributes"] == {"by_word": {"friday": 1}}
+    day[0] = "2026-11-06"
+    assert cap.Tracker(path=path, today=lambda: day[0]).counters()["activations_today_attributes"] == {"by_word": {}}
+    # old file format without the new key still loads
+    import json
+    (tmp_path / "old.json").write_text(json.dumps({"date": "2026-11-05", "act": 3, "rej": 1}))
+    old = cap.Tracker(path=str(tmp_path / "old.json"), today=lambda: "2026-11-05")
+    assert _nums(old.counters()) == {"activations_today": 3, "rejected_today": 1}
+    assert old.counters()["activations_today_attributes"] == {"by_word": {}}
+
+
+class _Zc:
+    def __init__(self): self.closed = False
+    def close(self): self.closed = True
+
+
+async def test_keeper_waits_for_the_network_then_announces_and_follows_the_address():
+    from friday_satellite_agent import announce as an
+    ips = [OSError("unreachable"), "127.0.0.1", "192.0.2.34", "192.0.2.34", "192.0.2.35"]
+    made = []
+
+    def ip_fn():
+        v = ips.pop(0)
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    def fake(sat_id, port, state):
+        made.append((sat_id, port, state, _Zc()))
+        return made[-1][3]
+
+    box = []
+    k = an.Keeper("sat-1", 8701, "pairable", box, announce_fn=fake, ip_fn=ip_fn)
+    await k.step(); await k.step()
+    assert made == [] and box == []  # no route, then only loopback: nothing announced
+    await k.step()
+    assert len(made) == 1 and made[0][:3] == ("sat-1", 8701, "pairable") and box == [made[0][3]]
+    await k.step()
+    assert len(made) == 1  # same address: nothing to do
+    await k.step()
+    assert len(made) == 2 and made[0][3].closed and box == [made[1][3]]
+
+
+async def test_keeper_tries_again_when_the_announcement_fails():
+    from friday_satellite_agent import announce as an
+    box, results = [], [None, _Zc()]
+    k = an.Keeper("sat-1", 8701, "paired", box, announce_fn=lambda *a: results.pop(0), ip_fn=lambda: "192.0.2.34")
+    await k.step()
+    assert box == [] and len(results) == 1
+    await k.step()
+    assert len(box) == 1 and results == []
+    k.close()
+    assert box == []

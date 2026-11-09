@@ -43,18 +43,57 @@ def conversation_open(log_text: str) -> bool:
     return aberta
 
 
+LUCID_ATTRS = ("date", "status", "cost_usd", "turns_in", "facts_added", "facts_corrected",
+               "directives_changed", "discarded")
+
+
+ACTIVITY_STALE_S = 90
+
+
+def activity_view(activity: dict | None, now: float) -> dict | None:
+    """activity = the bot's /srv/friday/state/activity.json (sessions open, brain turns in flight,
+    heartbeat every 20 s). None when absent/unreadable (caller falls back to the log rule).
+    A stale heartbeat means the bot is not running: nothing is open."""
+    if not isinstance(activity, dict):
+        return None
+    try:
+        age = now - float(activity["updated_at"])
+        sessions = len(activity.get("sessions") or [])
+        brain = int(activity.get("brain_turns") or 0)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if age > ACTIVITY_STALE_S:
+        return {"conversation_open": False, "sessions": 0, "brain_turns": 0}
+    return {"conversation_open": sessions > 0, "sessions": sessions, "brain_turns": brain}
+
+
+def is_busy(activity: dict | None, now: float, log_tail) -> bool:
+    """Restart guard: busy with an open session OR a brain turn in flight. Without a readable
+    activity file, the old log rule; `log_tail()` returning None raises OSError (fail closed)."""
+    view = activity_view(activity, now)
+    if view is not None:
+        return view["conversation_open"] or view["brain_turns"] > 0
+    text = log_tail()
+    if text is None:
+        raise OSError("no log")
+    return conversation_open(text)
+
+
 def status_metrics(status: dict) -> dict:
     """status = JSON of GET :8800/v1/status plus `conversation_open` added by the agent."""
     lucid = status.get("lucid") or {}
     views = status.get("memory_views") or {}
+    lucid_attrs = {k: lucid[k] for k in LUCID_ATTRS if k in lucid} or None
     return {
         "brain_ready": bool(status.get("ready")) if "ready" in status else None,
         "brain_last_dream": status.get("last_dream"),
         "brain_restarted_in_process": status.get("restarted_in_process"),
         "brain_version": status.get("openclaw_version"),
         "lucid_last_run": lucid.get("finished_at"),
+        "lucid_last_run_attributes": lucid_attrs,
         "memory_views_mode": views.get("mode"),
         "conversation_open": status.get("conversation_open"),
+        "conversation_open_attributes": status.get("conversation_open_attributes"),
     }
 
 
@@ -64,6 +103,7 @@ def status_changes(status: dict) -> dict:
     out = status_metrics(status)
     if "conversation_open" not in status:
         out.pop("conversation_open")
+        out.pop("conversation_open_attributes")
     return out
 
 
@@ -92,8 +132,16 @@ def proxmox_metrics(node_status: dict, smart: dict, last_vzdump: dict) -> dict:
     data = last_vzdump.get("data") or []
     end = data[0].get("endtime") if data else None
     backup = datetime.fromtimestamp(end, timezone.utc).isoformat() if end else None
+    status = data[0].get("status") if data else None
     return {"host_available_mb": mb, "nvme_temperature": int(found[0]) if found else None,
-            "last_backup": backup}
+            "last_backup": backup, "last_backup_attributes": {"status": status} if status else None}
+
+
+def memory_index_metrics(stamp_mtime: float | None) -> dict:
+    """stamp_mtime = mtime of the file the memory-index unit touches after a successful run (ExecStartPost)."""
+    when = (datetime.fromtimestamp(int(stamp_mtime), timezone.utc).isoformat()
+            if stamp_mtime is not None else None)
+    return {"memory_index_last_success": when}
 
 
 VOICE_DESCRIPTOR = DESCRIPTOR
@@ -117,6 +165,7 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("brain_version", "Brain version", **diag),
         s("lucid_last_run", "Lucid Dreaming last run", device_class="timestamp"),
         s("memory_views_mode", "Memory views mode", **diag),
+        s("memory_index_last_success", "Memory index last success", device_class="timestamp", **diag),
         s("conversation_open", "Conversation open", platform="binary_sensor"),
         s("host_available_mb", "Proxmox host available memory", unit="MB", available=proxmox, **m),
         s("nvme_temperature", "Proxmox NVMe temperature", unit="°C", device_class="temperature",

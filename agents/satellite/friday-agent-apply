@@ -1,0 +1,30 @@
+#!/bin/sh
+# Root helper (installed as /usr/local/sbin/friday-agent-apply, root:root 0755; the only thing sudoers lets the agent
+# run for this). Copies a validated agent bundle from the agent's staging area into /opt/friday-satellite-agent.
+#   friday-agent-apply <bundles>/stage-XXXX/agent
+# FRIDAY_AGENT_DEST / FRIDAY_AGENT_BUNDLES exist for tests only: sudo's env_reset drops them in production.
+set -eu
+SRC="${1:?usage: friday-agent-apply STAGE/agent}"
+DEST="${FRIDAY_AGENT_DEST:-/opt/friday-satellite-agent}"
+BUNDLES="${FRIDAY_AGENT_BUNDLES:-/home/jose/.friday-agent/bundles}"
+case "$SRC" in
+  "$BUNDLES"/stage-*/agent) ;;
+  *) echo "refused: not a staging path" >&2; exit 2 ;;
+esac
+[ -d "$SRC" ] && [ ! -L "$SRC" ] || { echo "refused: not a directory" >&2; exit 2; }
+[ "$(realpath "$SRC")" = "$SRC" ] || { echo "refused: symlinked path" >&2; exit 2; }
+[ -f "$SRC/friday_satellite_agent/__main__.py" ] && [ -d "$SRC/friday_agent_core" ] || { echo "refused: layout" >&2; exit 3; }
+mkdir -p "$DEST"
+for d in friday_satellite_agent friday_agent_core; do
+  rm -rf "$DEST/$d.new"
+  cp -r "$SRC/$d" "$DEST/$d.new"
+  find "$DEST/$d.new" -name __pycache__ -prune -exec rm -rf {} +
+  chmod -R u=rwX,go=rX "$DEST/$d.new"   # the agent runs as jose: root-only files would keep it from starting
+  [ "$(id -u)" != 0 ] || chown -R root:root "$DEST/$d.new"
+done
+for d in friday_satellite_agent friday_agent_core; do
+  rm -rf "$DEST/$d.old"
+  [ ! -e "$DEST/$d" ] || mv "$DEST/$d" "$DEST/$d.old"
+  mv "$DEST/$d.new" "$DEST/$d"
+  rm -rf "$DEST/$d.old"
+done

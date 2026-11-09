@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import area_registry as ar, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity, EntityCategory
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -17,6 +18,21 @@ from .const import DOMAIN
 from .protocol import Descriptor
 
 _CATEGORIES = {"config": EntityCategory.CONFIG, "diagnostic": EntityCategory.DIAGNOSTIC}
+# 06/11: a satellite's settings (turn sounds, ducking, wake word modes...) are not part of the room it sits in.
+# Assist targets an entity by its own area first and the device's only as a fallback, so "turn off the office"
+# switched the turn sounds off. Their own area keeps them reachable by name and out of room-wide commands.
+SETTINGS_AREA = "Ajustes do Mark"
+
+
+def place_in_settings_area(hass: HomeAssistant, entity_id: str) -> None:
+    """Moves a satellite setting to SETTINGS_AREA (created without a floor). An area the user chose is kept."""
+    reg = er.async_get(hass)
+    ent = reg.async_get(entity_id)
+    if ent is None or ent.area_id is not None:
+        return
+    areas = ar.async_get(hass)
+    area = areas.async_get_area_by_name(SETTINGS_AREA) or areas.async_create(SETTINGS_AREA, icon="mdi:tune-variant")
+    reg.async_update_entity(entity_id, area_id=area.id)
 
 
 class FridayEntity(Entity):
@@ -56,6 +72,9 @@ class FridayEntity(Entity):
         return self._connection.state.get(self.descriptor.key)
 
     async def async_added_to_hass(self) -> None:
+        if (self._attr_entity_category == EntityCategory.CONFIG
+                and self._connection.hello.device.get("kind") == "satellite"):
+            place_in_settings_area(self.hass, self.entity_id)
         self.async_on_remove(self._connection.add_listener(self._on_changes))
         self.async_on_remove(
             self._connection.add_availability_listener(self._on_availability)
@@ -63,8 +82,14 @@ class FridayEntity(Entity):
 
     @callback
     def _on_changes(self, changes: dict, origin: str) -> None:
-        if self.descriptor.key in changes:
+        if self.descriptor.key in changes or f"{self.descriptor.key}_attributes" in changes:
             self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self):
+        """Protocol v1: state key `<key>_attributes` (a dict) becomes the entity's attributes."""
+        attrs = self._connection.state.get(f"{self.descriptor.key}_attributes")
+        return attrs if isinstance(attrs, dict) else None
 
     @callback
     def _on_availability(self, _up: bool) -> None:

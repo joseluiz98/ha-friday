@@ -7,6 +7,7 @@ import datetime
 import json
 import logging
 import os
+import secrets
 
 from aiohttp import web
 
@@ -16,10 +17,11 @@ from . import capabilities as cap
 from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
-from . import local, recordings
+from . import local, pairing, provision, recordings, server_watch
 from . import room_sensors
 from . import wifi
-from .announce import announce
+from .announce import Keeper, lan_ip as _lan_ip
+from . import power as power_mod
 from .power import Power
 from .program import ProgramClient, ProgramError
 
@@ -34,6 +36,11 @@ def read_timers() -> list | None:
             return json.load(f)
     except (OSError, ValueError):
         return None
+ETC_DIR = os.path.dirname(CONFIG)  # /etc/friday-satelite: pairable, ha_token, mic
+_exit = os._exit  # replaced in tests
+PROGRAM_DIR = os.environ.get("FRIDAY_SAT_PROGRAM_DIR", "/home/jose/satelite")
+BUNDLES = os.path.expanduser("~/.friday-agent/bundles")
+APPLY_AGENT = ["sudo", "-n", "/usr/local/sbin/friday-agent-apply"]
 ID_FILE = os.environ.get("FRIDAY_SAT_ID_FILE", "/etc/friday-satelite/id")
 RECORDINGS = os.environ.get("FRIDAY_SAT_RECORDINGS", "/home/jose/gravacoes/ativacoes")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8701"))
@@ -60,6 +67,13 @@ async def main() -> None:
         raise SystemExit("missing local port password")
     sat_id = _sat_id()
     program = ProgramClient(token, f"http://127.0.0.1:{program_port}")
+    # `token` above is the program's local password (program <-> agent, loopback). The token HA must present is a
+    # different thing: the one HA issued at adoption, or - legacy satellites paired by hand - that same password.
+    pairable = pairing.pairing_state(ETC_DIR) == "pairable"
+    # while pairable nobody can know the agent token: a random one that is never disclosed
+    ha_token = secrets.token_urlsafe(32) if pairable else pairing.agent_token(ETC_DIR, {"senha_porta_local": token})
+    session = pairing.PairingSession() if pairable else None
+    zc_box: list = []
     mapper, tracker = cap.Mapper(), cap.Tracker(path=COUNTERS)
     memo: dict = {"cfg": None, "ww": [], "state": {"program_state": "off", **tracker.counters(),
                                                    "sw_version": cap.VERSION, "wifi_change": "idle"}}
@@ -92,8 +106,43 @@ async def main() -> None:
             off_task.append(asyncio.create_task(voice_off()))
         return {"ok": True}
 
+    async def apply_agent(stage: str) -> int:
+        return await power_mod.run_command(APPLY_AGENT + [stage])
+
+    prov = provision.Provisioner(
+        etc_dir=ETC_DIR, config_path=CONFIG, ssh_dir=os.path.expanduser("~/.ssh"), program_dir=PROGRAM_DIR,
+        bundles_dir=BUNDLES, voices_dir=os.path.expanduser("~/vozes"), models_dir=os.path.expanduser("~/modelos"),
+        program=program, restart_program=power.restart_program, apply_agent=apply_agent,
+        exit_fn=lambda code: _exit(code), ip_fn=lambda: _lan_ip())
+
+    def _args(cmd: dict) -> dict:
+        return cmd["args"] if isinstance(cmd.get("args"), dict) else cmd
+
+    async def do_provision_info(cmd: dict) -> dict:
+        return await prov.info()
+
+    async def do_apply_bundle(cmd: dict) -> dict:
+        a = _args(cmd)
+        return await prov.apply_bundle(a.get("kind"), a.get("url"), a.get("sha256"))
+
+    async def do_start_onboarding(cmd: dict) -> dict:
+        return await prov.start_onboarding(_args(cmd).get("facts"))
+
+    async def do_factory_reset(cmd: dict) -> dict:
+        return await prov.factory_reset(_args(cmd).get("level"))
+
+    async def do_say(cmd: dict) -> dict:
+        keys = _args(cmd).get("keys")
+        if not isinstance(keys, list) or not keys or not all(isinstance(k, str) for k in keys):
+            return {"ok": False, "error": "invalid"}
+        return {"ok": await prov.say(keys)}
+
     async def do_press(cmd: dict) -> dict:
         key = cmd.get("key")
+        if key == "reset_network":
+            return await prov.factory_reset(1)
+        if key == "reset_home":
+            return await prov.press_reset_home()
         if key == "reboot":
             return await power.reboot()
         if key == "restart_program":
@@ -204,6 +253,8 @@ async def main() -> None:
 
     async def on_event(tipo: str, dados: dict) -> None:
         out = tracker.on_event(tipo, dados)
+        if tipo == "onboarding":
+            asyncio.create_task(prov.on_onboarding(dados.get("resultado")))
         if not out:
             return
         if "config" in out:
@@ -215,7 +266,9 @@ async def main() -> None:
         if out.get("event"):
             await core.push_event(*out["event"])
 
-    core = AgentCore(token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi,
+    core = AgentCore(ha_token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi,
+                      "provision_info": do_provision_info, "apply_bundle": do_apply_bundle,
+                      "start_onboarding": do_start_onboarding, "say": do_say, "factory_reset": do_factory_reset,
                       "diagnostics": diagmod.make_handler(CONFIG, lambda: dict(memo["state"]))})
 
     async def timers_watch() -> None:
@@ -280,17 +333,50 @@ async def main() -> None:
         memo["state"].update(equalizer.state())
     if await changer.recover():  # an attempt interrupted by an agent restart is rolled back
         memo["state"]["wifi_change"] = "rolled_back"
+    async def speak_code() -> None:
+        """Pairing mode: ring in setup colors and the code, spoken now and every 60 s until adopted."""
+        while True:
+            delay = 60
+            try:
+                await program.command({"acao": "ring", "state": "setup"})
+                keys = ["setup_mode", "pairing_code"] + [f"digit_{d}" for d in session.code]
+                await program.command({"acao": "play_phrases", "keys": keys})
+            except Exception as err:  # noqa: BLE001 - the program may still be starting
+                LOG.warning("pairing prompt failed: %s", type(err).__name__)
+                delay = 5
+            await asyncio.sleep(delay)
+
+    async def finish_pairing() -> None:
+        await asyncio.sleep(1.0)  # let the HTTP reply leave first
+        try:
+            await program.command({"acao": "ring", "state": "off"})
+        except Exception:  # noqa: BLE001
+            pass
+        for zc_ in zc_box:
+            zc_.close()  # goodbye packet; the restarted agent announces state=paired
+        _exit(3)  # the unit has Restart=always: comes back with the new token
+
+    async def on_paired(new_token: str) -> None:
+        await asyncio.to_thread(pairing.persist_pairing, ETC_DIR, new_token)
+        LOG.info("paired with Home Assistant; restarting to load the new token")
+        asyncio.create_task(finish_pairing())
+
     app = local.make_app(token, on_event, core.app())
+    if pairable:
+        pairing.add_routes(app, session, sat_id, on_paired)
     recordings.add_routes(app, token, RECORDINGS)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
-    zc = await asyncio.to_thread(announce, sat_id, PORT)
+    keeper = Keeper(sat_id, PORT, "pairable" if pairable else "paired", zc_box)
     try:
-        await asyncio.gather(poll(), midnight(), hardware_loop(), room_loop(), timers_watch())
+        tasks = [poll(), midnight(), hardware_loop(), room_loop(), timers_watch(),
+                 server_watch.ServerWatch(CONFIG, program).run(), keeper.run()]
+        if pairable:
+            tasks.append(speak_code())
+        await asyncio.gather(*tasks)
     finally:
-        if zc:
-            zc.close()
+        keeper.close()
 
 
 if __name__ == "__main__":

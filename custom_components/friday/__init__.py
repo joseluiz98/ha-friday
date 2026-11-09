@@ -9,10 +9,11 @@ from homeassistant.const import Platform
 from homeassistant.components.logbook import async_log_entry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import slugify
 
 from .connection import FridayConnection
+from . import provisioning
 from .recordings import RecordingView
 from .services import async_register_services
 from .const import (
@@ -66,10 +67,39 @@ async def _async_register_card(hass: HomeAssistant) -> None:
 
 LEGACY_TITLE_PREFIX = "F.R.I.D.A.Y. "
 
+# 04/11: entities whose descriptor key was renamed (old -> new); the registry entry is migrated so the entity keeps
+# its history and the user's settings
+RENAMED_KEYS = {"follow_up": "reply_wait"}
+
+
+def _migrate_renamed_keys(hass: HomeAssistant, entry: FridayConfigEntry) -> None:
+    """Move registry entries from an old descriptor key to its new one. The default entity_id follows the key; an
+    entity_id the user renamed is kept."""
+    reg = er.async_get(hass)
+    for entity in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+        for old, new in RENAMED_KEYS.items():
+            suffix = f"_{old}"
+            if not entity.unique_id.endswith(suffix):
+                continue
+            device_id = entity.unique_id.removesuffix(suffix)
+            new_unique_id = f"{device_id}_{new}"
+            default_old = f"{entity.domain}.friday_{slugify(device_id)}_{slugify(old)}"
+            kwargs = {"new_unique_id": new_unique_id}
+            if entity.entity_id == default_old:
+                new_entity_id = f"{entity.domain}.friday_{slugify(device_id)}_{slugify(new)}"
+                if reg.async_get(new_entity_id) is None:
+                    kwargs["new_entity_id"] = new_entity_id
+            try:
+                reg.async_update_entity(entity.entity_id, **kwargs)
+            except ValueError:  # the new unique_id already exists: leave the old entry alone
+                _LOGGER.warning("Could not migrate %s to %s", entity.entity_id, new_unique_id)
+            break
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bool:
     """Start one connection per subentry; entities appear once each hello arrives."""
     connections: dict[str, FridayConnection] = {}
+    _migrate_renamed_keys(hass, entry)
     for subentry in list(entry.subentries.values()):
         # 31/10: titles no longer repeat the integration name ("F.R.I.D.A.Y. Server" -> "Server")
         if subentry.title.startswith(LEGACY_TITLE_PREFIX):
@@ -96,6 +126,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
         entry.async_on_unload(connection.add_availability_listener(_late_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_server_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
+        sub = entry.subentries[subentry_id]
+        if sub.data.get("provisioned") is False:
+            _watch_new_satellite(hass, entry, subentry_id, sub, connection)
         area_id = entry.subentries[subentry_id].data.get(CONF_AREA_ID)
         if area_id:
             entry.async_on_unload(_area_listener(hass, entry, subentry_id, connection))
@@ -103,6 +136,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
+
+
+def orchestrator_for(hass: HomeAssistant, subentry_id: str, sat_id: str):
+    """The provisioning orchestrator of a satellite; created once and kept across entry reloads."""
+    store = hass.data.setdefault(DOMAIN, {}).setdefault("orchestrators", {})
+    if sat_id not in store:
+        store[sat_id] = provisioning.Orchestrator(hass, sat_id, subentry_id)
+    return store[sat_id]
+
+
+def _watch_new_satellite(hass, entry, subentry_id, subentry, connection) -> None:
+    """A satellite adopted with the spoken code and not yet provisioned: run the orchestrator when it connects,
+    and apply the area it picks in the presentation."""
+    sat_id = subentry.unique_id
+    if not sat_id:
+        return
+    orch = orchestrator_for(hass, subentry_id, sat_id)
+
+    def _on_up(up: bool) -> None:
+        if up:
+            hass.async_create_background_task(orch.run(), f"friday provisioning {sat_id}")
+
+    def _on_event(key: str, event_type: str, data: dict) -> None:
+        if key == "onboarding" and event_type == "area_selected" and isinstance(data.get("area_id"), str):
+            hass.async_create_background_task(orch.area_selected(data["area_id"]), f"friday area {sat_id}")
+
+    def _on_state(changes: dict, origin: str) -> None:
+        if changes.get("program_state") == "idle":
+            hass.async_create_background_task(orch.conversation_closed(), f"friday ready {sat_id}")
+
+    entry.async_on_unload(connection.add_availability_listener(_on_up))
+    entry.async_on_unload(connection.add_event_listener(_on_event))
+    entry.async_on_unload(connection.add_listener(_on_state))
+    if connection.connected:
+        _on_up(True)
 
 
 def _entity_id(connection, descriptor) -> str:

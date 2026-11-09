@@ -20,6 +20,8 @@ from . import cost as costmod
 from . import diagnostics as diagmod
 from . import embeddings as embmod
 from . import models as modelsmod
+from . import provisioning as provmod
+from . import voices as voicesmod
 from . import reminders as remmod
 from . import voice_switch as vsw
 
@@ -31,6 +33,10 @@ PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8801"))
 OPENCLAW_JSON = os.environ.get("FRIDAY_OPENCLAW_JSON", "/srv/friday/home/.openclaw/openclaw.json")
 ENV_FILE = "/srv/friday/friday.env"
 PVE = "https://192.0.2.252:8006/api2/json/nodes/hypervisor"
+# Touched by friday-memory-index.service (ExecStartPost) after each successful reindex.
+# Written by the bot (activity.py): open sessions, brain turns in flight, heartbeat (minor 13 of 19/10).
+ACTIVITY_FILE = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")
+MEMORY_INDEX_STAMP = os.environ.get("FRIDAY_MEMORY_INDEX_STAMP", "/srv/friday/state/memory-index.ok")
 
 
 def _read(path: str) -> str:
@@ -55,9 +61,14 @@ def _proc(name: str) -> str:
 
 def sample_vm() -> dict:
     v = os.statvfs("/")
-    return c.vm_metrics(_proc("meminfo"), _proc("loadavg"),
-                        (v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail),
-                        _proc("uptime"), os.cpu_count() or 1)
+    try:
+        stamp = os.stat(MEMORY_INDEX_STAMP).st_mtime
+    except OSError:
+        stamp = None
+    return {**c.vm_metrics(_proc("meminfo"), _proc("loadavg"),
+                           (v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail),
+                           _proc("uptime"), os.cpu_count() or 1),
+            **c.memory_index_metrics(stamp)}
 
 
 def _log_tail() -> str:
@@ -67,12 +78,27 @@ def _log_tail() -> str:
     return r.stdout
 
 
-def sample_status(token: str) -> dict:
-    status = _get("http://127.0.0.1:8800/v1/status", f"Bearer {token}")
+def read_activity() -> dict | None:
     try:
-        status["conversation_open"] = c.conversation_open(_log_tail())
-    except (OSError, subprocess.SubprocessError):
-        pass
+        with open(ACTIVITY_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def sample_status(token: str) -> dict:
+    import time
+    status = _get("http://127.0.0.1:8800/v1/status", f"Bearer {token}")
+    view = c.activity_view(read_activity(), time.time())
+    if view is not None:
+        status["conversation_open"] = view["conversation_open"]
+        status["conversation_open_attributes"] = {"sessions": view["sessions"], "brain_turns": view["brain_turns"]}
+    else:
+        try:
+            status["conversation_open"] = c.conversation_open(_log_tail())
+            status["conversation_open_attributes"] = None
+        except (OSError, subprocess.SubprocessError):
+            pass
     return c.status_changes(status)
 
 
@@ -119,13 +145,17 @@ async def main() -> None:
         env_file="/srv/friday/friday.env")
 
     store.reindexer = embmod.Reindexer(store)
+    store.read_activity = read_activity
+
+    bundles = provmod.BundleStore(consolidate=voicesmod.consolidate)
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,
                       "diagnostics": diagmod.make_handler(lambda: dict(state), lambda: diagmod.load_literals(SECRETS, OPENCLAW_JSON, ENV_FILE) + tuple(x for x in (token, status_token, pve) if x)),
                       **modelsmod.make_handlers(store),
+                      **provmod.make_handlers(bundles),
                       **cmds.make_handlers(_log_tail, cmds.compose_restart,
-                                           lambda m, d: core.push_log(m, d))})
+                                           lambda m, d: core.push_log(m, d), read_activity)})
 
     async def loop(fn, arg, period, label, src):
         while True:
@@ -140,7 +170,7 @@ async def main() -> None:
                 await core.push_state(changes, "agent")
             await asyncio.sleep(period)
 
-    PVE_KEYS = ["host_available_mb", "nvme_temperature", "last_backup"]
+    PVE_KEYS = list(c.proxmox_metrics({}, {}, {}))
     tasks = [loop(sample_vm, None, 30, "vm", c.Source(c.vm_metrics(
                  "MemTotal: 1 kB\n", "0", (1, 1, 1, 1), "1", 1))),
              loop(sample_status, status_token, 30, "status", c.Source(c.status_metrics({})))]
@@ -160,7 +190,9 @@ async def main() -> None:
             await asyncio.sleep(30)
 
     tasks.append(pending_loop())
-    runner = web.AppRunner(core.app())
+    app = core.app()
+    provmod.add_routes(app, bundles)  # GET /v1/bundles/{one_time_token}: its own single-use token, no other auth
+    runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     await asyncio.gather(*tasks)

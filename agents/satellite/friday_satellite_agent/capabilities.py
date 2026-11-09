@@ -17,11 +17,12 @@ from . import hardware as hw
 VERSION = "0.1.0"
 WHISPER_DEFAULT_DB = 5.5
 DUCK_DEFAULT = 15
-INT_KEYS = {"ducking_level", "alarm_volume"}
+INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window"}
 MODES = {"ativa": "active", "sombra": "shadow", "desligada": "off"}
 MODES_BACK = {v: k for k, v in MODES.items()}
 STATES = {"parada": "idle", "alarme": "idle", "cadastro": "idle", "conectando": "listening",
           "ouvindo": "conversation", "aguardando": "conversation", "cortada": "conversation"}
+ONBOARDING_RESULTS = ("wake_word_ok", "wake_word_failed", "area_selected")
 ORIGINS = {"voz": "voice", "botao": "button", "porta": "agent"}
 RESULTS = {"conversa": "conversation", "barrada": "rejected", "sombra": "shadow"}
 _WW = re.compile(r"^wakeword_(.+)_(mode|sensitivity)$")
@@ -48,7 +49,15 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("alarm_ramp", "number", "Alarm ramp", min=0, max=120, step=1, unit="s", category=c, mode="box"),
         _d("sounds_volume", "number", "Sounds volume", min=-40, max=0, step=1, unit="dB", category=c, mode="slider"),
         _d("whisper_mode", "switch", "Whisper mode", category=c, icon="mdi:account-voice"),
-        _d("follow_up", "number", "Follow-up wait", min=2, max=30, step=1, unit="s", category=c, mode="box"),
+        _d("reply_wait", "number", "Reply wait", min=2, max=30, step=1, unit="s", category=c, mode="box"),
+        _d("follow_up_window", "number", "Follow-up window", min=0, max=30, step=1, unit="s", category=c, mode="box"),
+        _d("no_follow_up_while_music", "switch", "No follow-up while music plays", category=c, icon="mdi:music-off"),
+        _d("no_follow_up_after_home_commands", "switch", "No follow-up after home commands", category=c,
+           icon="mdi:home-export-outline"),
+        _d("end_of_speech_pause", "number", "End-of-speech pause", min=0.5, max=2.0, step=0.1, unit="s",
+           category=c, mode="box"),
+        _d("close_mic_awaiting_reply", "switch", "Close mic while awaiting reply", category=c,
+           icon="mdi:microphone-message-off"),
         _d("ducking", "switch", "Music ducking", category=c, icon="mdi:music-note-minus"),
         _d("ducking_level", "number", "Ducking level", min=1, max=25, step=1, unit="%", category=c, mode="box"),
         _d("ducking_restore", "number", "Ducking restore delay", min=0, max=10, step=0.5, unit="s",
@@ -58,6 +67,8 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("turn_sounds", "switch", "Turn sounds", category=c, icon="mdi:bell-ring"),
         _d("reboot", "button", "Reboot", device_class="restart", category=c),
         _d("restart_program", "button", "Restart program", hidden=True, available=False, category=c),
+        _d("reset_network", "button", "Reset network", category=c, icon="mdi:wifi-cog"),
+        _d("reset_home", "button", "Forget home", category=c, icon="mdi:home-remove"),
     ]
     for w in wakewords:
         n = w["nome"]
@@ -71,10 +82,13 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("activations_today", "sensor", "Activations today", category="diagnostic"),
         _d("rejected_today", "sensor", "Rejected today", category="diagnostic"),
         _d("last_activation", "sensor", "Last activation", device_class="timestamp", category="diagnostic"),
+        _d("last_wake_word", "sensor", "Last wake word", category="diagnostic", icon="mdi:account-voice"),
         _d("sw_version", "sensor", "Software version", category="diagnostic"),
         _d("activation", "event", "Activation", event_types=["conversation", "rejected", "shadow"]),
         _d("next_timer", "sensor", "Next timer", device_class="timestamp", icon="mdi:timer-outline"),
         _d("timer", "event", "Timer", event_types=["finished"], icon="mdi:timer-check-outline"),
+        _d("onboarding", "event", "Onboarding", event_types=list(ONBOARDING_RESULTS), category="diagnostic",
+           icon="mdi:account-voice"),
     ]
     return out + hw.descriptors()
 
@@ -128,7 +142,12 @@ class Mapper:
             "alarm_ramp": cfg.get("alarm_ramp_s"),
             "sounds_volume": cfg.get("volume_sons"),
             "whisper_mode": cfg.get("whisper_min_ratio_db") is not None,
-            "follow_up": cfg.get("espera_resposta_s"),
+            "reply_wait": cfg.get("espera_resposta_s"),
+            "follow_up_window": cfg.get("continuacao_s"),
+            "no_follow_up_while_music": cfg.get("no_follow_up_while_music", True) is not False,
+            "no_follow_up_after_home_commands": cfg.get("no_follow_up_after_home_commands", True) is not False,
+            "end_of_speech_pause": cfg.get("end_of_speech_pause_s", 0.8),
+            "close_mic_awaiting_reply": cfg.get("close_mic_awaiting_reply") is True,
             "ducking": bool(duck),
             "ducking_level": duck if duck else self.last_duck,
             "ducking_restore": cfg.get("music_restore_s"),
@@ -146,8 +165,12 @@ class Mapper:
     def to_program(self, cfg: dict, key: str, value) -> dict | None:
         """Translate a `set` into {"config": {...}} or {"wakeword": (name, mode)}; None = unknown key."""
         simple = {"do_not_disturb": "nao_perturbe", "mute": "mudo", "turn_sounds": "sons_turno", "alarm_volume": "volume_alertas", "alarm_ramp": "alarm_ramp_s",
-                  "sounds_volume": "volume_sons", "follow_up": "espera_resposta_s",
-                  "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s"}
+                  "sounds_volume": "volume_sons", "reply_wait": "espera_resposta_s",
+                  "follow_up_window": "continuacao_s", "no_follow_up_while_music": "no_follow_up_while_music",
+                  "no_follow_up_after_home_commands": "no_follow_up_after_home_commands",
+                  "end_of_speech_pause": "end_of_speech_pause_s",
+                  "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s",
+                  "close_mic_awaiting_reply": "close_mic_awaiting_reply"}
         if key in simple:
             if key in INT_KEYS and isinstance(value, float) and value.is_integer():
                 value = int(value)  # HA number entities send 20.0; the program accepts only int here
@@ -207,6 +230,7 @@ class Tracker:
         self._pending: dict[str, float] = {}
         self._act = 0
         self._rej = 0
+        self._by_word: dict[str, int] = {}
         self._last = None
         self._conv = False
         self._load()
@@ -220,6 +244,9 @@ class Tracker:
                 saved = json.load(f)
             if saved.get("date") == self._today():
                 self._act, self._rej = int(saved.get("act", 0)), int(saved.get("rej", 0))
+                words = saved.get("by_word")
+                if isinstance(words, dict):
+                    self._by_word = {str(k): int(v) for k, v in words.items()}
         except (OSError, ValueError, TypeError, AttributeError):
             pass
 
@@ -230,7 +257,8 @@ class Tracker:
             os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
             tmp = self._path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"date": self._today(), "act": self._act, "rej": self._rej}, f)
+                json.dump({"date": self._today(), "act": self._act, "rej": self._rej,
+                           "by_word": self._by_word}, f)
             os.replace(tmp, self._path)
         except OSError:
             pass
@@ -247,10 +275,12 @@ class Tracker:
         return bool(keys) and all(k in self._pending for k in keys)
 
     def counters(self) -> dict:
-        return {"activations_today": self._act, "rejected_today": self._rej}
+        return {"activations_today": self._act, "rejected_today": self._rej,
+                "activations_today_attributes": {"by_word": dict(self._by_word)}}
 
     def reset_day(self) -> dict:
         self._act = self._rej = 0
+        self._by_word = {}
         self._save()
         return self.counters()
 
@@ -264,12 +294,22 @@ class Tracker:
                 self._act += 1
                 self._last = datetime.now(timezone.utc).isoformat()
                 state["last_activation"] = self._last
+                word = dados.get("palavra")
+                if isinstance(word, str) and word:
+                    self._by_word[word] = self._by_word.get(word, 0) + 1
+                    state["last_wake_word"] = word
+                    state["last_wake_word_attributes"] = {"score": dados.get("nota"), "at": self._last}
             elif kind == "rejected":
                 self._rej += 1
             self._save()
             state.update(self.counters())
             data = activation_data(dados)
             return {"event": ("activation", kind, data), "state": state}
+        if tipo == "onboarding":
+            result = dados.get("resultado")
+            if result not in ONBOARDING_RESULTS:
+                return None
+            return {"event": ("onboarding", result, {k: v for k, v in dados.items() if k != "resultado"})}
         if tipo == "timer":
             return {"event": ("timer", "finished", {"name": dados.get("nome"), "id": dados.get("id"),
                                                     "duration_s": dados.get("duracao_s")})}

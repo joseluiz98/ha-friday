@@ -40,6 +40,28 @@ async def _set_wifi(call: ServiceCall) -> None:
     await async_set_wifi(connection, call.data["ssid"], call.data["password"])
 
 
+SERVICE_RETRY = "retry_provisioning"
+RETRY_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
+
+
+async def _retry_provisioning(call: ServiceCall) -> None:
+    """Redo the provisioning steps that failed for the satellite behind the device."""
+    from . import orchestrator_for
+
+    hass = call.hass
+    connection = find_connection(hass, call.data["device_id"])
+    sat_id = connection.hello.device["id"]
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        for subentry_id, sub in entry.subentries.items():
+            if sub.unique_id == sat_id and "provisioned" in sub.data:  # the legacy satellite has no such key
+                hass.async_create_background_task(
+                    orchestrator_for(hass, subentry_id, sat_id).run(retry=True), f"friday retry {sat_id}")
+                return
+    raise ServiceValidationError("This satellite is not managed by the provisioning flow.")
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     if not hass.services.has_service(DOMAIN, SERVICE_SET_WIFI):
         hass.services.async_register(DOMAIN, SERVICE_SET_WIFI, _set_wifi, schema=SCHEMA)
+    if not hass.services.has_service(DOMAIN, SERVICE_RETRY):
+        hass.services.async_register(DOMAIN, SERVICE_RETRY, _retry_provisioning, schema=RETRY_SCHEMA)

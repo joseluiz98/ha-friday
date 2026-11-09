@@ -1,7 +1,7 @@
 import asyncio
 
 from homeassistant.config_entries import ConfigSubentryData
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.friday.const import DOMAIN
@@ -266,5 +266,102 @@ async def test_card_registered(hass, hass_client):
     client = await hass_client()
     r = await client.get("/friday_frontend/friday-activations-card.js")
     assert r.status == 200
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_attributes_key_applies_to_binary_sensor_and_updates(hass):
+    """Protocol v1 `<key>_attributes` works on every platform (conversation_open is a binary_sensor)."""
+    caps = [{"key": "busy", "platform": "binary_sensor", "name": "Busy"}]
+    agent = FakeAgent(hello(caps, {"busy": True, "busy_attributes": {"sessions": 2, "brain_turns": 0}}))
+    entry = await setup(hass, agent)
+    await entities(hass, 1)
+    await wait_for(lambda: hass.states.get("binary_sensor.friday_dev1_busy") is not None)
+    st = hass.states.get("binary_sensor.friday_dev1_busy")
+    assert st.state == "on" and st.attributes["sessions"] == 2
+    await agent.sockets[0].send_json({"type": "state", "origin": "agent",
+                                      "changes": {"busy_attributes": {"sessions": 1, "brain_turns": 1}}})
+    await wait_for(lambda: hass.states.get("binary_sensor.friday_dev1_busy").attributes.get("brain_turns") == 1)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+RW_CAPS = [{"key": "reply_wait", "platform": "number", "name": "Reply wait", "min": 2, "max": 30, "step": 1}]
+
+
+async def _setup_with_old_entity(hass, entity_id):
+    agent = FakeAgent(hello(RW_CAPS, {"reply_wait": 8}))
+    await agent.start()
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=DOMAIN, title="F.R.I.D.A.Y.",
+        subentries_data=[ConfigSubentryData(
+            data={"host": "127.0.0.1", "port": agent.port, "token": "t"},
+            subentry_type="server", title="Server", unique_id=None, subentry_id="sub1")],
+    )
+    entry.add_to_hass(hass)
+    reg = er.async_get(hass)
+    reg.async_get_or_create("number", DOMAIN, "dev1_follow_up", config_entry=entry,
+                            suggested_object_id=entity_id.split(".", 1)[1])
+    assert reg.async_get(entity_id) is not None
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return agent, entry, reg
+
+
+async def test_follow_up_entity_migrates_to_reply_wait(hass):
+    agent, entry, reg = await _setup_with_old_entity(hass, "number.friday_dev1_follow_up")
+    await wait_for(lambda: hass.states.get("number.friday_dev1_reply_wait") is not None)
+    e = reg.async_get("number.friday_dev1_reply_wait")
+    assert e is not None and e.unique_id == "dev1_reply_wait"
+    assert reg.async_get("number.friday_dev1_follow_up") is None
+    assert not [x for x in er.async_entries_for_config_entry(reg, entry.entry_id) if x.unique_id == "dev1_follow_up"]
+    assert hass.states.get("number.friday_dev1_reply_wait") is not None
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_migration_keeps_user_entity_id(hass):
+    agent, entry, reg = await _setup_with_old_entity(hass, "number.espera_do_jose")
+    await wait_for(lambda: hass.states.get("number.espera_do_jose") is not None)
+    e = reg.async_get("number.espera_do_jose")
+    assert e is not None and e.unique_id == "dev1_reply_wait"
+    assert reg.async_get("number.friday_dev1_reply_wait") is None
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_satellite_settings_go_to_the_settings_area_not_the_room(hass):
+    """06/11: "desligar o escritório" turned off the turn sounds; a satellite's config entities live in their own area."""
+    caps = CAPS + [{"key": "turn_sounds", "platform": "switch", "name": "Turn sounds", "category": "config"},
+                   {"key": "manual", "platform": "switch", "name": "Manual", "category": "config"}]
+    sat = dict(DEVICE, id="sat1", kind="satellite")
+    h = hello(caps, dict(STATE, turn_sounds=True, manual=True))
+    h["device"] = sat
+    areas = ar.async_get(hass)
+    office, mine = areas.async_create("Escritório"), areas.async_create("Minha área")
+    reg = er.async_get(hass)
+    reg.async_get_or_create("switch", DOMAIN, "sat1_manual", suggested_object_id="friday_sat1_manual")
+    reg.async_update_entity("switch.friday_sat1_manual", area_id=mine.id)  # a choice of the user stays
+    agent = FakeAgent(h)
+    entry = await setup(hass, agent)
+    await entities(hass, 5)
+    dev = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, "sat1"), entry.entry_id)
+    dr.async_get(hass).async_update_device(dev.id, area_id=office.id)
+    settings = areas.async_get_area_by_name("Ajustes do Mark")
+    assert settings is not None and settings.floor_id is None
+    assert reg.async_get("switch.friday_sat1_turn_sounds").area_id == settings.id
+    assert reg.async_get("switch.friday_sat1_manual").area_id == mine.id
+    assert reg.async_get("switch.friday_sat1_dnd").area_id is None  # not a setting: follows the room
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_server_settings_are_left_alone(hass):
+    caps = CAPS + [{"key": "knob", "platform": "switch", "name": "Knob", "category": "config"}]
+    agent = FakeAgent(hello(caps, dict(STATE, knob=True)))
+    entry = await setup(hass, agent)
+    reg = await entities(hass, 4)
+    assert reg.async_get("switch.friday_dev1_knob").area_id is None
+    assert ar.async_get(hass).async_get_area_by_name("Ajustes do Mark") is None
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()

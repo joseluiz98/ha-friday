@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.core import callback
 from homeassistant.util import dt as dt_util
 
 from . import reminders, room_climate
@@ -23,16 +22,6 @@ class FridaySensor(FridayEntity, SensorEntity):
         self._attr_native_unit_of_measurement = descriptor.unit
         self._attr_device_class = descriptor.device_class
         self._attr_state_class = descriptor.state_class
-
-    @property
-    def extra_state_attributes(self):
-        attrs = self._connection.state.get(f"{self.descriptor.key}_attributes")
-        return attrs if isinstance(attrs, dict) else None
-
-    @callback
-    def _on_changes(self, changes: dict, origin: str) -> None:
-        if self.descriptor.key in changes or f"{self.descriptor.key}_attributes" in changes:
-            self.async_write_ha_state()
 
     @property
     def native_value(self):
