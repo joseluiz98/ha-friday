@@ -97,14 +97,15 @@ async def fetch_to_file(url: str, dest: str) -> str:
 
 
 def program_version(program_dir: str) -> str:
-    """`VERSION` file if present, else a short hash of the program's .py files."""
-    try:
-        with open(os.path.join(program_dir, "VERSION"), encoding="utf-8") as f:
-            v = f.read().strip()
-        if v:
-            return v
-    except OSError:
-        pass
+    """`FRIDAY_VERSION` (first field) or `VERSION` file if present, else a short hash of the program's .py files."""
+    for name in ("FRIDAY_VERSION", "VERSION"):
+        try:
+            with open(os.path.join(program_dir, name), encoding="utf-8") as f:
+                v = f.read().split()
+            if v:
+                return v[0]
+        except OSError:
+            pass
     h = hashlib.sha256()
     try:
         for name in sorted(n for n in os.listdir(program_dir) if n.endswith(".py")):

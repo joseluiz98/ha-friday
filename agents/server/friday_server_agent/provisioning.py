@@ -54,9 +54,18 @@ def release_ref() -> str | None:
     if ref:
         return ref
     try:
-        with open(os.environ.get("FRIDAY_AGENT_VERSION_FILE", "/opt/friday/agent/FRIDAY_VERSION"), encoding="utf-8") as f:
+        with open(os.environ.get("FRIDAY_AGENT_VERSION_FILE", "/opt/friday/agent/friday_agent_core/FRIDAY_VERSION"), encoding="utf-8") as f:
             parts = f.read().split()
         return parts[1] if len(parts) > 1 else (parts[0] if parts else None)
+    except OSError:
+        return None
+
+
+def _installed_line() -> str | None:
+    try:
+        with open(os.environ.get("FRIDAY_AGENT_VERSION_FILE", "/opt/friday/agent/friday_agent_core/FRIDAY_VERSION"),
+                  encoding="utf-8") as f:
+            return f.read().strip() or None
     except OSError:
         return None
 
@@ -227,6 +236,7 @@ class BundleStore:
     def _pack_update(self, tar: tarfile.TarFile) -> None:
         """Program and agent from a version of the repo (never the HAOS working folder) plus the vault files."""
         ref = release_ref()
+        line = os.environ.get("FRIDAY_RELEASE_REF") or _installed_line() or ref
         if not ref:
             raise ProvisioningError("source_missing")
         raw = (self._archive or git_archive)(ref, RELEASE_PATHS)
@@ -258,10 +268,11 @@ class BundleStore:
                 prefix = next(p for p in VAULT_FOR_BUNDLE if n.startswith(p))
                 tar.add(os.path.join(vdir, n), arcname=VAULT_FOR_BUNDLE[prefix] + n[len(prefix):], recursive=False,
                         filter=_public)
-            info = tarfile.TarInfo("program/FRIDAY_VERSION")
-            data = (ref + "\n").encode()
-            info.size = len(data)
-            tar.addfile(_public(info), io.BytesIO(data))
+            data = (line + "\n").encode()
+            for arc in ("program/FRIDAY_VERSION", "agent/friday_agent_core/FRIDAY_VERSION"):
+                info = tarfile.TarInfo(arc)
+                info.size = len(data)
+                tar.addfile(_public(info), io.BytesIO(data))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

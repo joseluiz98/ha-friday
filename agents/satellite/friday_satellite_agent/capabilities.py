@@ -13,8 +13,9 @@ import time
 from datetime import date, datetime, timezone
 
 from . import hardware as hw
+from friday_agent_core import version as _version
 
-VERSION = "0.1.0"
+VERSION = _version.installed_version(_version.FILE)
 WHISPER_DEFAULT_DB = 5.5
 DUCK_DEFAULT = 15
 INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window"}

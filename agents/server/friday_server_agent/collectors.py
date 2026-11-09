@@ -8,8 +8,9 @@ from datetime import datetime, timedelta, timezone
 from . import cost, reminders
 from .commands import RESTART_DESCRIPTOR
 from .voice_switch import DESCRIPTOR
+from friday_agent_core import version as _version
 
-VERSION = "0.1.0"
+VERSION = _version.installed_version(_version.FILE)
 
 
 def vm_metrics(meminfo: str, loadavg: str, statvfs: tuple, uptime: str, ncpu: int) -> dict:

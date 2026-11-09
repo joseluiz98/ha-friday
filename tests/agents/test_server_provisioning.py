@@ -152,8 +152,8 @@ def test_update_bundle_layout_and_filters(dirs, monkeypatch):
     body = store.take(token)
     assert hashlib.sha256(body).hexdigest() == r["sha256"]
     assert _names(body) == [
-        "agent/friday_agent_core/__init__.py", "agent/friday_satellite_agent/__main__.py",
-        "program/FRIDAY_VERSION", "program/friday_satelite.py", "program/maestro.py",
+        "agent/friday_agent_core/FRIDAY_VERSION", "agent/friday_agent_core/__init__.py",
+        "agent/friday_satellite_agent/__main__.py", "program/FRIDAY_VERSION", "program/friday_satelite.py", "program/maestro.py",
         "program/sons/onboarding/ready.wav", "program/vendor/SOURCE.md", "program/vendor/xvf_host.py"]
     assert asked and asked[0][0] == "v9.9.9"
 
@@ -310,3 +310,13 @@ def test_update_bundle_never_reads_working_folder(dirs, monkeypatch):
     store = pv.BundleStore(archive=archive)
     body = store.take(store.prepare("update", "sat-abc123")["url"].rsplit("/", 1)[1])
     assert "program/only_in_working_folder.py" not in _names(body)
+
+
+def test_bundle_carries_the_version_for_program_and_agent(dirs, monkeypatch):
+    _, cfg, _ = dirs
+    archive, _ = _make_sources(cfg, monkeypatch)
+    store = pv.BundleStore(archive=archive)
+    body = store.take(store.prepare("update", "sat-abc123")["url"].rsplit("/", 1)[1])
+    with tarfile.open(fileobj=io.BytesIO(body)) as tar:
+        for arc in ("program/FRIDAY_VERSION", "agent/friday_agent_core/FRIDAY_VERSION"):
+            assert tar.extractfile(arc).read().decode().split()[0] == "v9.9.9"
