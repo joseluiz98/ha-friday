@@ -50,7 +50,7 @@ def window_max(arr, ini, fim) -> float:
 
 def label(src, has_word, verif_max, model):
     if has_word:
-        if src == "acervo_f":  # o o dono rotulou como falsa; uma palavra transcrita ali não vira positivo (ruling)
+        if src == "acervo_f":  # o dono rotulou como falsa; uma palavra transcrita ali não vira positivo (ruling)
             return None, "falsa rotulada com a palavra"
         if src in ("acervo_v", "sessao"):
             return "pos", "rotulado"
@@ -61,7 +61,7 @@ def label(src, has_word, verif_max, model):
         return None, "voz não confirmada"
     if src in FONTES_NEG or (src == "quase" and model == "sexta_feira"):
         # 06/11: "Se está feio" da sombra de 27/10 era chamada real e virou negativo ×10. Na Sexta, o Whisper errar a
-        # palavra não basta para negativo: se o verificador reconhece a voz, fica fora. Só o rótulo do o dono (acervo_f) vence.
+        # palavra não basta para negativo: se o verificador reconhece a voz, fica fora. Só o rótulo do dono (acervo_f) vence.
         if model == "sexta_feira" and src != "acervo_f" and verif_max >= LIMIAR_VERIF:
             return None, "possível chamada"
         return "neg", "sem palavra"
@@ -251,7 +251,7 @@ def _itens(source, words, scores, model, marcas, env):
         return itens
     k = _pico(scores, model)
     if model == "sexta_feira" and src == "ativou" and words and not _voz_confirmada(scores):
-        it = _janela_negativa(source, scores, model)  # disparo com outra fala e sem a voz do o dono: o falso que mais ensina
+        it = _janela_negativa(source, scores, model)  # disparo com outra fala e sem a voz do dono: o falso que mais ensina
         it["label"], it["why"] = "neg", "disparo sem a palavra"
         return itens + [it]
     if src in ("ativou", "acervo_v") or (src == "quase" and model == "friday"):
@@ -289,7 +289,7 @@ def protege_chamadas(items, sources, chamadas, janela=6.0, janela_ativou=15.0):
     """06/11: tira do treino o que é a mesma fala de uma chamada real, para ela não entrar duas vezes (nem cruzar
     treino e prova) nem virar negativo. `chamadas`: instantes ISO das chamadas do ambiente (manifesto de
     raw/<data>_ambient_calls). Vale para ativou/quase/sombra a até `janela` s. Além disso, negativo de quase/sombra a até
-    `janela_ativou` s de uma ativação verdadeira fica fora: é a tentativa anterior do o dono. Devolve quantos itens mudaram."""
+    `janela_ativou` s de uma ativação verdadeira fica fora: é a tentativa anterior do dono. Devolve quantos itens mudaram."""
     def ts(nome):
         return datetime.datetime.fromisoformat(sources[nome]["ts"]).timestamp()
 
@@ -405,13 +405,13 @@ def pin_split(lado, items, eps, anteriores, anteriores_itens=None):
 
 
 def apply_exclusions(items, nomes):
-    """02/11: arquivos que o o dono mandou deixar de fora (rulings.json → "excluidas", nome original do arquivo, sem o
+    """02/11: arquivos que o dono mandou deixar de fora (rulings.json → "excluidas", nome original do arquivo, sem o
     prefixo `<src>__`), p. ex. testes dele com a palavra em sombra que o Whisper não reconheceu (virariam negativos).
     O item fica sem rótulo (não sobe, não conta na prova). Devolve quantos itens foram afetados."""
     alvo, n = set(nomes), 0
     for it in items:
         if it["name"].split("__", 1)[-1] in alvo and it["label"] is not None:
-            it["label"], it["why"] = None, "excluída pelo o dono"
+            it["label"], it["why"] = None, "excluída pelo dono"
             n += 1
     return n
 

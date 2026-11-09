@@ -2,7 +2,7 @@
 # Deploys ONE component from a version of the repo (run on HAOS). Exports the ref with `git archive`, ships it to the
 # host and runs that component's install script with FRIDAY_VERSION_LINE="<describe> <sha>". Never edits in place.
 #   scripts/deploy.sh <component> <git-ref> [user@host]
-#   components: server-agent | server | voice-gateway | brain-skills  (host: the VM, /config/.friday/vm)
+#   components: server-agent | server | voice-gateway | brain-skills | wwt  (host: the VM, /config/.friday/vm)
 #               satellite <ref> jose@<pi>                              (program + agent on that Pi)
 #               integration                                            (HAOS: scripts/install-integration.sh)
 set -euo pipefail
@@ -18,6 +18,7 @@ case "$COMP" in
   server)        PATHS="server voice_gateway/local_config.py"; RUN="sudo FRIDAY_VERSION_LINE='$LINE' bash server/install.sh" ;;
   voice-gateway) PATHS="voice_gateway scripts/lib"; RUN="sudo FRIDAY_VERSION_LINE='$LINE' bash voice_gateway/install.sh" ;;
   brain-skills)  PATHS="brain"; RUN="sudo FRIDAY_VERSION_LINE='$LINE' bash brain/skills/install.sh" ;;
+  wwt)           PATHS="tools/wakeword/training tools/wakeword/wwt"; RUN="sudo FRIDAY_VERSION_LINE='$LINE' bash tools/wakeword/wwt/install.sh" ;;
   satellite)     PATHS="satellite/program scripts/lib agents"
                  RUN="FRIDAY_VERSION_LINE='$LINE' bash satellite/program/install.sh && cd agents && sudo FRIDAY_VERSION_LINE='$LINE' bash satellite/install.sh" ;;
   *) echo "unknown component: $COMP" >&2; exit 2 ;;

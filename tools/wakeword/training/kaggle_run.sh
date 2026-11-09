@@ -2,7 +2,7 @@
 # Treina uma palavra no Kaggle pela CLI oficial (spec 2026-10-24). Roda no HA; o docker e o token ficam na VM.
 # Uso: kaggle_run.sh <modelo: friday|sexta_feira> <cycle_dir> [--smoke]           sobe o dataset, confere a marca, dispara
 #      kaggle_run.sh <modelo> <cycle_dir> --fetch [--smoke]                       baixa a saída e confere a marca
-# 02/11 (regra do o dono, revista em 06/11): nada de polling aqui. O disparo grava <cycle_dir>/kaggle_pending[_smoke].json, imprime
+# 02/11 (regra do dono, revista em 06/11): nada de polling aqui. O disparo grava <cycle_dir>/kaggle_pending[_smoke].json, imprime
 # o link e deixa o kaggle_watch.sh na VM (status a cada 15 min, aviso no Telegram); depois do aviso, o --fetch.
 #   <cycle_dir>/upload/        -> dataset privado joseluiz98/wakeword-<slug>-data (só recortes de treino + params.json)
 #   <cycle_dir>/models/        <- saída da rodada cheia  (models_smoke/ com --smoke)

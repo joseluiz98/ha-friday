@@ -29,7 +29,7 @@ fi
 
 ler_segredo() { cat "$BASE/secrets/$1" 2>/dev/null; }
 
-# Chave da VOZ (Gemini Live, bot Pipecat). O cérebro do OpenClaw usa só as credenciais que o o dono
+# Chave da VOZ (Gemini Live, bot Pipecat). O cérebro do OpenClaw usa só as credenciais que o dono
 # configurar no onboarding dele; esta chave não é repassada ao processo do OpenClaw.
 GEMINI_API_KEY="$(ler_segredo gemini_api_key)"
 if [ -z "$GEMINI_API_KEY" ]; then
@@ -50,7 +50,7 @@ export FRIDAY_HA_TOKEN FRIDAY_HA_URL="${FRIDAY_HA_URL:?FRIDAY_HA_URL missing fro
 # partida). Pula o apelido do HOME. Não espera o Samba: com ele fora, desiste em 5 s.
 [ -f /haos_links.sh ] && bash /haos_links.sh /share /mnt/haos/share "$(basename "$(dirname "$HOME")")"
 
-# O onboarding é do o dono: docker exec -it friday openclaw onboard (ou o atalho `oc` da VM)
+# O onboarding é do dono: docker exec -it friday openclaw onboard (ou o atalho `oc` da VM)
 # (modo local, gateway loopback, porta 18789, auth por token). Sem configuração, o container para.
 OC_CONF="$HOME/.openclaw/openclaw.json"
 if [ ! -f "$OC_CONF" ]; then
@@ -58,7 +58,7 @@ if [ ! -f "$OC_CONF" ]; then
   exit 1
 fi
 
-# A voz fala com o gateway usando o token que o o dono escolheu no onboarding.
+# A voz fala com o gateway usando o token que o dono escolheu no onboarding.
 OPENCLAW_GATEWAY_TOKEN="$(jq -r '.gateway.auth.token // empty | strings' "$OC_CONF" 2>/dev/null)"
 if [ -z "$OPENCLAW_GATEWAY_TOKEN" ]; then
   log "a config do OpenClaw não tem token de gateway em texto (escolha auth por token no onboarding); aguardando."
@@ -74,7 +74,7 @@ if [ "$(jq -r '.gateway.tls.enabled // false' "$OC_CONF" 2>/dev/null)" = "true" 
 fi
 
 # Único ajuste do container na config do OpenClaw: o endpoint compatível com OpenAI, que a voz usa
-# para chamar o cérebro. Modelo, skills e política ficam com o onboarding do o dono.
+# para chamar o cérebro. Modelo, skills e política ficam com o onboarding do dono.
 openclaw config set gateway.http.endpoints.chatCompletions.enabled true >/dev/null 2>&1 \
   || log "não consegui ligar gateway.http.endpoints.chatCompletions"
 if [ -n "${FRIDAY_OPENCLAW_MODEL:-}" ]; then
@@ -98,7 +98,7 @@ if [ -f "$BASE/reindex-memory.flag" ]; then
   fi
 fi
 
-# Entrada do MCP do HA para a skill mcporter (vale só se o o dono habilitar a skill). O token é
+# Entrada do MCP do HA para a skill mcporter (vale só se o dono habilitar a skill). O token é
 # resolvido do ambiente na hora da chamada, não fica em disco.
 mcporter config add homeassistant --url "$FRIDAY_HA_URL/api/mcp" \
   --header 'Authorization=Bearer ${FRIDAY_HA_TOKEN}' --scope home >/dev/null 2>&1 || true

@@ -1,5 +1,5 @@
 """Acrescenta a um ciclo da Sexta-feira os negativos nativos falados pelo XTTS (06/11/2026).
-Fonte: pasta da geração (aceitas/ + manifesto.json, ver tts_samples/run_xtts_neg.sh), depois da escuta do o dono; fala
+Fonte: pasta da geração (aceitas/ + manifesto.json, ver tts_samples/run_xtts_neg.sh), depois da escuta do dono; fala
 reprovada recebe "excluida": true no manifesto. A prova é POR FALANTE: <ciclo>/holdout_native/xttsneg/ nunca sobe e mede
 falsos com vozes novas. Treino: <ciclo>/upload/negative/xttsneg__*.wav (peso em real_copies_by_tag).
 Uso (depois do add_native_positives, que reescreve o native.ndjson):

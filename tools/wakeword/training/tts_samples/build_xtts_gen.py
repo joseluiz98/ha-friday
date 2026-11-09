@@ -1,7 +1,7 @@
 """Notebook de GERAÇÃO de "sexta-feira" com XTTS-v2 clonando vozes pt-BR do Common Voice (27/10/2026).
   python3 build_xtts_gen.py <pasta> <marca_do_dataset> <run_id> [takes]
 Lê o dataset privado joseluiz98/ptbr-voice-refs (refs/*.wav + vozes.json + marca.json). A célula 1 PARA se a marca
-servida não for <marca_do_dataset> ou se a contagem não bater (regra do o dono, 27/10). Cada voz gera `takes` falas;
+servida não for <marca_do_dataset> ou se a contagem não bater (regra do dono, 27/10). Cada voz gera `takes` falas;
 fica só a fala cuja transcrição (faster-whisper small, pt) é exatamente "sexta-feira"/"sexta feira", aparada no tempo
 das palavras e com duração >= 0,6 s (a escuta de 27/10 mostrou cortes que a transcrição sozinha deixa passar)."""
 import json, os, sys

@@ -38,7 +38,7 @@ Derivado de `tools/satelite/treino/friday_kaggle_final.ipynb` por `wakeword-trai
 - Célula `P`: lê `params.json` do dataset privado (palavra, frases, tamanhos) e extrai os recortes reais.
 - Célula 10: tudo vem de `PARAMS` (palavra, número de falas, rodadas de aumento, passos).
 - Célula `11b`: falas sintéticas em **português** (vozes pt-BR do Piper) além das inglesas.
-- Célula `11c`: **gravações reais** do o dono como positivos (e negativos reais), repetidas para ter peso.
+- Célula `11c`: **gravações reais** do dono como positivos (e negativos reais), repetidas para ter peso.
 - Célula 15: grava `metrics.json` em `/kaggle/working`. Célula 16: salva `<palavra>.onnx` e as métricas.
 - `smoke: true` no `params.json` roda uma versão minúscula para testar o encanamento.
 
@@ -196,7 +196,7 @@ COPIAS = """def copias(nome, padrao, tags):
             return n
     return padrao"""
 
-C11C = """# 11c reais: gravações reais do o dono (recortes curtos) como positivos e negativos, com peso por repetição (v2)
+C11C = """# 11c reais: gravações reais do dono (recortes curtos) como positivos e negativos, com peso por repetição (v2)
 import glob, os, shutil
 import yaml
 with open('/content/my_model.yaml') as f:

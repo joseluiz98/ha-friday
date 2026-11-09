@@ -1,6 +1,6 @@
 #!/bin/bash
 # Gera "sexta-feira" com XTTS-v2 no Kaggle (27/10/2026). Uso: run_xtts_gen.sh <saida> <marca_do_dataset> [takes]
-# ANTES do push confere que o Kaggle serve o marca.json com <marca> (regra do o dono); o notebook confere de novo na
+# ANTES do push confere que o Kaggle serve o marca.json com <marca> (regra do dono); o notebook confere de novo na
 # célula 1, e no fim o manifesto tem de trazer o RUN_ID desta subida e a mesma marca.
 set -uo pipefail
 OUT=${1:?saida}; MARCA=${2:?marca}; TAKES=${3:-2}; HERE=$(cd "$(dirname "$0")" && pwd)

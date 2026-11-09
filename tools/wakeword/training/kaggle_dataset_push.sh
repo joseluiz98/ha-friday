@@ -1,7 +1,7 @@
 #!/bin/bash
 # Sobe uma pasta DA VM como dataset privado do Kaggle e só termina quando o Kaggle SERVE a versão nova (27/10/2026).
 # Uso: kaggle_dataset_push.sh <pasta_na_vm> <owner/slug> <título>   -> imprime "MARCA=<marca>" na última linha
-# Grava <pasta>/marca.json {"marca", "arquivos"}; depois baixa o marca.json servido pelo Kaggle e compara. Regra do o dono
+# Grava <pasta>/marca.json {"marca", "arquivos"}; depois baixa o marca.json servido pelo Kaggle e compara. Regra do dono
 # (27/10): nenhum notebook roda sem provar antes que o dataset é o correto; o notebook confere a mesma marca.
 set -uo pipefail
 P=${1:?pasta}; DID=${2:?owner/slug}; TIT=${3:?titulo}

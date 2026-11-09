@@ -1,8 +1,8 @@
 import os
 """DESCARTÁVEL (Task 2, step 4): pré-gravação em rajada + corte por silêncio, já no modo satélite.
 Uso: prototipo_rajada.py normal|rajada
-- normal: conecta, espera 2 s, bipe, o o dono pergunta.
-- rajada: bipe, o o dono pergunta JÁ; a conexão só abre 0,8 s depois (como após a palavra) e o áudio
+- normal: conecta, espera 2 s, bipe, o dono pergunta.
+- rajada: bipe, o dono pergunta JÁ; a conexão só abre 0,8 s depois (como após a palavra) e o áudio
   guardado sai primeiro.
 Nos dois: quando o VAD vê 0,8 s de silêncio depois da fala, manda 1,5 s de zeros e PARA de mandar áudio
 (o corte do produto). Mede fim da fala → ela começar a falar."""

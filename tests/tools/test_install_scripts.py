@@ -101,3 +101,16 @@ def test_skills_install_refuses_missing_key(tmp_path):
                                         "FRIDAY_VERSION_LINE": LINE})
     assert r.returncode != 0 and "FRIDAY_OWNER_NOTIFY" in r.stderr
     assert not (tmp_path / "ws" / "skills" / "falar-em-casa").exists()
+
+
+def test_wwt_install_puts_training_code_and_nightly_script(tmp_path):
+    """The VM nightly featcache runs the repo's training code from /opt/friday/wwt/training, not the HAOS mount."""
+    dest = tmp_path / "wwt"
+    r = _run("tools/wakeword/wwt/install.sh", {"FRIDAY_WWT_DIR": str(dest), "FRIDAY_VERSION_LINE": LINE})
+    assert r.returncode == 0, r.stderr
+    assert (dest / "featcache_nightly.sh").exists() and os.access(dest / "featcache_nightly.sh", os.X_OK)
+    assert (dest / "training" / "featcache.py").exists() and not (dest / "training" / "test_gate.py").exists()
+    assert (dest / "training" / "FRIDAY_VERSION").read_text().strip() == LINE
+    nightly = (dest / "featcache_nightly.sh").read_text()
+    assert "/mnt/haos" not in nightly and "/opt/friday/wwt/training" in nightly
+    assert not list(dest.glob(".*.new")) and not (dest / ".training.new").exists()

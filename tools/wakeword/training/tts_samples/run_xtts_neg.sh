@@ -2,7 +2,7 @@
 # Gera os negativos nativos com XTTS-v2 no Kaggle (06/11/2026). A vigia é o kaggle_watch.sh na VM (aviso no Telegram).
 # 06/11: o Whisper na GPU do Kaggle falhou nas 600 falas (asr: RuntimeError); depois do --fetch, filtrar na VM com filtrar_xtts_neg.py (imagem friday-asr + pip install soundfile scipy).
 #   run_xtts_neg.sh <saida> <marca_do_dataset> [takes]   confere a marca servida, faz o push, imprime o link e SAI
-#   run_xtts_neg.sh <saida> --fetch                      quando o o dono avisar: baixa, confere run_id e marca, resume
+#   run_xtts_neg.sh <saida> --fetch                      quando o dono avisar: baixa, confere run_id e marca, resume
 set -uo pipefail
 OUT=${1:?saida}; HERE=$(cd "$(dirname "$0")" && pwd)
 VM="$(cat /config/.friday/vm)"; KID=joseluiz98/xtts-sexta-neg-gen; DID=joseluiz98/ptbr-voice-refs

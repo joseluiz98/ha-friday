@@ -496,6 +496,6 @@ class TestExcluidas(unittest.TestCase):
                 "label": "neg", "why": "sem palavra"}]
         n = r.apply_exclusions(its, ["sombra_sexta_feira_20261028_085818.wav"])
         self.assertEqual(n, 1)
-        self.assertEqual((its[0]["label"], its[0]["why"]), (None, "excluída pelo o dono"))
+        self.assertEqual((its[0]["label"], its[0]["why"]), (None, "excluída pelo dono"))
         self.assertEqual(its[1]["label"], "neg")
 

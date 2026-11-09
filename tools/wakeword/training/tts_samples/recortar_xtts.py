@@ -1,7 +1,7 @@
 """Recorta de novo as falas brutas do XTTS (27/10/2026), sem gerar de novo.
 
 Motivo: o 1º recorte terminava no fim da palavra segundo o Whisper + 0,20 s, um corte seco,
-e o filtro só aceitava a transcrição exata "sexta-feira" (o o dono ouviu "Esta-feira" rejeitada
+e o filtro só aceitava a transcrição exata "sexta-feira" (o dono ouviu "Esta-feira" rejeitada
 com a pronúncia certa). Aqui o início e o fim são refinados pela energia da própria fala,
 com folga e fade, e as variantes de transcrição viram uma classe separada para escuta.
 

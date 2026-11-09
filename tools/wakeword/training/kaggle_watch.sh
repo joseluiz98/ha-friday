@@ -1,7 +1,7 @@
 #!/bin/bash
-# Vigia um kernel do Kaggle e avisa o o dono no Telegram quando ele termina (06/11/2026). Roda NA VM, como root, numa unidade
+# Vigia um kernel do Kaggle e avisa o dono no Telegram quando ele termina (06/11/2026). Roda NA VM, como root, numa unidade
 # transitória (systemd-run): não instala nada e some ao acabar. O Kaggle não tem webhook, então é consulta de status,
-# no intervalo que o o dono aceitou (15 min, regra de 06/11). Resultado em /srv/friday/state/kaggle-watch/<slug>.
+# no intervalo que o dono aceitou (15 min, regra de 06/11). Resultado em /srv/friday/state/kaggle-watch/<slug>.
 # Uso: kaggle_watch.sh <owner/kernel> "<próximo passo>" [minutos] [horas_max]     DRY=1 não envia nem espera
 set -uo pipefail
 KID=${1:?kernel}; NEXT=${2:-}; MIN=${3:-15}; MAXH=${4:-8}

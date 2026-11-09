@@ -52,7 +52,7 @@ class TestHarvestLib(unittest.TestCase):
 
 
 
-class TestRulingsExtras(unittest.TestCase):  # 06/11: a Sexta em ativa também é rotulada pelo o dono
+class TestRulingsExtras(unittest.TestCase):  # 06/11: a Sexta em ativa também é rotulada pelo dono
     def test_nome_da_sexta_vale(self):
         self.assertEqual(h.falsas_rotuladas({"falsas_ativacoes": ["sexta_feira_20261026_083000.wav"]}),
                          ["sexta_feira_20261026_083000.wav"])

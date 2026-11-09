@@ -41,14 +41,14 @@ def deduplicar(linhas):
 
 
 def falsas_rotuladas(rulings) -> list:
-    """Nomes das ativações (`ativacoes/AAAAMMDD_HHMMSS.wav`) que o o dono ouviu e rotulou como falsas (31/10), lidos de
+    """Nomes das ativações (`ativacoes/AAAAMMDD_HHMMSS.wav`) que o dono ouviu e rotulou como falsas (31/10), lidos de
     `/share/wakeword-data/<modelo>/rulings.json` → "falsas_ativacoes". Só o nome do clipe da ativação: o nome vai na linha
     de comando do ssh e o contexto_ segue as regras próprias dele (os trechos sem a palavra já viram negativos)."""
     return _validados(rulings, "falsas_ativacoes")
 
 
 def verdadeiras_rotuladas(rulings) -> list:
-    """06/11: ativações que o o dono ouviu e confirmou (o Whisper não reconheceu a palavra). Saem com prefixo `v:`."""
+    """06/11: ativações que o dono ouviu e confirmou (o Whisper não reconheceu a palavra). Saem com prefixo `v:`."""
     return ["v:" + n for n in _validados(rulings, "verdadeiras_ativacoes")]
 
 

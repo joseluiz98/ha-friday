@@ -13,7 +13,7 @@ def zeros_no_microfone(segundos=2):
     a = np.frombuffer(bruto, dtype=np.int16)
     return float((a == 0).mean())
 
-# 06/10: ritmo para o o dono anotar sem contar bipes — 1 bipe, a luz fica 10 s, branco 3 s entre uma e outra.
+# 06/10: ritmo para o dono anotar sem contar bipes — 1 bipe, a luz fica 10 s, branco 3 s entre uma e outra.
 hid = os.open("/dev/hidraw0", os.O_RDWR)
 os.write(hid, bytes([3, 0, 0])); print("branco (referência) por 5 s", flush=True); time.sleep(5)
 for i, bits in enumerate(CANDIDATAS, 1):

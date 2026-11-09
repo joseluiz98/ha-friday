@@ -1,6 +1,6 @@
 """Acrescenta positivos pt-BR nativos a um ciclo da Sexta-feira já montado (27/10/2026).
 
-Fontes (aprovadas pelo o dono na escuta):
+Fontes (aprovadas pelo dono na escuta):
   - recortes reais do Common Voice 27.0 (raw/cv27_sexta; só os que a retranscrição confirma, `confere`);
   - falas XTTS-v2 recortadas (xtts_gen_20261027/recorte_v3; classes estrita e variante, menos as `excluida`).
 A separação treino/prova é POR FALANTE (sorteio com semente): a prova mede vozes que o modelo nunca ouviu.

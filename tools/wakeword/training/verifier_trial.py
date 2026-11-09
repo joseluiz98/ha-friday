@@ -6,7 +6,7 @@ para a prova nunca ver o dia que treinou.
 Uso: verifier_trial.py <modelo.onnx> <saida.json> <manifest.ndjson> <pasta_wav_harvest> <excluidas.json>
      <neg_dir>... [--lv 0.5 --limiar 0.5 --limiar-voz 0.6] [--salvar verificador.pkl]
 <pasta_wav_harvest>: sessao__*.wav (positivos, janelas do manifest) e sombra__*.wav (negativos; os de excluidas.json
-são testes do o dono = positivos). <neg_dir>: pastas de WAV só negativos (sala, conversa)."""
+são testes do dono = positivos). <neg_dir>: pastas de WAV só negativos (sala, conversa)."""
 import argparse, glob, json, os, re, sys
 
 import numpy as np
@@ -53,7 +53,7 @@ def main():
         clipes.append({"grupo": ("s:testes_jose" if rot else "d:" + dia(orig)), "rotulo": rot, "nome": orig, **ext(p)})
     for d in a.negs:
         for p in sorted(glob.glob(os.path.join(d, "*.wav"))):
-            if "fala_livre" in p:  # fala livre do o dono: pode ter a palavra
+            if "fala_livre" in p:  # fala livre do dono: pode ter a palavra
                 continue
             clipes.append({"grupo": "d:" + dia(os.path.basename(p)), "rotulo": 0, "nome": os.path.basename(p), **ext(p)})
 

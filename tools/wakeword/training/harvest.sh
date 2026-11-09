@@ -12,7 +12,7 @@ mkdir -p "$W"; chmod 700 "$W"
 ST=$W   # na Pi: só links (a Pi guarda os originais); cache do Extrator em ~/wwt-score
 
 echo "== 1/6 lista na Pi"
-# rótulos do o dono sobre ativações (31/10): /share/wakeword-data/<modelo>/rulings.json -> "falsas_ativacoes"
+# rótulos do dono sobre ativações (31/10): /share/wakeword-data/<modelo>/rulings.json -> "falsas_ativacoes"
 FALSAS=$(python3 -I - "$HERE" "/share/wakeword-data/$MODEL/rulings.json" <<'PY'
 import json, os, sys
 sys.path.insert(0, sys.argv[1])

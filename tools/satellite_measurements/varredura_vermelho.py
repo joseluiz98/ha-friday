@@ -1,5 +1,5 @@
 """DESCARTÁVEL (Task 3, 08/10): procura vermelho SEM mudo. Tom longo = início; cada código: 1 bipe, 6 s aceso
-(mede 2 s de microfone), 2 s branco. O o dono filma o anel; a ordem dos bipes mapeia os códigos."""
+(mede 2 s de microfone), 2 s branco. O dono filma o anel; a ordem dos bipes mapeia os códigos."""
 import os, select, subprocess, time, wave
 import numpy as np
 

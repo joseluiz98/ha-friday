@@ -1,19 +1,20 @@
 #!/bin/bash
-# Cache do ambiente para a prova das palavras (08/11/2026, pedido do o dono). Roda NA VM como root, acordado pelo
+# Cache do ambiente para a prova das palavras (08/11/2026, pedido do dono). Roda NA VM como root, acordado pelo
 # friday-wwt-featcache.path quando a Pi grava a marca `.sync_ok` no fim de um envio noturno inteiro e sem erro
 # (friday-sync-recordings na Pi, 03:30). Sem marca não roda: dia pela metade nunca entra no cache.
 # 1) todo dia de gravação anterior a hoje sem /srv/wwt-featcache/ambAAAAMMDD.json passa uma vez pelo extrator
 #    (featcache.py cache, modo ambiente; ~80 min por dia, um por vez, nice 19);
 # 2) retenção (o dono, 08/11): áudio de ambiente na VM por 30 dias; o cache sai junto com o áudio.
-# Falha avisa no Telegram. Instalação: cópia em /opt/friday/wwt/ (o featcache.py vem do HA pelo Samba).
+# Falha avisa no Telegram. Instalação: scripts/deploy.sh wwt <ref> (tools/wakeword/wwt/install.sh põe o código de
+# treino do repo em /opt/friday/wwt/training).
 set -uo pipefail
 [ -f /srv/friday/state/local.env ] && . /srv/friday/state/local.env   # FRIDAY_SAT_OFFICE (house value, never in the repo)
 C=/srv/wwt-featcache; A=/srv/wakeword-data/incoming/${FRIDAY_SAT_OFFICE:?set FRIDAY_SAT_OFFICE (local.env)}/gravacoes/ambiente
-CODE=/mnt/haos/config/tools/satelite/wakeword-training; TG=${FRIDAY_TELEGRAM_CHAT:?set FRIDAY_TELEGRAM_CHAT (local.env)}; HOJE=$(date +%Y%m%d)
+CODE=${FRIDAY_WWT_CODE:-/opt/friday/wwt/training}; TG=${FRIDAY_TELEGRAM_CHAT:?set FRIDAY_TELEGRAM_CHAT (local.env)}; HOJE=$(date +%Y%m%d)
 RETER_DIAS=30; CORTE=$(date -d "-$RETER_DIAS days" +%Y%m%d)
 falha() { oc message send --channel telegram --target "$TG" -m "Cache noturno das palavras falhou ($1). Log: journalctl -u friday-wwt-featcache" >/dev/null 2>&1; exit 1; }
 echo "marca da Pi: $(cat /srv/wakeword-data/incoming/${FRIDAY_SAT_OFFICE:?set FRIDAY_SAT_OFFICE (local.env)}/.sync_ok 2>/dev/null)"
-[ -f "$CODE/featcache.py" ] || falha "featcache.py inalcançável pelo Samba"
+[ -f "$CODE/featcache.py" ] || falha "featcache.py ausente em $CODE (deploy wwt)"
 mkdir -p "$C"; chown friday: "$C"
 # retenção do áudio primeiro (não gasta extrator com dia que vai sair)
 apagados=0

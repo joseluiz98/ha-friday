@@ -28,7 +28,7 @@ def candidatos(modelo, falsas=()):
                                   ("sem_voz_", "sem_voz")):
                     if b.startswith(pref):
                         yield src, p
-        # 31/10: ativações que o o dono ouviu e rotulou como falsas (rulings.json no HA, via harvest.sh). Saem como acervo_f,
+        # 31/10: ativações que o dono ouviu e rotulou como falsas (rulings.json no HA, via harvest.sh). Saem como acervo_f,
         # que vence o "ativou" na deduplicação: sem isto, ativou sem a palavra transcrita é descartado (não vira negativo)
         # e, com detector e verificador >= 0,5, vira POSITIVO.
         for nome in sorted(falsas):
@@ -55,7 +55,7 @@ def candidatos(modelo, falsas=()):
         for p in sorted(glob.glob(A + "/sombra_sexta_feira_*.wav")):
             yield "sombra", p
         # 06/11: com a Sexta em ATIVA, disparos e quase-disparos nascem com outros nomes. Sem isto os falsos da ativa nunca
-        # viram negativos. O rótulo do o dono (rulings.json via harvest.sh) vence: `falsas` saem como acervo_f, `v:` como acervo_v.
+        # viram negativos. O rótulo do dono (rulings.json via harvest.sh) vence: `falsas` saem como acervo_f, `v:` como acervo_v.
         for p in sorted(glob.glob(A + "/sexta_feira_*.wav")):
             b = os.path.basename(p)
             if re.fullmatch(r"sexta_feira_\d{8}_\d{6}\.wav", b):
