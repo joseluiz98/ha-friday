@@ -3,24 +3,28 @@ Spec 2026-10-20 D7-D9: turnos dirigidos pela Pi e voz sussurrada (TTS), com o Li
 import asyncio
 import unittest
 
-import numpy as np
-from pipecat.clocks.system_clock import SystemClock
-from pipecat.frames.frames import (
-    InputAudioRawFrame,
-    InterruptionFrame,
-    OutputAudioRawFrame,
-    TTSAudioRawFrame,
-    TTSStoppedFrame,
-    TTSTextFrame,
-    UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame,
-)
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
-from pipecat.utils.asyncio.task_manager import TaskManager
+import importlib.util
 
-import whisper_mode as wm
+IN_CONTAINER = importlib.util.find_spec("pipecat") is not None  # pipecat only exists in the friday image
+if IN_CONTAINER:
+    import numpy as np
+    from pipecat.clocks.system_clock import SystemClock
+    from pipecat.frames.frames import (
+        InputAudioRawFrame,
+        InterruptionFrame,
+        OutputAudioRawFrame,
+        TTSAudioRawFrame,
+        TTSStoppedFrame,
+        TTSTextFrame,
+        UserStartedSpeakingFrame,
+        UserStoppedSpeakingFrame,
+    )
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
+    from pipecat.utils.asyncio.task_manager import TaskManager
 
-D = FrameDirection.DOWNSTREAM
+    import whisper_mode as wm  # imports pipecat too
+
+    D = FrameDirection.DOWNSTREAM
 
 
 async def ligar(proc):
@@ -66,6 +70,7 @@ def valores(saida):
             if isinstance(f, OutputAudioRawFrame) and np.frombuffer(f.audio, dtype=np.int16).any()]
 
 
+@unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
 class TestSplit(unittest.TestCase):
     def test_corta_depois_da_pontuacao_com_espaco(self):
         self.assertEqual(wm.split_sentences("Oi. Tudo bem? Sim"), (["Oi.", "Tudo bem?"], "Sim"))
@@ -77,6 +82,7 @@ class TestSplit(unittest.TestCase):
         self.assertEqual(wm.split_sentences(""), ([], ""))
 
 
+@unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
 class TestWhisperVoice(unittest.IsolatedAsyncioTestCase):
     async def test_audio_do_live_nao_passa(self):
         p = wm.WhisperVoice(tts_falso({}))
@@ -168,6 +174,7 @@ class TestWhisperVoice(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(valores(saida), [1, 2])
 
 
+@unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
 class TestMarcaDeFala(unittest.IsolatedAsyncioTestCase):
     """Revisão de 20/10 (caso real 19:18, previsão do tempo): com OutputAudioRawFrame simples o transporte não vê o bot
     falando — sem BotStarted/StoppedSpeaking a Pi não recebe `ela_comecou` (a espera curta de 8 s cortou a resposta)
@@ -203,6 +210,7 @@ class TestMarcaDeFala(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(isinstance(f, TTSAudioRawFrame) for f in audios))
 
 
+@unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
 class TestPiSpeechTurns(unittest.IsolatedAsyncioTestCase):
     async def test_pi_speech_turns_idempotente(self):
         p = wm.PiSpeechTurns(min_audio_s=0)
@@ -226,6 +234,7 @@ def mic(segundos):
     return InputAudioRawFrame(audio=bytes(int(16000 * 2 * segundos)), sample_rate=16000, num_channels=1)
 
 
+@unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
 class TestJanelaComAudio(unittest.IsolatedAsyncioTestCase):
     """Revisão de 21/10 (reproduzido na bancada): activity_start + activity_end SEM áudio entre eles derruba a sessão
     do Gemini (1007 Precondition check failed). Acontecia quando a frase sussurrada acabava antes de a conexão abrir:

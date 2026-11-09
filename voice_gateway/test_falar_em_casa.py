@@ -1,3 +1,4 @@
+import unittest
 """Script da skill falar-em-casa contra um /deliver simulado (spec 2026-10-12 §3):
 cd /srv/friday/app && python3 -m unittest test_falar_em_casa -v"""
 import http.server, json, os, subprocess, tempfile, threading, unittest
@@ -21,6 +22,7 @@ class Falso(http.server.BaseHTTPRequestHandler):
         pass
 
 
+@unittest.skipUnless(os.path.exists(SCRIPT), "needs the production brain workspace (runs on the VM: scripts/test-all.sh)")
 class TestScript(unittest.TestCase):
     def setUp(self):
         Falso.recebidos.clear()

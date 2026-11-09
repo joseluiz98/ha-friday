@@ -1,6 +1,9 @@
 """cd ~/satelite && ~/oww/bin/python -m unittest test_porta_local_wakewords -v   (na Pi: precisa de aiohttp)
 spec 2026-10-24 (wakeword-retrain): GET /wakewords e PUT /wakewords/{nome}."""
 import json, os, tempfile, unittest
+import importlib.util
+if importlib.util.find_spec("aiohttp") is None:  # the Pi venv and CI have it; a bare python does not
+    raise unittest.SkipTest("needs aiohttp")
 from aiohttp.test_utils import TestClient, TestServer
 import configuracao as c
 import porta_local

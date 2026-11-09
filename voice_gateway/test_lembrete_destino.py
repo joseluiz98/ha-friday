@@ -1,3 +1,4 @@
+import unittest
 """Coerência do destino dos lembretes (14/10/2026): o fato fica num lugar só, o AGENTS.md da friday, e precisa bater
 com a rota do bot, a porta do add-on e o dono do Telegram. Se alguém mudar um lado, este teste quebra antes de
 publicar. python3 -m unittest test_lembrete_destino"""
@@ -17,6 +18,7 @@ def delivery_do_agents():
     return json.loads(m.group(1)) if m else None
 
 
+@unittest.skipUnless(os.path.exists(WS), "needs the production brain workspace (runs on the VM: scripts/test-all.sh)")
 class TestDestinoDoLembrete(unittest.TestCase):
     def test_agents_descreve_o_delivery(self):
         d = delivery_do_agents()

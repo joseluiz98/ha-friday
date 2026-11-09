@@ -25,3 +25,49 @@ jobs:
         with:
           node-version: "22"
       - run: node --test tests/frontend/*.mjs
+
+  satellite-program:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install aiohttp
+      - run: cd satellite/program && python -m unittest -q
+      - run: cd satellite/image && python -m unittest -q tests.test_payload_check tests.test_make_manifest tests.test_vault_payload
+
+  server-tools:
+    runs-on: ubuntu-latest
+    env:
+      FRIDAY_LOCAL_CONFIG: ${{ github.workspace }}/voice_gateway/local.example.env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install numpy
+      - run: for d in status cataloger cost aec; do (cd server/$d && python -m unittest -q) || exit 1; done
+      - run: for t in server/essentials/test_*.sh server/image/test_*.sh; do bash "$t" || exit 1; done
+
+  voice-gateway:
+    runs-on: ubuntu-latest
+    env:
+      FRIDAY_LOCAL_CONFIG: ${{ github.workspace }}/voice_gateway/local.example.env
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # tests that need pipecat or the production brain workspace skip here and run on the VM (scripts/test-all.sh)
+      - run: pip install numpy loguru aiohttp fastapi
+      - run: cd voice_gateway && python -m unittest -q
+
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 scripts/sweep.py
+      - run: python3 scripts/sweep.py --history .

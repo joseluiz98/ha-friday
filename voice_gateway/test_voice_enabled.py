@@ -1,7 +1,7 @@
 """Global voice switch in the Voice Gateway (Task 6, spec 2026-10-29).
 cd /srv/friday/app && python3 -m unittest test_voice_enabled -v
 bot.py does not boot in tests: the two functions are extracted by AST and run against a bare FastAPI app."""
-import ast, os, tempfile, unittest
+import ast, importlib.util, os, tempfile, unittest
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 
@@ -46,6 +46,7 @@ class TestVoiceEnabled(unittest.TestCase):
             f.write(b"\xff\xfe\x80off")
         self.assertTrue(self.ns["voice_enabled"](self.arq))
 
+    @unittest.skipUnless(importlib.util.find_spec("pipecat"), "needs pipecat: runs in the friday image (scripts/test-all.sh)")
     def test_offer_refused_when_voice_disabled(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient

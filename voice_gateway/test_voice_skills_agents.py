@@ -1,3 +1,4 @@
+import unittest
 """Coerência do ensino da voz (23/10/2026): o fato fica num lugar só, o AGENTS.md da friday, e precisa bater com o
 script do cérebro, a rota do bot e as chaves que o validador confere. python3 -m unittest test_voice_skills_agents"""
 import os, re, unittest
@@ -14,6 +15,7 @@ def agents():
         return f.read()
 
 
+@unittest.skipUnless(os.path.exists(WS), "needs the production brain workspace (runs on the VM: scripts/test-all.sh)")
 class TestEnsinoDaVoz(unittest.TestCase):
     def test_agents_cita_o_script_que_existe(self):
         m = re.search(r"(/\S*/bin/voice_skills\.sh)", agents())

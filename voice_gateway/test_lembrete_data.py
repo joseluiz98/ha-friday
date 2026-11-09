@@ -1,3 +1,4 @@
+import unittest
 """Datas dos lembretes (23/10/2026): a voz não sabe a data de hoje e o cérebro sabe. Em 22/10 às 23:20 a voz trocou o
 "amanhã" do Alex por "24 de outubro" e o lembrete foi para o dia errado. Os dois lados precisam dizer o mesmo fato:
 a voz repassa datas nas palavras do Alex, o cérebro resolve, confere e diz o dia da semana.
@@ -23,6 +24,7 @@ def fato_das_datas():
     return m.group(0) if m else ""
 
 
+@unittest.skipUnless(os.path.exists(WS), "needs the production brain workspace (runs on the VM: scripts/test-all.sh)")
 class TestDataDoLembrete(unittest.TestCase):
     def test_voz_sabe_que_nao_sabe_a_data(self):
         d = descricao_do_pedido()
