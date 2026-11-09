@@ -6,7 +6,7 @@ D=/opt/friday/agent
 mkdir -p "$D" /srv/friday/secrets
 python3 -c "import ensurepip" 2>/dev/null || apt-get install -y -qq python3-venv
 [ -x "$D/venv/bin/pip" ] || python3 -m venv --clear "$D/venv"
-"$D/venv/bin/pip" install -q aiohttp
+"$D/venv/bin/pip" install -q -r server/requirements.lock
 rm -rf "$D/friday_server_agent" "$D/friday_agent_core"
 cp -r server/friday_server_agent common/friday_agent_core "$D/"
 find "$D" -name __pycache__ -prune -exec rm -rf {} +

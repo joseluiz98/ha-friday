@@ -12,4 +12,4 @@ rsync -az --delete \
 ARGS=$(printf '%q ' "$@")
 ssh -o BatchMode=yes "$VM" "sudo docker run --rm \
   -v \$HOME/ha-friday:/w -v friday-pip-cache:/root/.cache/pip -w /w python:3.14-slim \
-  sh -c 'pip install -q --root-user-action=ignore -r requirements_test.txt && pytest -q $ARGS'"
+  sh -c 'pip install -q --root-user-action=ignore -r requirements_test.lock && pytest -q $ARGS'"
