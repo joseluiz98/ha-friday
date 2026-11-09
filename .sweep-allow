@@ -29,3 +29,7 @@
 */tests/agents/test_satellite_hardware.py:B8:27:EB:00:00:01
 */tests/tools/test_sweep.py:02\\\\\\\\:00
 */tests/agents/test_satellite_hardware.py:B8\\\\:27\\\\:EB\\\\:00
+# Placeholder MAC that the history rewrite puts where a real one was.
+*:02(\\*:)00(\\*:)00(\\*:)00(\\*:)00(\\*:)00|02:00:00:00:00:00
+# The PVE auth header is built from config in the server agent (format string, no token).
+*/agents/server/friday_server_agent/__main__.py:PVEAPIToken=
