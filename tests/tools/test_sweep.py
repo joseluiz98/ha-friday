@@ -57,3 +57,8 @@ def test_history_mode_finds_value_only_in_old_commit(tmp_path):
     subprocess.run(g + ["commit", "-qam", "2"], check=True)
     assert sweep.sweep([str(tmp_path)], ["Zelda"], []) == []
     assert sweep.sweep_history(str(tmp_path), ["Zelda"], [])
+
+
+def test_escaped_mac_is_caught(tmp_path):
+    (tmp_path / "a.py").write_text('return "02\\\\:00\\\\:5F\\\\:11\\\\:22\\\\:33\\n"\n')
+    assert [f.category for f in sweep.sweep([str(tmp_path)], [], [])] == ["ip_mac"]

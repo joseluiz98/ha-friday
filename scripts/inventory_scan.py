@@ -22,7 +22,7 @@ SECRET = [re.compile(p) for p in (
     r"\"token\"\s*:\s*\"[^\"]{16,}\"", r"PVEAPIToken=\S+", r"\bbot\d{6,}:[A-Za-z0-9_-]{20,}")]
 IP_MAC = [re.compile(p) for p in (
     r"\b(?:10|127)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", r"\b192\.168\.\d{1,3}\.\d{1,3}\b",
-    r"\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", r"\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b")]
+    r"\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b", r"\b(?:[0-9A-Fa-f]{2}\\*:){5}[0-9A-Fa-f]{2}\b")]
 DEVICE = [re.compile(r"\bsat-[0-9a-f]{6}\b")]
 EMAIL_PHONE = [re.compile(p) for p in (r"\b[\w.+-]+@[\w-]+\.[\w.]+\b", r"\+?55\s?\(?\d{2}\)?\s?9?\d{4}-?\d{4}\b")]
 PERSONAL_PATH = [re.compile(r"/home/[a-z][a-z0-9_-]*")]

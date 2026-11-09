@@ -26,7 +26,7 @@ _spec.loader.exec_module(scan)
 DEFAULT_LIST = "/config/.friday/sensitive.txt"
 GENERIC = {
     "secret": scan.SECRET,
-    "ip_mac": [re.compile(r"\b192\.168\.\d{1,3}\.\d{1,3}\b"), re.compile(r"\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b")],
+    "ip_mac": [re.compile(r"\b192\.168\.\d{1,3}\.\d{1,3}\b"), re.compile(r"\b(?:[0-9A-Fa-f]{2}\\*:){5}[0-9A-Fa-f]{2}\b")],
     "email_phone": [re.compile(r"\b[\w.+-]+@[A-Za-z][\w-]*(?:\.[A-Za-z][\w-]*)*\.[A-Za-z]{2,}\b"),
                     re.compile(r"\+55\s?\(?\d{2}\)?\s?9?\d{4}-?\d{4}\b")],
     "personal_path": [re.compile(r"/home/(?!jose\b)[a-z][a-z0-9_-]*")],
@@ -86,7 +86,7 @@ def _private(private) -> list[tuple[str, str]]:
 def sweep(paths: list[str], private: list, allow: list[AllowRule]) -> list:
     pv = _private(private)
     found = []
-    for path in scan._files(paths):
+    for path in scan._files([os.path.abspath(p) for p in paths]):
         if not scan._is_text(path):
             continue
         with open(path, encoding="utf-8", errors="replace") as f:
