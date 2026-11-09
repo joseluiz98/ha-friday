@@ -12,6 +12,7 @@ mkdir -p "$D"
 rm -rf "$D/friday_satellite_agent" "$D/friday_agent_core"
 cp -r satellite/friday_satellite_agent common/friday_agent_core "$D/"
 find "$D" -name __pycache__ -prune -exec rm -rf {} +
+echo "${FRIDAY_VERSION_LINE:?FRIDAY_VERSION_LINE missing (use scripts/deploy.sh)}" > "$D/friday_agent_core/FRIDAY_VERSION"
 cp satellite/friday-satellite-agent.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable friday-satellite-agent
