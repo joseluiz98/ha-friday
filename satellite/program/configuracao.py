@@ -39,6 +39,8 @@ PADROES = {
     "eco_portao_db": None,
     # 04/11 (teste do dono): fecha o microfone quando a pessoa para de falar e só reabre quando ela responde
     "close_mic_awaiting_reply": False,
+    # 10/11: com o cérebro pendente, não fecha o microfone com a pessoa falando (espera a próxima pausa)
+    "keep_listening_while_speaking": True,
     # 04/11: continuação no estilo Alexa. Sem continuação com música tocando nem depois de comando da casa; pausa de fim
     # de fala (s) que o DetectorFala e o VAD do Gemini esperam (0,8 = o de sempre)
     "no_follow_up_while_music": True, "no_follow_up_after_home_commands": True, "end_of_speech_pause_s": 0.8,
@@ -71,7 +73,7 @@ _REGRAS = {
     "mudo": ((bool,), None, None), "sons_turno": ((bool,), None, None),
     "speech_max_s": ((int, float), 5, 120), "alarm_ramp_s": ((int, float), 0, 120),
     "eco_portao_db": ((int, float, type(None)), -90, 0),
-    "close_mic_awaiting_reply": ((bool,), None, None),
+    "close_mic_awaiting_reply": ((bool,), None, None), "keep_listening_while_speaking": ((bool,), None, None),
     "no_follow_up_while_music": ((bool,), None, None), "no_follow_up_after_home_commands": ((bool,), None, None),
     "end_of_speech_pause_s": ((int, float), 0.5, 2.0),
 }

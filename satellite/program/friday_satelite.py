@@ -150,6 +150,7 @@ class Satelite:
         return Ajustes(espera_inicial_s=self.cfg["espera_inicial_s"], continuacao_s=self.cfg["continuacao_s"],
                         cerebro_fim_s=self.cfg["cerebro_fim_s"], espera_resposta_s=self.cfg["espera_resposta_s"], speech_max_s=self.cfg["speech_max_s"],
                        close_mic_awaiting_reply=bool(self.cfg.get("close_mic_awaiting_reply", False)),
+                       keep_listening_while_speaking=self.cfg.get("keep_listening_while_speaking", True) is not False,
                        no_follow_up_while_music=self.cfg.get("no_follow_up_while_music", True) is not False,
                        no_follow_up_after_home_commands=self.cfg.get("no_follow_up_after_home_commands", True) is not False)
 

@@ -371,3 +371,19 @@ def test_continuous_speech_limit_number():
     assert m.state(dict(CFG, speech_max_s=0), WW, None)["continuous_speech_limit"] == 0
     assert m.to_program(CFG, "continuous_speech_limit", 0.0) == {"config": {"speech_max_s": 0}}
     assert isinstance(m.to_program(CFG, "continuous_speech_limit", 30.0)["config"]["speech_max_s"], int)
+
+
+def test_continue_listening_while_speaking_switch():
+    """10/11: next to "Close mic while awaiting reply" on the page (names sort together); absent = on."""
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    d = keys["continue_listening_while_speaking"]
+    assert (d["platform"], d["name"], d["category"]) == ("switch", "Continue listening while speaking", "config")
+    names = sorted(c["name"] for c in keys.values() if c.get("category") == "config")
+    i = names.index("Continue listening while speaking")
+    assert names[i - 1] == "Close mic while awaiting reply" and names[i + 1] == "Continuous speech limit"
+    m = cap.Mapper()
+    assert m.state(CFG, WW, None)["continue_listening_while_speaking"] is True
+    assert m.state(dict(CFG, keep_listening_while_speaking=False), WW, None)[
+        "continue_listening_while_speaking"] is False
+    assert m.to_program(CFG, "continue_listening_while_speaking", False) == {
+        "config": {"keep_listening_while_speaking": False}}

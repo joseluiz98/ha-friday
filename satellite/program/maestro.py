@@ -38,6 +38,9 @@ class Ajustes:
     # 04/11 (teste do dono): fecha o microfone quando a pessoa para de falar e reabre quando ela começa a responder,
     # como a Alexa; a fala que vier nesse intervalo (conversa da sala) não estica a espera curta
     close_mic_awaiting_reply: bool = False
+    # 10/11 (MK1, ditado do lembrete): com o cérebro pendente, o prazo que vence com a pessoa falando espera a próxima
+    # pausa em vez de fechar o microfone. False = como antes (fechava no meio da fala)
+    keep_listening_while_speaking: bool = True
     # 04/11: sem continuação com música tocando (a Pi consulta o Sendspin quando ela começa a responder) nem depois de
     # um turno só de comando da casa (o bot avisa com `encerrar comando_casa`)
     no_follow_up_while_music: bool = True
@@ -557,6 +560,12 @@ class Maestro:
             return acoes
         return []
 
+    def _falando_segura(self, motivo):
+        """Com o cérebro pendente (ou a resposta ainda não falada), quem está falando segura o microfone aberto; o
+        próximo `fala_parou` rearma o prazo. Os prazos de resposta só seguravam com keep_listening_while_speaking."""
+        return self._alguem_falando and (motivo not in ("resposta", "resposta_curta")
+                                         or self.a.keep_listening_while_speaking)
+
     def _aguardar_cerebro(self):
         self.estado = AGUARDANDO
         self._prazo = None
@@ -588,13 +597,12 @@ class Maestro:
         # Com o cérebro pendente a conversa nunca fecha por prazo: volta a aguardar (06/10, resposta perdida).
         if self.pendentes > 0 and e in ABERTO and motivo in ("espera_inicial", "continuacao", "resposta",
                                                              "resposta_curta"):
-            return [] if self._alguem_falando and motivo not in ("resposta", "resposta_curta") \
-                else self._aguardar_cerebro()
+            return [] if self._falando_segura(motivo) else self._aguardar_cerebro()
         # 19/10: a resposta devolvida e não falada segura a conversa como um pendente, só até cerebro_fim_s. O
         # microfone fecha neste mesmo instante (aguardar), então não fica aberto mais tempo do que antes.
         if (self._resposta_ate is not None and agora < self._resposta_ate and e in ABERTO
                 and motivo in ("espera_inicial", "continuacao", "resposta", "resposta_curta")):
-            if self._alguem_falando and motivo not in ("resposta", "resposta_curta"):
+            if self._falando_segura(motivo):
                 return []
             fim, self._resposta_ate = self._resposta_ate, None
             acoes = self._aguardar_cerebro()

@@ -59,6 +59,9 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
            category=c, mode="box"),
         _d("close_mic_awaiting_reply", "switch", "Close mic while awaiting reply", category=c,
            icon="mdi:microphone-message-off"),
+        # 10/11: with the brain pending, someone speaking keeps the mic open (program key keep_listening_while_speaking)
+        _d("continue_listening_while_speaking", "switch", "Continue listening while speaking", category=c,
+           icon="mdi:microphone-message"),
         # 10/11: R13 speech_max_s; 0 = off. Step 5: the program refuses 1..4 s
         _d("continuous_speech_limit", "number", "Continuous speech limit", min=0, max=120, step=5, unit="s",
            category=c, mode="box", icon="mdi:timer-sand"),
@@ -153,6 +156,7 @@ class Mapper:
             "end_of_speech_pause": cfg.get("end_of_speech_pause_s", 0.8),
             "close_mic_awaiting_reply": cfg.get("close_mic_awaiting_reply") is True,
             "continuous_speech_limit": cfg.get("speech_max_s", 15),
+            "continue_listening_while_speaking": cfg.get("keep_listening_while_speaking", True) is not False,
             "ducking": bool(duck),
             "ducking_level": duck if duck else self.last_duck,
             "ducking_restore": cfg.get("music_restore_s"),
@@ -176,7 +180,8 @@ class Mapper:
                   "end_of_speech_pause": "end_of_speech_pause_s",
                   "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s",
                   "close_mic_awaiting_reply": "close_mic_awaiting_reply",
-                  "continuous_speech_limit": "speech_max_s"}
+                  "continuous_speech_limit": "speech_max_s",
+                  "continue_listening_while_speaking": "keep_listening_while_speaking"}
         if key in simple:
             if key in INT_KEYS and isinstance(value, float) and value.is_integer():
                 value = int(value)  # HA number entities send 20.0; the program accepts only int here

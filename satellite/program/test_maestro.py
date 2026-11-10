@@ -890,3 +890,42 @@ class TestContinuacaoEstiloAlexa(unittest.TestCase):
         self.m.evento("ela_comecou", 4.0)
         self.assertEqual(self.m.evento("ela_parou", 6.0), [])
         self.assertEqual(registro(self.m.evento("tique", 6.05))["como_fechou"], "silencio")
+
+
+class TestFalaComCerebroPendente(unittest.TestCase):
+    """10/11 (MK1, ditado do lembrete): com o cérebro pendente o prazo de 8 s fechava o microfone com a pessoa
+    falando. `keep_listening_while_speaking` (padrão ligado) espera a próxima pausa; desligado = como antes."""
+    def ditado(self, **kw):
+        m = Maestro(Ajustes(**kw))
+        m.evento("palavra", 0.0)
+        m.evento("conectou", 1.0)
+        m.evento("fala_comecou", 2.0)
+        m.evento("fala_parou", 6.0)
+        m.evento("cerebro_pendente", 6.5, 1)
+        m.evento("fala_comecou", 6.6)  # o ditado continua depois de a Gemini chamar o cérebro
+        m.evento("fala_parou", 8.0)
+        m.evento("fala_comecou", 8.1)  # respira e continua
+        return m
+
+    def test_default_keeps_the_mic_open_while_someone_speaks(self):
+        m = self.ditado()
+        self.assertEqual(m.evento("tique", 16.1), [])
+        self.assertEqual(m.estado, "ouvindo")
+
+    def test_waits_the_next_pause_and_then_thinks(self):
+        m = self.ditado()
+        m.evento("tique", 16.1)
+        m.evento("fala_parou", 20.0)
+        self.assertEqual(m.evento("tique", 27.9), [])
+        self.assertEqual(tipos(m.evento("tique", 28.1)), ["som:fim", "luz:cerebro", "microfone:False"])
+        self.assertEqual(m.estado, "aguardando")
+
+    def test_switch_off_is_the_old_behaviour(self):
+        m = self.ditado(keep_listening_while_speaking=False)
+        self.assertEqual(tipos(m.evento("tique", 16.1)), ["som:fim", "luz:cerebro", "microfone:False"])
+
+    def test_answer_back_but_not_spoken_also_waits_for_the_pause(self):
+        m = self.ditado()
+        m.evento("cerebro_pendente", 9.0, 0)  # resposta devolvida, ela ainda não falou
+        self.assertNotIn(("microfone", False), m.evento("tique", 16.1))
+        self.assertEqual(m.estado, "ouvindo")
