@@ -357,3 +357,17 @@ async def test_keeper_tries_again_when_the_announcement_fails():
     assert len(box) == 1 and results == []
     k.close()
     assert box == []
+
+
+def test_continuous_speech_limit_number():
+    """10/11: speech_max_s (R13) on the satellite page; 0 turns the ceiling off. Step 5 keeps HA off 1..4 s,
+    which the program refuses."""
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    d = keys["continuous_speech_limit"]
+    assert (d["platform"], d["name"], d["category"]) == ("number", "Continuous speech limit", "config")
+    assert (d["min"], d["max"], d["step"], d["unit"]) == (0, 120, 5, "s")
+    m = cap.Mapper()
+    assert m.state(CFG, WW, None)["continuous_speech_limit"] == 15  # absent = program default
+    assert m.state(dict(CFG, speech_max_s=0), WW, None)["continuous_speech_limit"] == 0
+    assert m.to_program(CFG, "continuous_speech_limit", 0.0) == {"config": {"speech_max_s": 0}}
+    assert isinstance(m.to_program(CFG, "continuous_speech_limit", 30.0)["config"]["speech_max_s"], int)

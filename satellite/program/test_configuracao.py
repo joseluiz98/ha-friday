@@ -81,6 +81,12 @@ class TestMusicConfig(unittest.TestCase):
         for v in (5, 120):
             self.assertEqual(c.validar_mudancas(dict(c.PADROES), {"speech_max_s": v})["speech_max_s"], v)
 
+    def test_speech_max_s_zero_turns_it_off(self):  # 10/11: 0 = sem teto; 1..4 continua recusado
+        self.assertEqual(c.validar_mudancas(dict(c.PADROES), {"speech_max_s": 0})["speech_max_s"], 0)
+        for v in (0.5, 4, -1, False):
+            with self.assertRaises(ValueError):
+                c.validar_mudancas(dict(c.PADROES), {"speech_max_s": v})
+
 
 class TestAlarmRamp(unittest.TestCase):
     def test_alarm_ramp_s_bounds(self):

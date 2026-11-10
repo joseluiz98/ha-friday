@@ -32,7 +32,7 @@ class Ajustes:
     fila_entrega_max_s: float = 90.0
     # Spec 2026-10-21 R13: fala contínua (sem pausa) por mais que isto deixa de contar como "alguém falando" e a
     # conversa fecha (`fala_longa`). Música cantada que o VAD confunde com voz não segura o microfone aberto.
-    speech_max_s: float = 15.0
+    speech_max_s: float = 15.0  # 10/11: 0 desliga o teto (ditado longo no MK1), com ou sem música
     # Spec 2026-10-21 R11: quanto esperar a música do alarme começar antes de seguir como um alarme normal
     music_wait_s: float = 10.0
     # 04/11 (teste do dono): fecha o microfone quando a pessoa para de falar e reabre quando ela começa a responder,
@@ -570,6 +570,7 @@ class Maestro:
         if self.estado == PARADA and self._alarme is None:
             return self._proxima_da_fila(agora)
         if (self.estado in ABERTO and self._alguem_falando and self.pendentes == 0 and not self._ela_falando
+                and self.a.speech_max_s > 0
                 and self._fala_desde is not None and agora - self._fala_desde >= self.a.speech_max_s):
             return self._fechar(agora, "fala_longa")
         if not self._prazo or agora < self._prazo[1]:

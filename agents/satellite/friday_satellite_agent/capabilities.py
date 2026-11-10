@@ -18,7 +18,7 @@ from friday_agent_core import version as _version
 VERSION = _version.installed_version(_version.FILE)
 WHISPER_DEFAULT_DB = 5.5
 DUCK_DEFAULT = 15
-INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window"}
+INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window", "continuous_speech_limit"}
 MODES = {"ativa": "active", "sombra": "shadow", "desligada": "off"}
 MODES_BACK = {v: k for k, v in MODES.items()}
 STATES = {"parada": "idle", "alarme": "idle", "cadastro": "idle", "conectando": "listening",
@@ -59,6 +59,9 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
            category=c, mode="box"),
         _d("close_mic_awaiting_reply", "switch", "Close mic while awaiting reply", category=c,
            icon="mdi:microphone-message-off"),
+        # 10/11: R13 speech_max_s; 0 = off. Step 5: the program refuses 1..4 s
+        _d("continuous_speech_limit", "number", "Continuous speech limit", min=0, max=120, step=5, unit="s",
+           category=c, mode="box", icon="mdi:timer-sand"),
         _d("ducking", "switch", "Music ducking", category=c, icon="mdi:music-note-minus"),
         _d("ducking_level", "number", "Ducking level", min=1, max=25, step=1, unit="%", category=c, mode="box"),
         _d("ducking_restore", "number", "Ducking restore delay", min=0, max=10, step=0.5, unit="s",
@@ -149,6 +152,7 @@ class Mapper:
             "no_follow_up_after_home_commands": cfg.get("no_follow_up_after_home_commands", True) is not False,
             "end_of_speech_pause": cfg.get("end_of_speech_pause_s", 0.8),
             "close_mic_awaiting_reply": cfg.get("close_mic_awaiting_reply") is True,
+            "continuous_speech_limit": cfg.get("speech_max_s", 15),
             "ducking": bool(duck),
             "ducking_level": duck if duck else self.last_duck,
             "ducking_restore": cfg.get("music_restore_s"),
@@ -171,7 +175,8 @@ class Mapper:
                   "no_follow_up_after_home_commands": "no_follow_up_after_home_commands",
                   "end_of_speech_pause": "end_of_speech_pause_s",
                   "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s",
-                  "close_mic_awaiting_reply": "close_mic_awaiting_reply"}
+                  "close_mic_awaiting_reply": "close_mic_awaiting_reply",
+                  "continuous_speech_limit": "speech_max_s"}
         if key in simple:
             if key in INT_KEYS and isinstance(value, float) and value.is_integer():
                 value = int(value)  # HA number entities send 20.0; the program accepts only int here

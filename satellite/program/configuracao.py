@@ -232,6 +232,9 @@ def validar_mudancas(atual: dict, mudancas: dict) -> dict:
                 raise ValueError(f"modo_friday: um de {MODOS_PALAVRA}")
             novo[k] = v
             continue
+        if k == "speech_max_s" and v == 0 and not isinstance(v, bool):  # 10/11: 0 desliga o teto (R13)
+            novo[k] = 0
+            continue
         if k not in _REGRAS:
             raise ValueError(f"chave não alterável: {k}")
         tipos, minimo, maximo = _REGRAS[k]

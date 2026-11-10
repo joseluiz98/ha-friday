@@ -87,6 +87,14 @@ class TestFalaLonga(Base):
         acoes = self.m.evento("tique", 16.0)
         self.assertEqual(registro(acoes)["como_fechou"], "fala_longa")
 
+    def test_zero_turns_the_ceiling_off(self):  # 10/11: ditado longo no MK1; com ou sem música, nunca fecha
+        self.m = Maestro(Ajustes(speech_max_s=0))
+        self.abrir_e_conectar()
+        self.m.evento("musica", 1.0, True)
+        self.m.evento("fala_comecou", 0.5)
+        self.assertNotIn(("desconectar", None), self.m.evento("tique", 60.0))
+        self.assertEqual(self.m.estado, "ouvindo")
+
     def test_her_speech_is_not_counted(self):
         self.abrir_e_conectar()
         self.m.evento("fala_comecou", 0.5)
