@@ -43,6 +43,7 @@ def _d(key, platform, name, **kw) -> dict:
 
 def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
     c = "config"
+    # 10/11: names tested on an end user without context (two rounds); the entity_id stays
     out = [
         _d("volume", "number", "Volume", min=0, max=100, step=1, unit="%", mode="slider", icon="mdi:volume-high"),
         _d("do_not_disturb", "switch", "Do not disturb", icon="mdi:minus-circle"),
@@ -50,26 +51,26 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("alarm_ramp", "number", "Alarm ramp", min=0, max=120, step=1, unit="s", category=c, mode="box"),
         _d("sounds_volume", "number", "Sounds volume", min=-40, max=0, step=1, unit="dB", category=c, mode="slider"),
         _d("whisper_mode", "switch", "Whisper mode", category=c, icon="mdi:account-voice"),
-        _d("reply_wait", "number", "Reply wait", min=2, max=30, step=1, unit="s", category=c, mode="box"),
+        _d("reply_wait", "number", "Close if no reply starts within", min=2, max=30, step=1, unit="s", category=c, mode="box"),
         _d("follow_up_window", "number", "Follow-up window", min=0, max=30, step=1, unit="s", category=c, mode="box"),
         _d("no_follow_up_while_music", "switch", "No follow-up while music plays", category=c, icon="mdi:music-off"),
         _d("no_follow_up_after_home_commands", "switch", "No follow-up after home commands", category=c,
            icon="mdi:home-export-outline"),
         _d("end_of_speech_pause", "number", "End-of-speech pause", min=0.5, max=2.0, step=0.1, unit="s",
            category=c, mode="box"),
-        _d("close_mic_awaiting_reply", "switch", "Close mic while awaiting reply", category=c,
+        _d("close_mic_awaiting_reply", "switch", "Close mic from user pause until reply", category=c,
            icon="mdi:microphone-message-off"),
         # 10/11: with the brain pending, someone speaking keeps the mic open (program key keep_listening_while_speaking)
-        _d("continue_listening_while_speaking", "switch", "Continue listening while speaking", category=c,
+        _d("continue_listening_while_speaking", "switch", "Continue listening while user speaks, reply pending", category=c,
            icon="mdi:microphone-message"),
         # 10/11: R13 speech_max_s; 0 = off. Step 5: the program refuses 1..4 s
-        _d("continuous_speech_limit", "number", "Continuous speech limit", min=0, max=120, step=5, unit="s",
+        _d("continuous_speech_limit", "number", "Continuous sound cutoff (0 = off)", min=0, max=120, step=5, unit="s",
            category=c, mode="box", icon="mdi:timer-sand"),
         _d("ducking", "switch", "Music ducking", category=c, icon="mdi:music-note-minus"),
         _d("ducking_level", "number", "Ducking level", min=1, max=25, step=1, unit="%", category=c, mode="box"),
         _d("ducking_restore", "number", "Ducking restore delay", min=0, max=10, step=0.5, unit="s",
            category=c, mode="box"),
-        _d("voice_enabled", "switch", "Voice", icon="mdi:account-voice"),
+        _d("voice_enabled", "switch", "Assistant", icon="mdi:account-voice"),
         _d("mute", "switch", "Mute", icon="mdi:microphone-off"),
         _d("turn_sounds", "switch", "Turn sounds", category=c, icon="mdi:bell-ring"),
         _d("reboot", "button", "Reboot", device_class="restart", category=c),

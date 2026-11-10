@@ -230,7 +230,7 @@ def test_rejected_event_carries_cause_and_counts():
 def test_close_mic_awaiting_reply_switch():
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     d = keys["close_mic_awaiting_reply"]
-    assert d["platform"] == "switch" and d["name"] == "Close mic while awaiting reply"
+    assert d["platform"] == "switch" and d["name"] == "Close mic from user pause until reply"
     m = cap.Mapper()
     assert m.state(CFG, WW, None)["close_mic_awaiting_reply"] is False  # absent = off (program default)
     assert m.state(dict(CFG, close_mic_awaiting_reply=True), WW, None)["close_mic_awaiting_reply"] is True
@@ -241,7 +241,7 @@ def test_follow_up_entities_names_and_mapping():
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     assert "follow_up" not in keys
     spec = {
-        "reply_wait": ("number", "Reply wait", (2, 30, 1)),
+        "reply_wait": ("number", "Close if no reply starts within", (2, 30, 1)),
         "follow_up_window": ("number", "Follow-up window", (0, 30, 1)),
         "no_follow_up_while_music": ("switch", "No follow-up while music plays", None),
         "no_follow_up_after_home_commands": ("switch", "No follow-up after home commands", None),
@@ -364,7 +364,7 @@ def test_continuous_speech_limit_number():
     which the program refuses."""
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     d = keys["continuous_speech_limit"]
-    assert (d["platform"], d["name"], d["category"]) == ("number", "Continuous speech limit", "config")
+    assert (d["platform"], d["name"], d["category"]) == ("number", "Continuous sound cutoff (0 = off)", "config")
     assert (d["min"], d["max"], d["step"], d["unit"]) == (0, 120, 5, "s")
     m = cap.Mapper()
     assert m.state(CFG, WW, None)["continuous_speech_limit"] == 15  # absent = program default
@@ -374,13 +374,10 @@ def test_continuous_speech_limit_number():
 
 
 def test_continue_listening_while_speaking_switch():
-    """10/11: next to "Close mic while awaiting reply" on the page (names sort together); absent = on."""
+    """10/11: with the brain pending, someone speaking keeps the mic open; absent = on."""
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     d = keys["continue_listening_while_speaking"]
-    assert (d["platform"], d["name"], d["category"]) == ("switch", "Continue listening while speaking", "config")
-    names = sorted(c["name"] for c in keys.values() if c.get("category") == "config")
-    i = names.index("Continue listening while speaking")
-    assert names[i - 1] == "Close mic while awaiting reply" and names[i + 1] == "Continuous speech limit"
+    assert (d["platform"], d["name"], d["category"]) == ("switch", "Continue listening while user speaks, reply pending", "config")
     m = cap.Mapper()
     assert m.state(CFG, WW, None)["continue_listening_while_speaking"] is True
     assert m.state(dict(CFG, keep_listening_while_speaking=False), WW, None)[
