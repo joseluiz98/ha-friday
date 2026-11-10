@@ -99,7 +99,7 @@ def test_argv_are_exact_sudoers_commands():
 
 def test_descriptors():
     caps = {d["key"]: d for d in cap.controls_from_config({}, [])}
-    assert caps["voice_enabled"]["platform"] == "switch" and caps["voice_enabled"]["name"] == "Assistant"
+    assert caps["voice_enabled"]["platform"] == "switch" and caps["voice_enabled"]["name"] == "Voice Program"
     assert caps["reboot"]["platform"] == "button" and caps["reboot"]["device_class"] == "restart"
     r = caps["restart_program"]
     assert r["platform"] == "button" and r["hidden"] is True and r["available"] is False

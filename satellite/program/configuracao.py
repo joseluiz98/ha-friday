@@ -10,6 +10,8 @@ PADROES = {
     "janela_voz_palavra": 6,
     # volume = posição do Jabra (0–11; None = usar o que o aparelho tem); volume_alertas = escala falada 1–10
     # (spec 2026-10-12 §1 e §2)
+    # volume_sons: previsto na spec de 05/10 (sons de turno −12 dB abaixo da voz), NUNCA aplicado: os sons tocam no
+    # volume geral. Fora da página do HA desde 10/11; a chave segue aceita só para não quebrar config antiga.
     "volume": None, "volume_alertas": 6, "volume_sons": -12, "nao_perturbe": False,
     "sons": {"inicio": "inicio_a.wav", "fim": "fim_a.wav", "erro": "erro_a.wav",
              "volume": "volume_a.wav", "alarme": "alarme_a.wav", "lembrete": "lembrete_a.wav",

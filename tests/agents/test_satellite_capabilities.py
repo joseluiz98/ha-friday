@@ -31,13 +31,14 @@ def _nums(c):
 
 def test_controls_cover_existing_settings():
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
-    for k in ("volume", "do_not_disturb", "alarm_volume", "alarm_ramp", "sounds_volume", "whisper_mode",
+    for k in ("volume", "do_not_disturb", "alarm_volume", "alarm_ramp", "whisper_mode",
               "reply_wait", "ducking", "ducking_level", "ducking_restore", "wakeword_friday_mode",
               "wakeword_sexta_feira_sensitivity", "program_state", "activations_today", "rejected_today",
               "last_activation", "sw_version", "activation"):
         assert k in keys, k
     assert keys["volume"].get("category") is None and keys["do_not_disturb"].get("category") is None
     assert keys["reply_wait"]["category"] == "config"
+    assert "sounds_volume" not in keys  # 10/11: the program never applied volume_sons; the control left the page
     assert keys["activation"]["event_types"] == ["conversation", "rejected", "shadow"]
     assert keys["wakeword_friday_mode"]["options"] == ["active", "shadow", "off"]
 
@@ -364,7 +365,7 @@ def test_continuous_speech_limit_number():
     which the program refuses."""
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     d = keys["continuous_speech_limit"]
-    assert (d["platform"], d["name"], d["category"]) == ("number", "Continuous sound cutoff (0 = off)", "config")
+    assert (d["platform"], d["name"], d["category"]) == ("number", "Continuous sound cutoff", "config")
     assert (d["min"], d["max"], d["step"], d["unit"]) == (0, 120, 5, "s")
     m = cap.Mapper()
     assert m.state(CFG, WW, None)["continuous_speech_limit"] == 15  # absent = program default
@@ -377,7 +378,7 @@ def test_continue_listening_while_speaking_switch():
     """10/11: with the brain pending, someone speaking keeps the mic open; absent = on."""
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     d = keys["continue_listening_while_speaking"]
-    assert (d["platform"], d["name"], d["category"]) == ("switch", "Continue listening while user speaks, reply pending", "config")
+    assert (d["platform"], d["name"], d["category"]) == ("switch", "Keep listening while user speaks, reply pending", "config")
     m = cap.Mapper()
     assert m.state(CFG, WW, None)["continue_listening_while_speaking"] is True
     assert m.state(dict(CFG, keep_listening_while_speaking=False), WW, None)[
