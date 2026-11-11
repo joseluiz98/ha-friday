@@ -203,12 +203,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Modelos",
-        "description": "Modelo de cada papel. Voz e Lucid valem na próxima conversa ou execução; o cérebro só reinicia a F.R.I.D.A.Y. sem conversa aberta. Modelo de embeddings (somente leitura): {embeddings}.",
-        "data": {
-          "voice": "Modelo da voz",
-          "brain": "Modelo do cérebro",
-          "lucid": "Modelo do Lucid Dreaming"
+        "title": "F.R.I.D.A.Y.",
+        "menu_options": {
+          "models": "Modelos, voz e orçamento",
+          "conversation": "Conversa"
         }
       },
       "voice": {
@@ -224,12 +222,36 @@
         "data": {
           "budget_brl": "Teto mensal (R$)"
         }
+      },
+      "models": {
+        "title": "Modelos",
+        "description": "Modelo de cada papel. Voz e Lucid valem na próxima conversa ou execução; o cérebro só reinicia a F.R.I.D.A.Y. sem conversa aberta. Modelo de embeddings (somente leitura): {embeddings}.",
+        "data": {
+          "voice": "Modelo da voz",
+          "brain": "Modelo do cérebro",
+          "lucid": "Modelo do Lucid Dreaming"
+        }
+      },
+      "conversation": {
+        "title": "Conversa",
+        "description": "Vale para todos os satélites. O Modo de continuação continua sendo uma chave por satélite, na página de cada dispositivo.",
+        "data": {
+          "end_of_speech_pause": "Pausa de fim de fala",
+          "reply_wait": "Fechar se nenhuma resposta começar em",
+          "follow_up_window": "Janela de continuação",
+          "no_follow_up_while_music": "Sem continuação enquanto toca música",
+          "no_follow_up_after_home_commands": "Sem continuação após comandos da casa"
+        }
       }
     },
     "abort": {
       "server_unavailable": "O servidor da F.R.I.D.A.Y. não está conectado.",
       "embeddings_unavailable": "O servidor ainda não sabe trocar o modelo de embeddings.",
       "apply_failed": "O servidor recusou a alteração."
+    },
+    "error": {
+      "out_of_range": "O valor está fora da faixa permitida.",
+      "bad_type": "O valor tem o tipo errado."
     }
   }
 }

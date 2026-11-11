@@ -203,12 +203,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Models",
-        "description": "Model used by each role. Voice and Lucid apply from the next conversation or run; the brain restarts F.R.I.D.A.Y. only when no conversation is open. Embeddings model (read-only): {embeddings}.",
-        "data": {
-          "voice": "Voice model",
-          "brain": "Brain model",
-          "lucid": "Lucid Dreaming model"
+        "title": "F.R.I.D.A.Y.",
+        "menu_options": {
+          "models": "Models, voice and budget",
+          "conversation": "Conversation"
         }
       },
       "voice": {
@@ -224,12 +222,36 @@
         "data": {
           "budget_brl": "Monthly budget (BRL)"
         }
+      },
+      "models": {
+        "title": "Models",
+        "description": "Model used by each role. Voice and Lucid apply from the next conversation or run; the brain restarts F.R.I.D.A.Y. only when no conversation is open. Embeddings model (read-only): {embeddings}.",
+        "data": {
+          "voice": "Voice model",
+          "brain": "Brain model",
+          "lucid": "Lucid Dreaming model"
+        }
+      },
+      "conversation": {
+        "title": "Conversation",
+        "description": "Applies to every satellite. Follow-up mode stays a per-satellite switch on each device page.",
+        "data": {
+          "end_of_speech_pause": "End-of-speech pause",
+          "reply_wait": "Close if no reply starts within",
+          "follow_up_window": "Follow-up window",
+          "no_follow_up_while_music": "No follow-up while music plays",
+          "no_follow_up_after_home_commands": "No follow-up after home commands"
+        }
       }
     },
     "abort": {
       "server_unavailable": "The F.R.I.D.A.Y. server is not connected.",
       "embeddings_unavailable": "The server cannot change the embeddings model yet.",
       "apply_failed": "The server refused the change."
+    },
+    "error": {
+      "out_of_range": "The value is outside the allowed range.",
+      "bad_type": "The value has the wrong type."
     }
   }
 }
