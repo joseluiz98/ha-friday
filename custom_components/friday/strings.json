@@ -149,12 +149,16 @@
           "title": "Advanced",
           "description": "Engineering settings of this satellite. Only the values you change are sent.",
           "data": {
-            "wakeword_friday_mode": "Wake word friday",
+            "wakeword_friday_mode": "Wake word friday mode",
             "wakeword_friday_sensitivity": "Wake word friday threshold",
-            "wakeword_sexta_feira_mode": "Wake word sexta_feira",
+            "wakeword_sexta_feira_mode": "Wake word sexta_feira mode",
             "wakeword_sexta_feira_sensitivity": "Wake word sexta_feira threshold",
-            "ducking_restore": "Music back after",
-            "continuous_speech_limit": "Continuous sound cutoff (0 = off)"
+            "ducking_restore": "Ducking restore delay",
+            "continuous_speech_limit": "Continuous sound cutoff"
+          },
+          "data_description": {
+            "continuous_speech_limit": "0 = off",
+            "ducking_restore": "How long until the music volume comes back"
           }
         }
       },

@@ -149,12 +149,16 @@
           "title": "Avançado",
           "description": "Ajustes de engenharia deste satélite. Só os valores que você mudar são enviados.",
           "data": {
-            "wakeword_friday_mode": "Palavra de ativação friday",
-            "wakeword_friday_sensitivity": "Limiar da palavra friday",
-            "wakeword_sexta_feira_mode": "Palavra de ativação sexta_feira",
-            "wakeword_sexta_feira_sensitivity": "Limiar da palavra sexta_feira",
-            "ducking_restore": "Música volta após",
-            "continuous_speech_limit": "Corte de som contínuo (0 = desligado)"
+            "wakeword_friday_mode": "Wake word friday mode",
+            "wakeword_friday_sensitivity": "Wake word friday threshold",
+            "wakeword_sexta_feira_mode": "Wake word sexta_feira mode",
+            "wakeword_sexta_feira_sensitivity": "Wake word sexta_feira threshold",
+            "ducking_restore": "Ducking restore delay",
+            "continuous_speech_limit": "Continuous sound cutoff"
+          },
+          "data_description": {
+            "continuous_speech_limit": "0 = desligado",
+            "ducking_restore": "Quanto tempo até o volume da música voltar"
           }
         }
       },
@@ -279,13 +283,13 @@
       },
       "conversation": {
         "title": "Conversa",
-        "description": "Vale para todos os satélites. O Modo de continuação continua sendo uma chave por satélite, na página de cada dispositivo.",
+        "description": "Vale para todos os satélites. O Follow-up mode continua sendo uma chave por satélite, na página de cada dispositivo.",
         "data": {
-          "end_of_speech_pause": "Pausa de fim de fala",
-          "reply_wait": "Fechar se nenhuma resposta começar em",
-          "follow_up_window": "Janela de continuação",
-          "no_follow_up_while_music": "Sem continuação enquanto toca música",
-          "no_follow_up_after_home_commands": "Sem continuação após comandos da casa"
+          "end_of_speech_pause": "End-of-speech pause",
+          "reply_wait": "Close if no reply starts within",
+          "follow_up_window": "Follow-up window",
+          "no_follow_up_while_music": "No follow-up while music plays",
+          "no_follow_up_after_home_commands": "No follow-up after home commands"
         }
       }
     },
