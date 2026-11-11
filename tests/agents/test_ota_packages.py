@@ -165,7 +165,9 @@ def test_vm_repo_archive_keeps_only_existing_paths(tmp_path):
 
 def test_vm_repo_manifest_absent_is_none(tmp_path):
     def run(cmd, **kw):
-        return type("R", (), {"returncode": 128, "stdout": b"", "stderr": b"fatal: path does not exist"})()
+        if "show" in cmd:
+            return type("R", (), {"returncode": 128, "stdout": b"", "stderr": b"fatal: path does not exist"})()
+        return type("R", (), {"returncode": 0, "stdout": b"", "stderr": b""})()  # ls-tree: really absent
     assert rp.VmRepo(root=str(tmp_path), url="u", run=run).manifest(SHA) is None
 
 
@@ -176,3 +178,53 @@ def test_bundle_update_serves_the_built_package(src, tmp_path, monkeypatch):
     store = pv.BundleStore(archive=archive, package_for_update=lambda: info["path"])
     token = store.prepare("update", "sat-abc123")["url"].rsplit("/", 1)[1]
     assert store.take(token) == Path(info["path"]).read_bytes() and len(asked) == n
+
+
+def test_modern_release_requires_locks_and_units(src, tmp_path):
+    archive, _, tmp = src
+    (tmp / "release" / "agents/satellite/requirements.lock").unlink()
+    with pytest.raises(pv.ProvisioningError) as e:
+        pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(tmp / "pkg2"))
+    assert e.value.code == "source_missing"
+
+
+def test_manifest_carries_heavy_flag(src):
+    archive, _, tmp = src
+    rel = tmp / "release" / "ota/release.json"
+    data = json.loads(rel.read_text())
+    data["heavy"] = ["satellite"]
+    rel.write_text(json.dumps(data))
+    files = _members(pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(tmp / "pkg3"))["path"])
+    assert json.loads(files["manifest.json"])["heavy"] is True
+
+
+def test_manifest_git_error_is_not_an_old_release(tmp_path):
+    def run(cmd, **kw):
+        if "show" in cmd:
+            return type("R", (), {"returncode": 128, "stdout": b"", "stderr": b"fatal: unable to fetch"})()
+        return type("R", (), {"returncode": 0, "stdout": b"ota/release.json\n", "stderr": b""})()
+    with pytest.raises(rp.RepoError):
+        rp.VmRepo(root=str(tmp_path), url="u", run=run).manifest(SHA)
+
+
+def test_fallback_bundle_writes_version_line_verbatim(tmp_path, monkeypatch):
+    cfg = tmp_path / "haos"
+    archive, _ = _make_sources(cfg, monkeypatch)  # FRIDAY_RELEASE_REF=v9.9.9 (a bare ref)
+    store = pv.BundleStore(archive=archive)
+    token = store.prepare("update", "sat-abc123")["url"].rsplit("/", 1)[1]
+    with tarfile.open(fileobj=io.BytesIO(store.take(token))) as t:
+        assert t.extractfile("program/FRIDAY_VERSION").read() == b"v9.9.9\n"
+
+
+def test_wheels_use_no_deps(tmp_path):
+    calls = []
+    lock = tmp_path / "a.lock"
+    lock.write_text("x==1\n")
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        out = Path(next(c.split(":")[0] for c in cmd if c.endswith(":/w")))
+        (out / "x.whl").write_bytes(b"w")
+        return type("R", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
+    wh.build([str(lock)], "d" * 64, out_root=str(tmp_path / "w"), run=run)
+    assert "--no-deps" in calls[0]

@@ -37,8 +37,11 @@ def build(locks: list[str], lock_sha256: str, out_root: str = "/srv/friday/ota/w
         for i, lock in enumerate(locks):
             cmd += ["-v", f"{os.path.abspath(lock)}:/l{i}:ro"]
             reqs += ["-r", f"/l{i}"]
-        cmd += [IMAGE, "pip", "wheel", "--no-cache-dir", "-w", "/w", *reqs]
-        r = run(cmd, capture_output=True, timeout=7200)
+        cmd += [IMAGE, "pip", "wheel", "--no-deps", "--no-cache-dir", "-w", "/w", *reqs]  # the locks are a full freeze, installed --no-deps
+        try:
+            r = run(cmd, capture_output=True, timeout=7200)
+        except subprocess.TimeoutExpired:
+            raise WheelsError("pip wheel timed out")
         if r.returncode != 0:
             raise WheelsError(f"pip wheel failed (rc {r.returncode})")
         tmp = os.path.join(work, "wheels.tar.gz")

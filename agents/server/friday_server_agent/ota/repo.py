@@ -56,6 +56,8 @@ class VmRepo:
     def manifest(self, sha: str) -> mf.Manifest | None:
         """`ota/release.json` at `sha`, or None for a release older than the OTA (callers treat it as protocol 1)."""
         r = self._run(["git", "-C", self.root, "show", f"{sha}:ota/release.json"], capture_output=True, timeout=60)
-        if r.returncode != 0:
-            return None
-        return mf.parse(json.loads(r.stdout))
+        if r.returncode == 0:
+            return mf.parse(json.loads(r.stdout))
+        if self._git("ls-tree", "--name-only", sha, "--", "ota/release.json").strip():
+            raise RepoError("git show failed for a manifest that exists")  # a fetch error is not an old release
+        return None

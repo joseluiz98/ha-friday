@@ -251,7 +251,7 @@ class BundleStore:
             raise ProvisioningError("source_missing")
         tag, _, sha = line.partition(" ")
         raw = (self._archive or git_archive)(ref, packages.SATELLITE_PATHS)
-        packages.pack_satellite(tar, raw, tag, sha or ref, _vault())
+        packages.pack_satellite(tar, raw, tag, sha or "", _vault(), line=line)
 
     def prepare(self, kind, sat_id) -> dict:
         if kind not in KINDS:

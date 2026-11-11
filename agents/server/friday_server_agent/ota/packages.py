@@ -34,6 +34,11 @@ SYSTEM_SOURCES = ["satellite/program", "satellite/sync", "satellite/status", "sa
                   "agents/satellite/friday-agent-apply", "agents/satellite/friday-wifi-apply",
                   "agents/satellite/friday-ota-apply"]
 SYSTEM_SUFFIXES = (".service", ".timer", ".sh")
+# a release with ota/release.json (OTA era) must carry these; only pre-OTA refs may lack them
+# (Task 13 adds agents/satellite/friday-ota-apply to this list when the helper lands)
+REQUIRED_MODERN = ["satellite/program/requirements.lock", "agents/satellite/requirements.lock",
+                   "satellite/program/friday-satelite.service", "agents/satellite/friday-satellite-agent.service",
+                   "agents/satellite/sudoers.friday-satellite-agent"]
 SCHEMA = 1
 
 
@@ -77,12 +82,22 @@ def _vault_files(vault, tmp: str) -> list[tuple[str, str]]:
     return out
 
 
-def pack_satellite(tar: tarfile.TarFile, raw: bytes, tag: str, sha: str, vault) -> dict:
-    """Writes the satellite package into `tar` from `raw` (a tar of SATELLITE_PATHS at the release). Returns its manifest."""
+def pack_satellite(tar: tarfile.TarFile, raw: bytes, tag: str, sha: str, vault, line: str | None = None) -> dict:
+    """Writes the satellite package into `tar` from `raw` (a tar of SATELLITE_PATHS at the release). Returns its manifest.
+    `line` is written verbatim to FRIDAY_VERSION (default "<tag> <sha>")."""
     tmp = tempfile.mkdtemp()
     try:
         with tarfile.open(fileobj=io.BytesIO(raw)) as src:
             src.extractall(tmp, filter="data")
+        rel_json = os.path.join(tmp, "ota/release.json")
+        release = {}
+        if os.path.exists(rel_json):
+            with open(rel_json, encoding="utf-8") as f:
+                release = json.load(f)
+            missing = [p for p in REQUIRED_MODERN if not os.path.isfile(os.path.join(tmp, p))]
+            if missing:
+                pv.LOG.error("package: release %s lacks %s", tag, ", ".join(missing))
+                raise pv.ProvisioningError("source_missing")
         vault_files = _vault_files(vault, tmp)  # validated before anything is written
         prog = os.path.join(tmp, "satellite/program")
         for name in sorted(os.listdir(prog)):
@@ -118,15 +133,11 @@ def pack_satellite(tar: tarfile.TarFile, raw: bytes, tag: str, sha: str, vault) 
                 if os.path.isdir(p) and not n.endswith(SYSTEM_SUFFIXES):
                     continue
                 tar.add(f, arcname=f"system/{n}", recursive=False, filter=pv._public)
-        line = f"{tag} {sha}\n".encode()
+        data = ((line or f"{tag} {sha}").strip() + "\n").encode()
         for arc in ("program/FRIDAY_VERSION", "agent/friday_agent_core/FRIDAY_VERSION"):
-            _add_bytes(tar, arc, line)
-        protocol = {}
-        rel_json = os.path.join(tmp, "ota/release.json")
-        if os.path.exists(rel_json):
-            with open(rel_json, encoding="utf-8") as f:
-                protocol = json.load(f).get("protocol", {})
-        manifest = {"schema": SCHEMA, "tag": tag, "sha": sha, "protocol": protocol,
+            _add_bytes(tar, arc, data)
+        manifest = {"schema": SCHEMA, "tag": tag, "sha": sha, "protocol": release.get("protocol", {}),
+                    "heavy": "satellite" in release.get("heavy", []),
                     "lock_sha256": lock_sha256(program_lock, agent_lock), "migrations": migrations}
         _add_bytes(tar, "manifest.json", json.dumps(manifest, sort_keys=True).encode())
         return manifest
