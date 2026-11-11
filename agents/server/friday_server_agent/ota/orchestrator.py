@@ -82,7 +82,6 @@ class Orchestrator:
         self._build_failed: dict[str, float] = {}
         self._build_lock = threading.Lock()
         self.installer = installer
-        self._recovered = False
 
     # ---- reads under the state lock
     def _eligible(self) -> list[ch.Release]:
@@ -186,11 +185,9 @@ class Orchestrator:
         inst = self.installer
         if inst is None:
             return
-        if not self._recovered:  # a run cut by a crash, a reboot or a snapshot rollback
-            self._recovered = True
-            out = inst.recover()
-            if out:
-                self._server_result(out)
+        out = inst.recover()  # a run cut by a crash, a reboot, a snapshot rollback or a silent self update
+        if out:
+            self._server_result(out)
         out = inst.absorb_self_result()
         if out:
             self._server_result(out)
@@ -206,12 +203,16 @@ class Orchestrator:
             manual, auto = bool(so.get("install_requested")), self.store.auto_install
             current = so.get("installed_tag")
             a = retry.Attempts.from_dict(so["attempts"]) if so.get("attempts") else None
-        if tag == current or not _newer(tag, current):  # the server never goes back by itself
+        man = self._manifest(sha)
+        if tag == current or not _newer(tag, current) or man is None:
+            # nothing to install (up to date; the server never goes back by itself; a pre-OTA release is installed
+            # by hand): a pending manual request must not wait for a later release and skip its checks
+            if manual:
+                with self.store.lock:
+                    so["install_requested"] = False
+                    self.store.save()
             return
         if not (auto or manual) or (not manual and not retry.may_try(a, tag, now)):
-            return
-        man = self._manifest(sha)
-        if man is None:  # a release older than the OTA: the server side is installed by hand
             return
         self._package(tag)  # the retained archive (rollback source); the installer falls back to the clone
         out = inst.apply(tag, sha, man, manual=manual)
@@ -238,6 +239,10 @@ class Orchestrator:
                 so.update(installed_tag=tag, attempts=None)
                 if man is not None:
                     self.store.data["server_protocol"] = int(man.protocol.get("server", 1))
+            elif result == "failed" and stage == "rollback":  # the way back failed too: the server may be down
+                self.notifier.queue(nt.format_rollback_failed(tag, error), self.store.data["pushes"])
+                so["attempts"] = retry.Attempts(version=tag, failures=99, exhausted=True, last_stage=stage,
+                                                last_error=error[:200]).to_dict()
             elif result in ("rolled_back", "failed"):
                 a = retry.Attempts.from_dict(so["attempts"]) if so.get("attempts") else None
                 if a is None or a.version != tag:

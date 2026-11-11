@@ -257,7 +257,8 @@ class ServerInstaller:
         r = self._run(["docker", "logs", "--since", str(int(since)), "friday"], stdout=subprocess.PIPE,
                       stderr=subprocess.STDOUT, text=True, timeout=30)
         text = r.stdout or ""
-        return r.returncode == 0 and "pronto:" in text and "Traceback" not in text
+        start = text.rfind("pronto:")  # the old process's shutdown output comes before the new start
+        return r.returncode == 0 and start >= 0 and "Traceback" not in text[start:]
 
     def healthy(self, comp: str, tree: str, line: str, since: float) -> bool:
         if comp in ("voice-gateway", "container"):
@@ -310,18 +311,21 @@ class ServerInstaller:
             if t not in keep[:KEEP_IMAGES]:
                 self._sh(["docker", "rmi", f"friday:{t}"], timeout=120)
 
-    def _snapshot(self, tag: str) -> str:
+    def _snapshot(self, run: dict, tag: str) -> None:
+        """Before any change of a heavy run. The run is saved with the snapshot's name first, so the state the VM gets
+        back from a rollback knows which snapshot it came from (and reads the reason written on it)."""
         if self.snapshots is None:
             raise StepFailed("snapshot", "no proxmox token")
         try:
             for s in self.snapshots.list():  # only the snapshot of the last update is kept
                 if str(s.get("name", "")).startswith("friday-ota-"):
                     self.snapshots.wait(self.snapshots.delete(s["name"]))
-            name = self.snapshots.snapshot_name(tag)
-            self.snapshots.wait(self.snapshots.create(name))
+            run.update(snapshot=self.snapshots.snapshot_name(tag), stage="snapshot")
+            self._save_run(run)
+            self.snapshots.wait(self.snapshots.create(run["snapshot"]))
         except Exception as err:  # noqa: BLE001
+            run["snapshot"] = None
             raise StepFailed("snapshot", str(err)) from None
-        return name
 
     def prune_snapshots(self) -> list[str]:
         if self.snapshots is None:
@@ -332,59 +336,100 @@ class ServerInstaller:
             LOG.warning("OTA: snapshot prune failed: %s", type(err).__name__)
             return []
 
+    def _self_running(self) -> bool:
+        try:
+            return self._sh(["systemctl", "is-active", "-q", "friday-ota-self"]).returncode == 0
+        except Exception:  # noqa: BLE001
+            return False
+
     # ---------------------------------------------------------------- rollback
-    def _rollback_light(self, run: dict, comps: list[str]) -> None:
+    def _rollback_light(self, run: dict, comps: list[str]) -> list[str]:
+        """Reinstalls the previous version of each component, in reverse. Returns the ones that could not go back."""
+        failed = []
         for comp in reversed(comps):
             prev = run["prev"].get(comp, "")
             sha = version_line_sha(prev)
-            if not sha:
-                LOG.error("OTA: %s has no previous version to return to", comp)
-                continue
             try:
+                if not sha:
+                    raise StepFailed("rollback", "previous version unknown")
                 tree = self._tree(prev.split()[0], sha, os.path.join(run["work"], "prev", comp))
-                self._install(tree, comp, prev, {"FRIDAY_NO_BUILD": "1"} if comp == "container" else None)
+                self._install(tree, comp, prev)
             except Exception as err:  # noqa: BLE001 - keep returning the others
                 LOG.error("OTA: rollback of %s failed: %s", comp, type(err).__name__)
+                failed.append(comp)
+        return failed
+
+    def _restore_image_sources(self, backup: str) -> None:
+        dest = self.paths["image_dir"]
+        for n in os.listdir(dest):
+            if n != ".env" and not os.path.exists(os.path.join(backup, n)):
+                p = os.path.join(dest, n)
+                shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
+        shutil.copytree(backup, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".env"))
 
     def _rollback(self, run: dict, failed: str, err: StepFailed, comps: list[str] | None = None) -> dict:
         """Puts `comps` (default: every component this run touched) back on the versions the run replaced.
 
-        A container that already switched is returned by restoring the VM snapshot (the VM stops and boots; `recover`
-        finishes the job), or, when Proxmox refuses, by switching back to the previous image."""
+        A container that already switched goes back by restoring the VM snapshot (the VM stops and boots; `recover`
+        reports it after the boot), or, when Proxmox refuses, by its previous sources and image. A revert that fails is
+        reported as `failed`/`rollback` (the caller pushes it at once): the server may be broken."""
         done = list(run.get("done", []) if comps is None else comps)
+        problems: list[str] = []
         snap = run.get("snapshot")
-        if snap and "container" in done and self.snapshots is not None:
+        if snap and "container" in done and run.get("switched") and self.snapshots is not None:
             run["stage"] = "rolling_back"
-            self._save_run(run)
             try:
+                self._save_run(run)
                 self.snapshots.annotate(snap, f"{ROLLBACK_MARK} {err.stage}: {err.error}")
-                self.snapshots.rollback(snap, start=True)  # the VM stops here; recover() finishes after the boot
-                self._sleep(600)
+                # the VM stops inside this task; when it does not (refused, failed), the image path below runs
+                self.snapshots.wait(self.snapshots.rollback(snap, start=True), timeout=900)
+                self._sleep(120)
             except Exception as perr:  # noqa: BLE001 - Proxmox refused (e.g. no VM.PowerMgmt): image rollback
                 LOG.error("OTA: snapshot rollback refused: %s", type(perr).__name__)
         if "container" in done:
-            prev_image = run.get("prev_image", "")
-            if prev_image.startswith("friday:"):
-                try:
+            try:
+                backup = run.get("image_backup")
+                if backup and os.path.isdir(backup):
+                    self._restore_image_sources(backup)
+                prev_image = run.get("prev_image", "")
+                if run.get("switched") and prev_image.startswith("friday:"):
                     self._compose_up(prev_image.partition(":")[2])
-                except StepFailed as serr:
-                    LOG.error("OTA: image rollback failed: %s", serr.stage)
+            except Exception as ierr:  # noqa: BLE001
+                LOG.error("OTA: image rollback failed: %s", type(ierr).__name__)
+                problems.append("container")
             done.remove("container")
-        self._rollback_light(run, done)
-        if "voice-gateway" in done:
+        problems += self._rollback_light(run, done)
+        if "voice-gateway" in done and err.stage != "busy":  # a refused restart left the old code running
             try:
                 self._restart_voice()
-            except (Busy, StepFailed):
+            except Exception:  # noqa: BLE001
                 LOG.warning("OTA: voice restart after rollback deferred")
-        self._save_run(None)
-        shutil.rmtree(run["work"], ignore_errors=True)
+        try:
+            self._save_run(None)
+        except Exception as serr:  # noqa: BLE001
+            LOG.error("OTA: could not clear the run: %s", type(serr).__name__)
+        shutil.rmtree(run.get("work") or "", ignore_errors=True)
+        if problems:
+            return {"result": "failed", "stage": "rollback", "component": failed,
+                    "error": f"could not revert {', '.join(problems)} after {err.stage}: {err.error}"[:200]}
         return {"result": "rolled_back", "stage": err.stage, "error": err.error, "component": failed}
 
     def recover(self) -> dict | None:
-        """At agent start: an interrupted run (crash, reboot, snapshot rollback) is undone and reported."""
+        """Before every step: a run left behind (crash, reboot, snapshot rollback, silent self-update) is undone and
+        reported. Never touches the container during a conversation (it comes back on a later step)."""
         with self.store.lock:
             run = self._ota().get("run")
         if not isinstance(run, dict) or not run.get("tag"):
+            return None
+        run = dict(run)
+        run["work"] = run.get("work") or os.path.join(self.paths["root"], "work", "recover")
+        os.makedirs(run["work"], exist_ok=True)
+        if run.get("stage") == "handoff":
+            if self._self_running() or os.path.exists(self._self_paths()[2]):
+                return None  # absorb_self_result() takes it from here
+            out = self._rollback(run, "server-agent", StepFailed("handoff", "the self update left no result"))
+            return {**out, "tag": run["tag"]}
+        if run.get("switched") and self.busy():
             return None
         stage, error = "interrupted", run.get("stage", "")
         snap = run.get("snapshot")
@@ -395,35 +440,51 @@ class ServerInstaller:
                 desc = ""
             if desc.startswith(ROLLBACK_MARK):
                 stage, _, error = desc[len(ROLLBACK_MARK):].strip().partition(": ")
-        work = run.get("work") or tempfile.mkdtemp(prefix="friday-ota-")
-        os.makedirs(work, exist_ok=True)
-        out = self._rollback({**run, "work": work, "snapshot": None}, run.get("component", ""), StepFailed(stage, error))
-        out["tag"] = run["tag"]
-        return out
+        out = self._rollback({**run, "snapshot": None}, run.get("component", ""), StepFailed(stage, error))
+        return {**out, "tag": run["tag"]}
 
     # ---------------------------------------------------------------- the run
     def apply(self, tag: str, sha: str, manifest, manual: bool = False) -> dict:
         """Installs the server side of `tag`. Returns {"result": installed|deferred|rolled_back|failed|handed_off,
         "component", "stage", "error", "installed": [...]}. Never raises."""
-        if self._sh(["systemctl", "is-active", "-q", "friday-ota-self"]).returncode == 0:
+        try:
+            return self._apply(tag, sha, manifest, manual)
+        except Exception as err:  # noqa: BLE001 - before any change (plan, git): nothing to undo
+            LOG.error("OTA: server apply failed: %s", type(err).__name__)
+            return {"result": "failed", "stage": "prepare", "error": type(err).__name__, "tag": tag}
+
+    def _apply(self, tag: str, sha: str, manifest, manual: bool) -> dict:
+        with self.store.lock:
+            pending = isinstance(self._ota().get("run"), dict)
+        if pending:  # recover() has not been able to undo it yet (e.g. a conversation is open)
+            return {"result": "deferred", "stage": "pending_run"}
+        if self._self_running():
             return {"result": "deferred", "stage": "self_update"}  # the agent's own replacement is still deciding
         if self.busy():
             return {"result": "deferred", "stage": "busy"}
         comps = self.plan(sha, manifest)
-        with self.store.lock:
-            self._ota()["integration_target"] = tag
+        if not comps:
+            self._published(tag)
+            return {"result": "installed", "tag": tag, "installed": []}
         heavy = [c for c in comps if c in manifest.heavy]
         if heavy and not manual and self.idle.idle_for(self._clock()) < HEAVY_IDLE_S:
             return {"result": "deferred", "stage": "heavy_idle"}
-        work = tempfile.mkdtemp(prefix="friday-ota-")
+        work = os.path.join(self.paths["root"], "work", f"{tag}-{int(self._clock())}")
+        shutil.rmtree(os.path.join(self.paths["root"], "work"), ignore_errors=True)  # no run is pending here
+        os.makedirs(work)
         line = f"{tag} {sha}"
         run = {"tag": tag, "sha": sha, "work": work, "done": [], "component": "", "stage": "prepare",
-               "prev": {c: self.installed_line(c) for c in comps}, "prev_image": self._image(), "snapshot": None}
+               "prev": {c: self.installed_line(c) for c in comps}, "prev_image": self._image(), "snapshot": None,
+               "switched": False, "image_backup": None}
         try:
             tree = self._tree(tag, sha, os.path.join(work, "new"))
+            if "container" in comps:
+                self._snapshot(run, tag)  # before the first change: a VM rollback undoes the whole run
         except Exception as err:  # noqa: BLE001 - nothing changed yet
+            self._save_run(None)
             shutil.rmtree(work, ignore_errors=True)
-            return {"result": "failed", "stage": "prepare", "error": type(err).__name__}
+            e = err if isinstance(err, StepFailed) else StepFailed("prepare", type(err).__name__)
+            return {"result": "failed", "stage": e.stage, "error": e.error, "tag": tag}
         for comp in comps:
             if comp == "server-agent":
                 return self._hand_off(run, tree, line)
@@ -432,7 +493,7 @@ class ServerInstaller:
                 if self.busy():
                     raise Busy("busy")
                 if comp == "container":
-                    self._container(run, tree, tag, line)
+                    self._container(run, tree, line)
                 else:
                     run["done"].append(comp)  # written before the install: a crash mid-install is undone too
                     self._save_run(run)
@@ -444,28 +505,35 @@ class ServerInstaller:
             except Busy:
                 # earlier components stay (healthy, recorded; the next try skips them); only the one in progress,
                 # if it was touched, goes back — its files would otherwise load untested on the next restart
-                self._rollback(run, comp, StepFailed("busy", "busy"), [comp] if comp in run["done"] else [])
-                return {"result": "deferred", "stage": "busy", "tag": tag}
-            except StepFailed as err:
-                if comp == "container" and run.get("stage") != "switch":
-                    run["done"] = [c for c in run["done"] if c != "container"]
-                return {**self._rollback(run, comp, err), "tag": tag}
+                out = self._rollback(run, comp, StepFailed("busy", "busy"), [comp] if comp in run["done"] else [])
+                return {**out, "tag": tag} if out["result"] == "failed" else {"result": "deferred", "stage": "busy",
+                                                                             "tag": tag}
+            except Exception as err:  # noqa: BLE001 - a timeout, a full disk: the run goes back like any failure
+                e = err if isinstance(err, StepFailed) else StepFailed(run.get("stage") or "install",
+                                                                       type(err).__name__)
+                return {**self._rollback(run, comp, e), "tag": tag}
         self._save_run(None)
         shutil.rmtree(work, ignore_errors=True)
+        self._published(tag)
         return {"result": "installed", "tag": tag, "installed": comps}
 
-    def _container(self, run: dict, tree: str, tag: str, line: str) -> None:
-        run["stage"] = "snapshot"
-        self._save_run(run)  # before the snapshot: the snapshot carries the run, so recover() sees it after a rollback
-        run["snapshot"] = self._snapshot(tag)
+    def _published(self, tag: str) -> None:
+        with self.store.lock:
+            self._ota()["integration_target"] = tag  # HA installs the integration of the installed server (Task 17)
+
+    def _container(self, run: dict, tree: str, line: str) -> None:
+        backup = os.path.join(run["work"], "image-prev")
+        if os.path.isdir(self.paths["image_dir"]):
+            shutil.copytree(self.paths["image_dir"], backup, dirs_exist_ok=True)
+            run["image_backup"] = backup
         run["stage"] = "build"
+        run["done"].append("container")  # its sources change from here on
         self._save_run(run)
         self._install(tree, "container", line)
         if self.busy():
             raise Busy("conversation opened during the build")
         image_tag = line.split()[0]
-        run["stage"] = "switch"
-        run["done"].append("container")
+        run.update(stage="switch", switched=True)
         self._save_run(run)
         since = self._clock()
         self._compose_up(image_tag)
@@ -480,8 +548,9 @@ class ServerInstaller:
         return os.path.join(base, "new"), os.path.join(base, "old"), os.path.join(self.paths["root"], "self.json")
 
     def _hand_off(self, run: dict, tree: str, line: str) -> dict:
-        """Last step: copies the trees to a lasting place and lets systemd replace the agent (this process ends)."""
-        self._save_run(None)  # the restart of this process is expected, not an interruption
+        """Last step: copies the trees to a lasting place and lets systemd replace the agent (this process ends).
+        The run stays saved (stage `handoff`) until the result is absorbed: an agent put back means the whole
+        release goes back."""
         prev = self.installed_line("server-agent")
         new_dir, old_dir, result = self._self_paths()
         try:
@@ -492,6 +561,8 @@ class ServerInstaller:
                 shutil.rmtree(d, ignore_errors=True)
             shutil.copytree(tree, new_dir)
             self._tree(prev.split()[0], prev_sha, old_dir)
+            run.update(component="server-agent", stage="handoff")
+            self._save_run(run)
             r = self._sh(["systemd-run", "--unit", "friday-ota-self", "--collect", "bash",
                           os.path.join(new_dir, "ota", "self_update.sh"), new_dir, line, old_dir, prev, result,
                           str(HEALTH_TIMEOUT_S)])
@@ -500,11 +571,11 @@ class ServerInstaller:
         except Exception as err:  # noqa: BLE001 - the release fails as a whole: the others go back too
             failure = err if isinstance(err, StepFailed) else StepFailed("prepare", type(err).__name__)
             out = self._rollback(run, "server-agent", failure)
-            return {**out, "result": "rolled_back" if run["done"] else "failed", "tag": run["tag"]}
-        finally:
-            shutil.rmtree(run["work"], ignore_errors=True)
+            if out["result"] == "rolled_back" and not run["done"]:
+                out["result"] = "failed"
+            return {**out, "tag": run["tag"]}
         return {"result": "handed_off", "component": "server-agent", "tag": run["tag"],
-                "installed": [c for c in run["done"]]}
+                "installed": list(run["done"])}
 
     def absorb_self_result(self) -> dict | None:
         """The outcome `self_update.sh` left for us (we may be the new agent or the old one put back)."""
@@ -521,9 +592,26 @@ class ServerInstaller:
         except OSError:
             pass
         if not isinstance(out, dict):
-            return None
-        out["component"] = "server-agent"
+            out = {"tag": "", "result": "failed", "stage": "handoff"}
+        with self.store.lock:
+            run = self._ota().get("run")
+        run = dict(run) if isinstance(run, dict) and run.get("stage") == "handoff" else None
+        tag = str(out.get("tag") or (run or {}).get("tag") or "")
+        out.update(component="server-agent", tag=tag)
         if out.get("result") == "installed":
             sha = version_line_sha(self.installed_line("server-agent")) or ""
-            self._record("server-agent", str(out.get("tag", "")), sha)
+            self._record("server-agent", tag, sha)
+            if run:
+                self._save_run(None)
+                shutil.rmtree(run.get("work") or "", ignore_errors=True)
+            self._published(tag)
+            return out
+        if run:  # the agent went back: so does everything the run installed before it
+            run["work"] = run.get("work") or os.path.join(self.paths["root"], "work", "recover")
+            os.makedirs(run["work"], exist_ok=True)
+            rb = self._rollback(run, "server-agent", StepFailed(str(out.get("stage") or "health"),
+                                                                "the new agent did not come up"))
+            if rb["result"] == "failed":
+                return {**rb, "tag": tag}
+        out["result"] = "rolled_back" if out.get("result") != "failed" else "failed"
         return out

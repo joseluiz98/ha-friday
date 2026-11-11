@@ -25,10 +25,13 @@ except Exception:
 PY
 }
 
+up() { systemctl is-active -q friday-server-agent && answers; }
+
+# up, and still up STABLE seconds later (an agent that crashes right after its first answer is not healthy)
 healthy() {
   local end=$((SECONDS + TIMEOUT))
   while [ "$SECONDS" -lt "$end" ]; do
-    if systemctl is-active -q friday-server-agent && answers; then return 0; fi
+    if up; then sleep "${FRIDAY_SELF_STABLE:-20}"; up && return 0; fi
     sleep 5
   done
   return 1

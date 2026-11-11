@@ -18,6 +18,11 @@ def format_exhausted(device: str, tag: str, stage: str, error: str, staying_on: 
             f"depois de 5 tentativas. {stay}")
 
 
+def format_rollback_failed(tag: str, error: str) -> str:
+    return (f"F.R.I.D.A.Y.: a atualização {tag} do servidor falhou e a volta à versão anterior também ({error}). "
+            "O servidor pode estar fora do ar; as tentativas automáticas pararam.")
+
+
 class Notifier:
     def __init__(self, chat: str, run=subprocess.run, clock=time.time, tz=None):
         if not chat or not chat.strip():

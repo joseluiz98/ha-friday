@@ -8,7 +8,7 @@ printf '#!/bin/sh\nexit 0\n' > "$T/bin/systemctl"; chmod +x "$T/bin/systemctl"
 for v in new old; do
   printf '#!/bin/sh\necho "$FRIDAY_VERSION_LINE" > %s/installed\n' "$T" > "$T/$v/agents/server/install.sh"
 done
-export PATH="$T/bin:$PATH"
+export PATH="$T/bin:$PATH" FRIDAY_SELF_STABLE=1
 
 # 1) the agent never answers -> the old tree goes back, result rolled_back/health
 FRIDAY_SELF_URL=http://127.0.0.1:9/x bash "$HERE/self_update.sh" "$T/new" "v0.3.0 b" "$T/old" "v0.2.0 a" "$T/r.json" 1 \

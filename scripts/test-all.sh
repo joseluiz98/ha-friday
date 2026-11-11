@@ -15,6 +15,6 @@ step "satellite image" sh -c 'cd satellite/image && python3 -m unittest -q tests
 step "ota scripts" bash ota/test_self_update.sh
 rsync -az --delete --exclude __pycache__ --exclude .git ./ "$VM:$ALL/"
 step "voice gateway (friday image, production workspace)" ssh -o BatchMode=yes "$VM" \
-  'sudo docker run --rm --entrypoint /opt/pc/bin/python -e FRIDAY_LOCAL_CONFIG=/w/local.example.env -v /srv/friday:/srv/friday -v $HOME/'"$ALL"'/voice_gateway:/w -w /w friday:2026.9.9 -m unittest -q'
+  'sudo docker run --rm --entrypoint /opt/pc/bin/python -e FRIDAY_LOCAL_CONFIG=/w/local.example.env -v /srv/friday:/srv/friday -v $HOME/'"$ALL"'/voice_gateway:/w -w /w "$(sudo docker inspect --format {{.Config.Image}} friday)" -m unittest -q'
 step "server tools (VM)" ssh -o BatchMode=yes "$VM" 'cd '"$ALL"'/server && export FRIDAY_LOCAL_CONFIG=$HOME/'"$ALL"'/voice_gateway/local.example.env && for d in status cataloger cost; do (cd $d && python3 -m unittest -q) || exit 1; done && for t in essentials/test_*.sh image/test_*.sh; do bash "$t" >/dev/null || { echo "$t"; exit 1; }; done'
 [ "$fail" = 0 ] && echo "ALL GREEN" || { echo "SOME SUITE FAILED" >&2; exit 1; }
