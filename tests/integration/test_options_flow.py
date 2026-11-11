@@ -186,7 +186,7 @@ async def test_conversation_rejects_out_of_range(hass):
     import pytest
     from homeassistant.data_entry_flow import InvalidData
 
-    entry, agent = await sat_entry(hass, {})
+    entry, agent = await sat_entry(hass, {"end_of_speech_pause": 0.8})
     r = await open_conversation(hass, entry)
     with pytest.raises(InvalidData):
         await hass.config_entries.options.async_configure(r["flow_id"], dict(VALUES, end_of_speech_pause=2.5))
@@ -222,5 +222,17 @@ async def test_conversation_save_applies_and_logs(hass):
     await hass.config_entries.options.async_configure(r["flow_id"], VALUES)
     await wait_for(lambda: got == [("reply_wait", 9)])
     assert any(m.startswith("General settings:") and "reply_wait" in m and "→ 9" in m for m in seen)
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_conversation_refuses_defaults_when_satellite_values_unknown(hass):
+    """A satellite with its program off reports no settings: never suggest factory defaults over its real values."""
+    entry, agent = await sat_entry(hass, {"program_state": "off"})
+    r = await open_conversation(hass, entry)
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "satellite_values_unknown"
+    hass.config_entries.async_update_entry(entry, options={"general": {"reply_wait": 4}})
+    r = await open_conversation(hass, entry)
+    assert r["type"] == FlowResultType.FORM  # the saved general settings are the source
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()

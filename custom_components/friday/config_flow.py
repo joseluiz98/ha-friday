@@ -308,17 +308,26 @@ class FridayOptionsFlow(OptionsFlow):
             return self.async_abort(reason=reason if reason == "embeddings_unavailable" else "apply_failed")
         return self.async_create_entry(data=dict(self.config_entry.options))  # keeps the general settings
 
-    def _conversation_defaults(self) -> dict[str, Any]:
-        """Suggested values: the saved general settings, else the first connected satellite, else the program's."""
+    def _conversation_defaults(self) -> dict[str, Any] | None:
+        """Suggested values: the saved general settings, else the first satellite that reports them, else the
+        program's. None when satellites exist but none reports its values (program off): factory defaults could
+        silently replace their real values."""
         values: dict[str, Any] = dict(CONVERSATION_DEFAULTS)
+        saved = self.config_entry.options.get(OPTIONS_GENERAL) or {}
+        found = False
         for connection in (getattr(self.config_entry, "runtime_data", None) or {}).values():
             hello = connection.hello
-            if connection.connected and hello is not None and hello.device.get("kind") == DEVICE_KIND_SATELLITE:
+            if (connection.connected and hello is not None and hello.device.get("kind") == DEVICE_KIND_SATELLITE
+                    and any(connection.state.get(k) is not None for k in GENERAL_KEYS)):
                 values.update({k: connection.state[k] for k in GENERAL_KEYS
                                if connection.state.get(k) is not None
                                and not (k == "follow_up_window" and connection.state[k] == 0)})
+                found = True
                 break
-        values.update(self.config_entry.options.get(OPTIONS_GENERAL) or {})
+        has_satellites = any(sub.subentry_type == "satellite" for sub in self.config_entry.subentries.values())
+        if not saved and not found and has_satellites:
+            return None
+        values.update(saved)
         return values
 
     async def async_step_conversation(self, user_input: dict[str, Any] | None = None) -> Any:
@@ -339,6 +348,8 @@ class FridayOptionsFlow(OptionsFlow):
                     async_apply_general_all(self.hass, self.config_entry), "friday apply general settings")
                 return self.async_create_entry(data=options)
         suggested = self._conversation_defaults() if user_input is None else user_input
+        if suggested is None:
+            return self.async_abort(reason="satellite_values_unknown")
         fields: dict = {}
         for key in GENERAL_KEYS:
             spec = GENERAL_SPECS[key]
@@ -469,6 +480,8 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
         descriptors = {d.key: d for d in caps}
         keys = advanced_keys(caps)
         state = dict(connection.state)
+        if not any(state.get(k) is not None for k in keys):  # program off: no values to show or keep
+            return self.async_abort(reason="satellite_values_unknown")
         errors: dict[str, str] = {}
         if user_input is not None:
             try:

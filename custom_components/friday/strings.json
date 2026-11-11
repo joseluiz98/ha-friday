@@ -164,7 +164,8 @@
         "reconfigure_successful": "Satellite updated.",
         "wifi_changed": "Wi-Fi change started; the result appears in the logbook and in the Wi-Fi change sensor.",
         "satellite_unavailable": "The satellite is not connected.",
-        "advanced_saved": "Advanced settings sent to the satellite."
+        "advanced_saved": "Advanced settings sent to the satellite.",
+        "satellite_values_unknown": "The satellite is not reporting its settings now (voice program off). Turn it on and try again."
       },
       "error": {
         "wifi_failed": "The new network did not work (or the satellite is offline); the previous one was kept.",
@@ -293,7 +294,8 @@
     "abort": {
       "server_unavailable": "The F.R.I.D.A.Y. server is not connected.",
       "embeddings_unavailable": "The server cannot change the embeddings model yet.",
-      "apply_failed": "The server refused the change."
+      "apply_failed": "The server refused the change.",
+      "satellite_values_unknown": "No satellite is reporting its settings now (voice program off or disconnected). Turn one on and try again, so its current values are shown instead of factory defaults."
     },
     "error": {
       "out_of_range": "The value is outside the allowed range.",

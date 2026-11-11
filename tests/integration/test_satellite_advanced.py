@@ -172,3 +172,15 @@ async def test_advanced_swapping_the_active_word_activates_first(hass):
     assert got == [("wakeword_sexta_feira_mode", "active"), ("wakeword_friday_mode", "off")]
     await hass.config_entries.async_unload(entry.entry_id)
     await sat.stop()
+
+
+async def test_advanced_refuses_when_program_values_unknown(hass):
+    """Program off: the agent reports no settings, so the form must not offer (and send) blank defaults."""
+    got = []
+    sat = make_sat(got, state={"program_state": "off"})
+    entry = await setup(hass, sat)
+    r = await open_advanced(hass, entry)
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "satellite_values_unknown"
+    assert got == []
+    await hass.config_entries.async_unload(entry.entry_id)
+    await sat.stop()

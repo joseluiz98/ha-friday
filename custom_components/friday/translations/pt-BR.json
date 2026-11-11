@@ -164,7 +164,8 @@
         "reconfigure_successful": "Satélite atualizado.",
         "wifi_changed": "Troca de Wi-Fi iniciada; o resultado aparece no diário e no sensor de troca de Wi-Fi.",
         "satellite_unavailable": "O satélite não está conectado.",
-        "advanced_saved": "Ajustes avançados enviados ao satélite."
+        "advanced_saved": "Ajustes avançados enviados ao satélite.",
+        "satellite_values_unknown": "O satélite não está informando os ajustes agora (programa de voz desligado). Ligue-o e tente de novo."
       },
       "error": {
         "wifi_failed": "A rede nova não funcionou (ou o satélite está desconectado); a anterior foi mantida.",
@@ -293,7 +294,8 @@
     "abort": {
       "server_unavailable": "O servidor da F.R.I.D.A.Y. não está conectado.",
       "embeddings_unavailable": "O servidor ainda não sabe trocar o modelo de embeddings.",
-      "apply_failed": "O servidor recusou a alteração."
+      "apply_failed": "O servidor recusou a alteração.",
+      "satellite_values_unknown": "Nenhum satélite está informando os ajustes agora (programa de voz desligado ou desconectado). Ligue um e tente de novo, para o formulário mostrar os valores atuais em vez dos de fábrica."
     },
     "error": {
       "out_of_range": "O valor está fora da faixa permitida.",
