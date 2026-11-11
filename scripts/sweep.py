@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Sweep: fail (exit 1) when the tree, or any commit of the history, carries a secret or house data.
 
-  python3 scripts/sweep.py [--history | --staged] [PATH...]      (default PATH: the repo root)
+  python3 scripts/sweep.py [--history | --staged | --pre-push] [PATH...]      (default PATH: the repo root)
+
+--history scans every blob reachable from every ref. --pre-push (the git hook) reads git's pre-push lines on stdin
+and scans the full history of the refs being pushed only: a finding on a local branch that is not pushed does not
+block the push of a clean one.
 
 Private list: FRIDAY_SENSITIVE_LIST (default /config/.friday/sensitive.txt), used when present; without it (CI) only
 the generic patterns run. Exceptions: `.sweep-allow` at the repo root, one `<path-glob>:<regex>` per line.
@@ -111,9 +115,25 @@ def sweep(paths: list[str], private: list, allow: list[AllowRule]) -> list:
     return found
 
 
-def sweep_history(repo: str, private: list, allow: list[AllowRule]) -> list:
+ZERO_SHA = re.compile(r"^0+$")
+
+
+def pushed_revs(stdin_text: str) -> list[str]:
+    """Local shas from git's pre-push stdin (`<local ref> <local sha> <remote ref> <remote sha>`); deletions dropped."""
+    revs = []
+    for line in stdin_text.splitlines():
+        parts = line.split()
+        if len(parts) == 4 and not ZERO_SHA.match(parts[1]):
+            revs.append(parts[1])
+    return revs
+
+
+def sweep_history(repo: str, private: list, allow: list[AllowRule], revs: list[str] | None = None) -> list:
+    """Every blob reachable from `revs` (full history, not only new commits); None = every ref (--all)."""
+    if revs == []:
+        return []
     pv = _private(private)
-    objs = subprocess.run(["git", "-C", repo, "rev-list", "--all", "--objects"], check=True,
+    objs = subprocess.run(["git", "-C", repo, "rev-list", "--objects", *(revs or ["--all"])], check=True,
                           capture_output=True, text=True).stdout.splitlines()
     seen, found = set(), []
     for line in objs:
@@ -147,13 +167,15 @@ def sweep_staged(repo: str, private: list, allow: list[AllowRule]) -> list:
 
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    history, staged = "--history" in args, "--staged" in args
-    args = [a for a in args if a not in ("--history", "--staged")] or [REPO]
+    pre_push = "--pre-push" in args
+    history, staged = "--history" in args or pre_push, "--staged" in args
+    args = [a for a in args if a not in ("--history", "--staged", "--pre-push")] or [REPO]
     lst = os.environ.get("FRIDAY_SENSITIVE_LIST", DEFAULT_LIST)
     private = scan.load_known(lst) if os.path.exists(lst) else []
     allow_file = os.path.join(REPO, ".sweep-allow")
     allow = parse_allow(open(allow_file, encoding="utf-8")) if os.path.exists(allow_file) else []
-    found = (sweep_history(args[0], private, allow) if history else
+    revs = pushed_revs(sys.stdin.read()) if pre_push else None
+    found = (sweep_history(args[0], private, allow, revs) if history else
              sweep_staged(args[0], private, allow) if staged else sweep(args, private, allow))
     mode = "private list + generic" if private else "generic only"
     if found:
