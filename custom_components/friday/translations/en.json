@@ -204,6 +204,24 @@
           "description": "The satellite."
         }
       }
+    },
+    "set_setting": {
+      "name": "Set setting",
+      "description": "Changes a setting from the integration's or a satellite's settings forms. Leave the device empty for general settings.",
+      "fields": {
+        "device_id": {
+          "name": "Satellite",
+          "description": "The satellite for an advanced setting; empty for a general setting."
+        },
+        "key": {
+          "name": "Setting",
+          "description": "For example reply_wait, or wakeword_friday_mode for a satellite."
+        },
+        "value": {
+          "name": "Value",
+          "description": "The new value (number, on/off or text)."
+        }
+      }
     }
   },
   "selector": {

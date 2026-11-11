@@ -204,6 +204,24 @@
           "description": "O satélite."
         }
       }
+    },
+    "set_setting": {
+      "name": "Definir ajuste",
+      "description": "Muda um ajuste dos formulários da integração ou de um satélite. Deixe o dispositivo vazio para os ajustes gerais.",
+      "fields": {
+        "device_id": {
+          "name": "Satélite",
+          "description": "O satélite, para um ajuste avançado; vazio para um ajuste geral."
+        },
+        "key": {
+          "name": "Ajuste",
+          "description": "Por exemplo reply_wait, ou wakeword_friday_mode para um satélite."
+        },
+        "value": {
+          "name": "Valor",
+          "description": "O novo valor (número, ligado/desligado ou texto)."
+        }
+      }
     }
   },
   "selector": {
