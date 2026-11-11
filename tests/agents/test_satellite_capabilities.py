@@ -37,7 +37,7 @@ def test_controls_cover_existing_settings():
               "last_activation", "sw_version", "activation"):
         assert k in keys, k
     assert keys["volume"].get("category") is None and keys["do_not_disturb"].get("category") is None
-    assert keys["reply_wait"]["category"] == "config"
+    assert keys["reply_wait"]["category"] == "config" and keys["reply_wait"]["hidden"] is True
     assert "sounds_volume" not in keys  # 10/11: the program never applied volume_sons; the control left the page
     assert keys["activation"]["event_types"] == ["conversation", "rejected", "shadow"]
     assert keys["wakeword_friday_mode"]["options"] == ["active", "shadow", "off"]
@@ -228,10 +228,9 @@ def test_rejected_event_carries_cause_and_counts():
     assert ev["event"][1] == "rejected" and ev["event"][2]["cause"] == "no_voice" and ev["state"]["rejected_today"] == 1
 
 
-def test_close_mic_awaiting_reply_switch():
+def test_close_mic_awaiting_reply_protocol_only():
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
-    d = keys["close_mic_awaiting_reply"]
-    assert d["platform"] == "switch" and d["name"] == "Close mic from user pause until reply"
+    assert "close_mic_awaiting_reply" not in keys  # 10/11: left the page; protocol access only
     m = cap.Mapper()
     assert m.state(CFG, WW, None)["close_mic_awaiting_reply"] is False  # absent = off (program default)
     assert m.state(dict(CFG, close_mic_awaiting_reply=True), WW, None)["close_mic_awaiting_reply"] is True
@@ -250,7 +249,7 @@ def test_follow_up_entities_names_and_mapping():
     }
     for k, (plat, name, rng) in spec.items():
         assert keys[k]["platform"] == plat and keys[k]["name"] == name, k
-        assert keys[k]["category"] == "config", k
+        assert keys[k]["category"] == "config" and keys[k]["hidden"] is True, k
         if rng:
             assert (keys[k]["min"], keys[k]["max"], keys[k]["step"]) == rng, k
     m = cap.Mapper()
@@ -365,6 +364,7 @@ def test_continuous_speech_limit_number():
     which the program refuses."""
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     d = keys["continuous_speech_limit"]
+    assert d["hidden"] is True
     assert (d["platform"], d["name"], d["category"]) == ("number", "Continuous sound cutoff", "config")
     assert (d["min"], d["max"], d["step"], d["unit"]) == (0, 120, 5, "s")
     m = cap.Mapper()
@@ -377,11 +377,46 @@ def test_continuous_speech_limit_number():
 def test_continue_listening_while_speaking_switch():
     """10/11: with the brain pending, someone speaking keeps the mic open; absent = on."""
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
-    d = keys["continue_listening_while_speaking"]
-    assert (d["platform"], d["name"], d["category"]) == ("switch", "Keep listening while user speaks, reply pending", "config")
+    assert "continue_listening_while_speaking" not in keys  # 10/11: left the page; protocol access only
     m = cap.Mapper()
     assert m.state(CFG, WW, None)["continue_listening_while_speaking"] is True
     assert m.state(dict(CFG, keep_listening_while_speaking=False), WW, None)[
         "continue_listening_while_speaking"] is False
     assert m.to_program(CFG, "continue_listening_while_speaking", False) == {
         "config": {"keep_listening_while_speaking": False}}
+
+
+USER_PAGE = {"volume", "do_not_disturb", "mute", "whisper_mode", "turn_sounds", "alarm_volume", "alarm_ramp",
+             "follow_up_mode", "voice_enabled", "reboot", "reset_network", "reset_home"}
+
+
+def test_page_has_only_user_controls():
+    ctrl = [c for c in cap.controls_from_config(CFG, WW)
+            if c["platform"] in ("switch", "number", "select", "button") and not c.get("hidden")]
+    assert {c["key"] for c in ctrl} == USER_PAGE
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    assert keys["voice_enabled"]["category"] == "config"
+    assert keys["follow_up_mode"]["platform"] == "switch" and keys["follow_up_mode"]["name"] == "Follow-up mode"
+    assert keys["follow_up_mode"]["category"] == "config"
+
+
+def test_engineering_keys_hidden_with_ranges():
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    for k in ("reply_wait", "follow_up_window", "no_follow_up_while_music", "no_follow_up_after_home_commands",
+              "end_of_speech_pause", "continuous_speech_limit", "ducking", "ducking_level", "ducking_restore",
+              "wakeword_friday_mode", "wakeword_friday_sensitivity"):
+        assert keys[k].get("hidden") is True, k
+    assert (keys["continuous_speech_limit"]["min"], keys["continuous_speech_limit"]["max"],
+            keys["continuous_speech_limit"]["step"]) == (0, 120, 5)
+    assert keys["wakeword_friday_mode"]["options"] == ["active", "shadow", "off"]
+    assert "close_mic_awaiting_reply" not in keys and "continue_listening_while_speaking" not in keys
+
+
+def test_follow_up_mode_mapping():
+    m = cap.Mapper()
+    assert m.state(dict(CFG, continuacao_s=5), WW, None)["follow_up_mode"] is True
+    assert m.state(dict(CFG, continuacao_s=0), WW, None)["follow_up_mode"] is False
+    assert m.to_program(CFG, "follow_up_mode", False) == {"config": {"continuacao_s": 0}}
+    m.state(dict(CFG, continuacao_s=9), WW, None)
+    assert m.to_program(CFG, "follow_up_mode", True) == {"config": {"continuacao_s": 9}}
+    assert cap.Mapper().to_program(CFG, "follow_up_mode", True) == {"config": {"continuacao_s": 5}}
