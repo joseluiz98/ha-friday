@@ -30,6 +30,10 @@ from friday_agent_core.ota.constants import KEEP_IMAGES
 LOG = logging.getLogger("friday_server_agent.ota")
 STATE = "/srv/friday/state/ota/image.json"
 LOCK = "/srv/friday/state/ota/image.lock"
+LOG_FILE = "/srv/friday/state/ota/image-build.log"  # full output of the last build (0600: may echo house values)
+# the build needs ~8 GB for an hour: not under /srv/friday (backed up) and /srv/nobackup is too small; cleaned after
+# every build except the downloaded base image
+WORK = os.environ.get("FRIDAY_IMG_WORKDIR", "/var/lib/friday-image")
 SHARE = "/mnt/haos/share/friday/imagens"
 OTA_ROOT = "/srv/friday/ota"
 UNIT = "friday-image-build"
@@ -46,10 +50,11 @@ def _vkey(tag: str) -> tuple:
 class ImageBuilder:
     def __init__(self, state_path: str = STATE, lock_path: str = LOCK, share: str = SHARE, root: str = OTA_ROOT,
                  run: Callable = subprocess.run, clock: Callable[[], float] = time.time,
-                 work: str | None = None):
+                 work: str | None = None, log_path: str | None = None):
         self.state_path, self.lock_path, self.share, self.root = state_path, lock_path, share, root
         self._run, self._clock = run, clock
-        self.work = work or os.path.join(root, "image-work")
+        self.work = work or WORK
+        self.log_path = log_path or os.path.join(os.path.dirname(state_path), "image-build.log")
 
     # ---------------------------------------------------------------- state
     def _read(self) -> dict:
@@ -84,7 +89,8 @@ class ImageBuilder:
         data = self._read()
         if data.get("status") == "building" and not self._locked() and not self._unit_active():
             data = self._write(status="error", error="interrupted")  # the VM rebooted mid-build, say
-        data["files"] = sorted(os.path.basename(p) for p in glob.glob(os.path.join(self.share, "friday-satellite-*")))
+        data["files"] = sorted(os.path.basename(p) for p in glob.glob(os.path.join(self.share, "friday-satellite-*"))
+                               if not p.endswith(".part"))
         return data
 
     def _unit_active(self) -> bool:
@@ -99,23 +105,30 @@ class ImageBuilder:
             return {"ok": False, "error": "tag"}
         if self._locked() or self._unit_active():
             return {"ok": False, "error": "busy"}
+        before = self._read()
+        self._write(tag=tag, status="building", error="", started_at=self._clock())  # before: a quick failure wins
         r = self._run(["systemd-run", "--unit", UNIT, "--collect", "--property=Nice=19",
-                       "--property=IOSchedulingClass=idle", f"--setenv=PYTHONPATH={os.pathsep.join(sys.path[1:])}",
+                       "--property=IOSchedulingClass=idle",
+                       f"--setenv=PYTHONPATH={os.environ.get('PYTHONPATH', '')}",
                        sys.executable, "-m", "friday_server_agent.ota.image", "build", tag, sha],
                       capture_output=True, text=True, timeout=60)
         if r.returncode != 0:
+            self._write(**{k: before.get(k) for k in ("tag", "status", "error", "started_at")})
             return {"ok": False, "error": "systemd-run"}
-        self._write(tag=tag, status="building", error="", started_at=self._clock())
         return {"ok": True}
 
     def build(self, tag: str, sha: str) -> dict:
         """The whole build, in the detached unit. One at a time: a second call while one runs returns busy."""
         os.makedirs(os.path.dirname(self.lock_path), exist_ok=True)
         with open(self.lock_path, "a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return {"ok": False, "error": "busy"}
+            for attempt in range(5):  # status() takes the lock for an instant: do not lose the build to it
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if attempt == 4:
+                        return {"ok": False, "error": "busy"}
+                    time.sleep(0.2)
             self._write(tag=tag, status="building", error="", started_at=self._clock())
             try:
                 files = self._build(tag, sha)
@@ -124,15 +137,31 @@ class ImageBuilder:
                 LOG.error("image build %s failed: %s", tag, msg)
                 return self._write(tag=tag, status="error", error=msg)
             finally:
-                shutil.rmtree(os.path.join(self.work, "out"), ignore_errors=True)
+                self._clean()
             self.retain()
             return self._write(tag=tag, status="ok", error="", built_at=self._clock(), files=files)
+
+    def _clean(self) -> None:
+        """Nothing big or secret stays: the payload (vault files), the output, the decompressed base image."""
+        for d in ("out", "src", "tmp"):
+            shutil.rmtree(os.path.join(self.work, d), ignore_errors=True)
+        for p in glob.glob(os.path.join(self.work, "build", "*.img")):
+            os.remove(p)
+
+    def _log(self, stage: str, r) -> None:
+        try:
+            fd = os.open(self.log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                f.write(f"== {stage} (exit {r.returncode})\n{r.stdout or ''}{r.stderr or ''}\n")
+        except OSError:
+            pass
 
     def _step(self, stage: str, cmd: list[str], **kw) -> None:
         try:
             r = self._run(cmd, capture_output=True, text=True, errors="replace", timeout=BUILD_TIMEOUT_S, **kw)
         except subprocess.TimeoutExpired:
             raise BuildError(f"{stage}: timeout") from None
+        self._log(stage, r)
         if r.returncode != 0:
             tail = ((r.stderr or r.stdout or "").strip().splitlines() or [f"exit {r.returncode}"])[-1]
             raise BuildError(f"{stage}: {tail}")
@@ -141,6 +170,12 @@ class ImageBuilder:
         package = os.path.join(self.root, "packages", tag, "satellite.tar.gz")
         if not os.path.isfile(package):
             raise BuildError("package_missing")
+        if not os.path.isdir(self.share):  # the HAOS share mount is down: never publish into a local folder
+            raise BuildError("share_unavailable")
+        try:
+            os.remove(self.log_path)
+        except OSError:
+            pass
         repo = os.path.join(self.root, "repo")
         tree = tempfile.mkdtemp(prefix="friday-image-src-")
         out = os.path.join(self.work, "out")
@@ -154,8 +189,11 @@ class ImageBuilder:
             with tarfile.open(fileobj=io.BytesIO(arch.stdout)) as t:
                 t.extractall(tree, filter="data")
             src = os.path.join(self.work, "src")
-            env = {**os.environ, "FRIDAY_IMG_SRC": src, "FRIDAY_IMG_OUT": out, "FRIDAY_IMG_NAME": NAME.format(tag=tag),
-                   "FRIDAY_IMG_WORK": os.path.join(self.work, "build")}
+            tmp = os.path.join(self.work, "tmp")
+            os.makedirs(tmp, exist_ok=True)
+            # a systemd unit has no HOME/TMPDIR: the scripts must never fall back to ~ or /
+            env = {**os.environ, "HOME": "/root", "TMPDIR": tmp, "FRIDAY_IMG_SRC": src, "FRIDAY_IMG_OUT": out,
+                   "FRIDAY_IMG_NAME": NAME.format(tag=tag), "FRIDAY_IMG_WORK": os.path.join(self.work, "build")}
             self._step("stage", ["bash", os.path.join(tree, "satellite/image/stage.sh"), "--repo", repo, "--ref", sha,
                                  "--local", "--package", package], env=env)
             self._step("build", ["bash", os.path.join(src, "build.sh")], env=env, cwd=src)
@@ -166,7 +204,6 @@ class ImageBuilder:
         missing = [p for p in produced if not os.path.isfile(os.path.join(out, p))]
         if missing:
             raise BuildError(f"build: missing {', '.join(missing)}")
-        os.makedirs(self.share, mode=0o755, exist_ok=True)
         for p in produced:
             shutil.copyfile(os.path.join(out, p), os.path.join(self.share, p + ".part"))
             os.replace(os.path.join(self.share, p + ".part"), os.path.join(self.share, p))

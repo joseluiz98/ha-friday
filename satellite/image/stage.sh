@@ -23,6 +23,7 @@ while [ $# -gt 0 ]; do
 done
 if [ "$LOCAL" = 1 ]; then
   REGISTRY=${FRIDAY_REGISTRY:-/mnt/haos/share/friday/satellites.json}
+  [ -r "$REGISTRY" ] || { echo "registry $REGISTRY unreadable: the house-data check cannot run" >&2; exit 2; }
 else
   VM=${FRIDAY_IMG_VM:-$(cat /config/.friday/vm 2>/dev/null)}
   [ -n "$VM" ] || { echo "set FRIDAY_IMG_VM=user@host (or /config/.friday/vm)" >&2; exit 2; }

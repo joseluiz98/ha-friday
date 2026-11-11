@@ -222,6 +222,8 @@ class Orchestrator:
             return
         if not (auto or manual) or (not manual and not retry.may_try(a, tag, now)):
             return
+        if self.images is not None and self.images.status().get("status") == "building":
+            return  # a server install (maybe a snapshot rollback) never runs during the 1-hour image build
         self._package(tag)  # the retained archive (rollback source); the installer falls back to the clone
         out = inst.apply(tag, sha, man, manual=manual)
         self._server_result({**out, "tag": tag})
@@ -278,12 +280,20 @@ class Orchestrator:
             return
         tag = self.target("stable")
         st = self.images.status()
-        if not tag or st.get("tag") == tag or st.get("status") == "building":
-            return  # an error on this very tag waits for the manual button (no retry storm of a 1-hour build)
         with self.store.lock:
-            if isinstance(self.store.data["server_ota"].get("run"), dict):
+            so = self.store.data["server_ota"]
+            if not tag or so.get("image_auto") == tag or st.get("status") == "building":
+                return  # once per stable tag: an error waits for the button (no retry storm of a 1-hour build)
+            if isinstance(so.get("run"), dict):
                 return  # never alongside a server install (both are heavy on the VM)
-        self.image_build(tag)
+            sha = self.store.release_infos()[tag].release.sha
+        if self._manifest(sha) is None:
+            return  # a release older than the OTA cannot make an image that updates itself
+        out = self.image_build(tag)
+        if out.get("ok") or out.get("error") not in ("busy", "server_busy"):
+            with self.store.lock:
+                self.store.data["server_ota"]["image_auto"] = tag
+                self.store.save()
 
     def image_build(self, tag: str | None = None) -> dict:
         if self.images is None:
@@ -293,12 +303,17 @@ class Orchestrator:
             return {"ok": False, "error": "no_stable_release"}
         with self.store.lock:
             info = self.store.release_infos().get(tag)
+            if isinstance(self.store.data["server_ota"].get("run"), dict):
+                return {"ok": False, "error": "server_busy"}
         if info is None or not self._package(tag):
             return {"ok": False, "error": "package_missing"}
         out = self.images.start(tag, info.release.sha)
-        with self.store.lock:
-            self.store.event("image", tag, "image_build" if out.get("ok") else "image_refused", "",
-                             str(out.get("error") or ""))
+        try:
+            with self.store.lock:
+                self.store.event("image", tag, "image_build" if out.get("ok") else "image_refused", "",
+                                 str(out.get("error") or ""))
+        except OSError as err:
+            LOG.warning("OTA: event log failed: %s", type(err).__name__)
         return out
 
     def image_status(self) -> dict:

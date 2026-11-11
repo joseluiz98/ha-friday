@@ -27,7 +27,11 @@ modo que um cartão gravado com qualquer imagem recente se atualiza pelo OTA log
 `friday-satellite-<tag>.img.xz`, `.img.xz.sha256`, `.json` (manifesto do Imager); ficam as 2 tags mais novas. Estado em
 `/srv/friday/state/ota/image.json` (`ok|building|error`); falha numa tag espera o botão "Gerar imagem" da integração
 (não repete sozinha). O caminho manual abaixo continua valendo (sem `--package`, gera o layout antigo, que a migração
-0001 converte no primeiro OTA).
+0001 converte no primeiro OTA). **Regra das migrações:** a imagem marca como feitas as migrações da própria release;
+uma migração nova que muda o sistema precisa ser feita também no `customize-chroot.sh` (ou em `files/`) no mesmo
+commit, senão a imagem gerada depois dela a pula. O build trabalha em `/var/lib/friday-image` (~8 GB durante ~1 h,
+fora de `/srv/friday`, que entra no backup) e apaga tudo no fim, menos a imagem base baixada; a saída completa do
+último build fica em `/srv/friday/state/ota/image-build.log` (0600).
 
 ## Gerar à mão
 1. No HA: `cd /config/tools/satelite/imagem && ./stage.sh [--sendspin-tarball sendspin-cli-0.3.0-linux-arm64.tar.gz]`

@@ -58,7 +58,9 @@ if [ -f $P/release.tar.gz ]; then
   ln -sfn releases/$TAG /opt/friday/current
   install -d -m 0755 /var/lib/friday
   install -d -o jose -g jose -m 0755 /var/lib/friday/ota /var/lib/friday/ota/downloads
-  # the migrations shipped with this release describe changes this image already has: recorded as done
+  # the migrations shipped with this release describe changes this image already has: recorded as done.
+  # RULE: a migration that changes system state must also be done here (or in files/) in the same commit,
+  # or an image built after it silently skips it (spec §9; the README says so too)
   python3 - $R/migrations $TAG > /var/lib/friday/migrations.json <<'PY'
 import json, os, re, sys, time
 folder, tag = sys.argv[1], sys.argv[2]
