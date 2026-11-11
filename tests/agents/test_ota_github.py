@@ -52,3 +52,56 @@ def test_network_error_raises():
     w = g.GitHubWatcher("o/r", fake({f"{BASE}/releases?per_page=30": OSError("down")}, []))
     with pytest.raises(g.GitHubError):
         w.poll({})
+
+def _watcher(tag, sha, rs, calls, prerelease=False):
+    r = rel(tag)
+    r["prerelease"] = prerelease
+    return g.GitHubWatcher("o/r", fake({f"{BASE}/releases?per_page=30": [r],
+        f"{BASE}/commits/{tag}": {"sha": sha}, f"{BASE}/commits/{tag}/check-runs?per_page=100": rs}, calls))
+
+def test_pending_is_requeried_next_poll():
+    first = _watcher("v0.5.0", "c" * 40, runs(("in_progress", None)), []).poll({})
+    assert first["v0.5.0"].release.ci == "pending"
+    calls = []
+    out = _watcher("v0.5.0", "c" * 40, runs(("completed", "success")), calls).poll(first)
+    assert out["v0.5.0"].release.ci == "green" and any("check-runs" in u for u in calls)
+
+@pytest.mark.parametrize("conclusion", ["cancelled", "timed_out", "stale", "action_required", None])
+def test_cancelled_counts_as_pending(conclusion):
+    out = _watcher("v0.5.0", "c" * 40, runs(("completed", conclusion)), []).poll({})
+    assert out["v0.5.0"].release.ci == "pending"
+
+def test_failure_beats_pending_and_unknown_is_red():
+    assert _watcher("v1.0.0", "a" * 40, runs(("completed", "failure"), ("in_progress", None)), []).poll({})["v1.0.0"].release.ci == "red"
+    assert _watcher("v1.0.0", "a" * 40, runs(("completed", "startup_failure")), []).poll({})["v1.0.0"].release.ci == "red"
+    assert _watcher("v1.0.0", "a" * 40, runs(("completed", "weird")), []).poll({})["v1.0.0"].release.ci == "red"
+
+def test_full_poll_notices_moved_tag_and_red_to_green():
+    red = _watcher("v0.4.0", "b" * 40, runs(("completed", "failure")), []).poll({})
+    assert red["v0.4.0"].release.ci == "red"
+    calls = []
+    w = _watcher("v0.4.0", "d" * 40, runs(("completed", "success")), calls)
+    assert w.poll(red)["v0.4.0"].release.ci == "red"  # normal poll keeps the final CI
+    assert not any("check-runs" in u for u in calls)
+    out = w.poll(red, full=True)["v0.4.0"].release
+    assert out.ci == "green" and out.sha == "d" * 40
+
+def test_prerelease_flag_propagates():
+    out = _watcher("v0.6.0", "e" * 40, runs(("completed", "success")), [], prerelease=True).poll({})
+    assert out["v0.6.0"].release.prerelease is True
+    assert _watcher("v0.6.0", "e" * 40, runs(("completed", "success")), []).poll({})["v0.6.0"].release.prerelease is False
+
+def test_malformed_payload_raises():
+    w = g.GitHubWatcher("o/r", fake({f"{BASE}/releases?per_page=30": [{"draft": False}]}, []))
+    with pytest.raises(g.GitHubError):
+        w.poll({})
+    w = g.GitHubWatcher("o/r", fake({f"{BASE}/releases?per_page=30": [rel("v0.5.0")],
+        f"{BASE}/commits/v0.5.0": {"nosha": 1}}, []))
+    with pytest.raises(g.GitHubError):
+        w.poll({})
+
+def test_tag_is_url_quoted():
+    calls = []
+    w = g.GitHubWatcher("o/r", fake({f"{BASE}/releases?per_page=30": [rel("v1/x y")],
+        f"{BASE}/commits/v1%2Fx%20y": {"sha": "a" * 40}, f"{BASE}/commits/v1%2Fx%20y/check-runs?per_page=100": runs()}, calls))
+    assert w.poll({})["v1/x y"].release.ci == "pending"

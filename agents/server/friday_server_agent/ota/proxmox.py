@@ -48,7 +48,7 @@ def _default_ctx() -> ssl.SSLContext:
 def _request(method: str, url: str, token: str, data: dict | None = None, ctx=None) -> dict:
     body = urllib.parse.urlencode(data).encode() if data is not None else None
     req = urllib.request.Request(url, data=body, method=method, headers={
-        "Authorization": "PVEAPIToken" + "=" + token,  # header format, not a literal secret
+        "Authorization": f"PVEAPIToken={token}",
         "User-Agent": "friday-server-agent",
     })
     with urllib.request.urlopen(req, timeout=TIMEOUT_S, context=ctx or _default_ctx()) as resp:
