@@ -18,6 +18,7 @@ from friday_agent_core import version as _version
 VERSION = _version.installed_version(_version.FILE)
 WHISPER_DEFAULT_DB = 5.5
 DUCK_DEFAULT = 15
+FOLLOW_UP_DEFAULT = 5
 INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window", "continuous_speech_limit"}
 MODES = {"ativa": "active", "sombra": "shadow", "desligada": "off"}
 MODES_BACK = {v: k for k, v in MODES.items()}
@@ -50,26 +51,29 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("alarm_volume", "number", "Alarm volume", min=1, max=10, step=1, category=c, mode="slider"),
         _d("alarm_ramp", "number", "Alarm ramp", min=0, max=120, step=1, unit="s", category=c, mode="box"),
         _d("whisper_mode", "switch", "Whisper mode", category=c, icon="mdi:account-voice"),
-        _d("reply_wait", "number", "Close if no reply starts within", min=2, max=30, step=1, unit="s", category=c, mode="box"),
-        _d("follow_up_window", "number", "Follow-up window", min=0, max=30, step=1, unit="s", category=c, mode="box"),
-        _d("no_follow_up_while_music", "switch", "No follow-up while music plays", category=c, icon="mdi:music-off"),
+        # 10/11: the page keeps only end-user controls; engineering settings are `hidden` (no entity, still
+        # settable by the integration's forms and friday.set_setting; ranges stay in the descriptor).
+        # close_mic_awaiting_reply and continue_listening_while_speaking have no descriptor (protocol only).
+        _d("follow_up_mode", "switch", "Follow-up mode", category=c, icon="mdi:chat-processing"),
+        _d("reply_wait", "number", "Close if no reply starts within", min=2, max=30, step=1, unit="s", category=c,
+           mode="box", hidden=True),
+        _d("follow_up_window", "number", "Follow-up window", min=0, max=30, step=1, unit="s", category=c,
+           mode="box", hidden=True),
+        _d("no_follow_up_while_music", "switch", "No follow-up while music plays", category=c, icon="mdi:music-off",
+           hidden=True),
         _d("no_follow_up_after_home_commands", "switch", "No follow-up after home commands", category=c,
-           icon="mdi:home-export-outline"),
+           icon="mdi:home-export-outline", hidden=True),
         _d("end_of_speech_pause", "number", "End-of-speech pause", min=0.5, max=2.0, step=0.1, unit="s",
-           category=c, mode="box"),
-        _d("close_mic_awaiting_reply", "switch", "Close mic from user pause until reply", category=c,
-           icon="mdi:microphone-message-off"),
-        # 10/11: with the brain pending, someone speaking keeps the mic open (program key keep_listening_while_speaking)
-        _d("continue_listening_while_speaking", "switch", "Keep listening while user speaks, reply pending", category=c,
-           icon="mdi:microphone-message"),
+           category=c, mode="box", hidden=True),
         # 10/11: R13 speech_max_s; 0 = off. Step 5: the program refuses 1..4 s
         _d("continuous_speech_limit", "number", "Continuous sound cutoff", min=0, max=120, step=5, unit="s",
-           category=c, mode="box", icon="mdi:timer-sand"),
+           category=c, mode="box", icon="mdi:timer-sand", hidden=True),
+        # 11/11: ducking and its level stay on the device page; only the restore delay is engineering
         _d("ducking", "switch", "Music ducking", category=c, icon="mdi:music-note-minus"),
         _d("ducking_level", "number", "Ducking level", min=1, max=25, step=1, unit="%", category=c, mode="box"),
         _d("ducking_restore", "number", "Ducking restore delay", min=0, max=10, step=0.5, unit="s",
-           category=c, mode="box"),
-        _d("voice_enabled", "switch", "Voice Program", icon="mdi:account-voice"),
+           category=c, mode="box", hidden=True),
+        _d("voice_enabled", "switch", "Voice Program", category=c, icon="mdi:account-voice"),
         _d("mute", "switch", "Mute", icon="mdi:microphone-off"),
         _d("turn_sounds", "switch", "Turn sounds", category=c, icon="mdi:bell-ring"),
         _d("reboot", "button", "Reboot", device_class="restart", category=c),
@@ -80,9 +84,9 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
     for w in wakewords:
         n = w["nome"]
         out.append(_d(f"wakeword_{n}_mode", "select", f"Wake word {n} mode", category=c,
-                      options=["active", "shadow", "off"], icon="mdi:microphone-message"))
+                      options=["active", "shadow", "off"], icon="mdi:microphone-message", hidden=True))
         out.append(_d(f"wakeword_{n}_sensitivity", "number", f"Wake word {n} threshold", category=c,
-                      min=0.05, max=0.99, step=0.01, mode="box"))
+                      min=0.05, max=0.99, step=0.01, mode="box", hidden=True))
     out += [
         _d("program_state", "sensor", "Program state", device_class="enum",
            options=["off", "idle", "listening", "conversation"]),
@@ -129,6 +133,7 @@ def timers_state(timers) -> dict:
 class Mapper:
     def __init__(self) -> None:
         self.last_duck = DUCK_DEFAULT
+        self.last_follow_up = FOLLOW_UP_DEFAULT
 
     def state(self, cfg: dict | None, wakewords: list[dict], status: dict | None) -> dict:
         """Protocol state from the program's config; None cfg = program down."""
@@ -137,6 +142,9 @@ class Mapper:
         duck = cfg.get("music_duck_percent")
         if isinstance(duck, int) and duck > 0:
             self.last_duck = duck
+        follow = cfg.get("continuacao_s")
+        if isinstance(follow, int) and not isinstance(follow, bool) and follow > 0:
+            self.last_follow_up = follow
         pos = cfg.get("volume")
         if pos is None and status:
             pos = status.get("volume")
@@ -150,6 +158,7 @@ class Mapper:
             "whisper_mode": cfg.get("whisper_min_ratio_db") is not None,
             "reply_wait": cfg.get("espera_resposta_s"),
             "follow_up_window": cfg.get("continuacao_s"),
+            "follow_up_mode": bool(follow),
             "no_follow_up_while_music": cfg.get("no_follow_up_while_music", True) is not False,
             "no_follow_up_after_home_commands": cfg.get("no_follow_up_after_home_commands", True) is not False,
             "end_of_speech_pause": cfg.get("end_of_speech_pause_s", 0.8),
@@ -185,6 +194,8 @@ class Mapper:
             if key in INT_KEYS and isinstance(value, float) and value.is_integer():
                 value = int(value)  # HA number entities send 20.0; the program accepts only int here
             return {"config": {simple[key]: value}}
+        if key == "follow_up_mode":
+            return {"config": {"continuacao_s": int(self.last_follow_up) if value else 0}}
         if key == "volume":
             return {"config": {"volume": position_from_percent(value)}}
         if key == "whisper_mode":

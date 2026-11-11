@@ -25,10 +25,12 @@ from homeassistant.helpers.selector import (
     BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
+    NumberSelectorMode,
     EntitySelector,
     EntitySelectorConfig,
     SelectSelector,
     SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -40,7 +42,11 @@ from .const import (
     DEFAULT_PORT_SATELLITE, DEFAULT_PORT_SERVER, DEFAULT_PROXMOX_NODE, DEFAULT_PROXMOX_URL, DOMAIN,
 )
 from . import pairing, provisioning, room_climate
-from .const import SOURCE_HA_ENTITY, SOURCE_SATELLITE
+from .const import DEVICE_KIND_SATELLITE, OPTIONS_GENERAL, SOURCE_HA_ENTITY, SOURCE_SATELLITE
+from .general import SCOPE_ADVANCED, SCOPE_GENERAL, async_apply_general_all, log_settings_change
+from .settings import (
+    GENERAL_KEYS, GENERAL_SPECS, SettingError, advanced_keys, check_wakewords, validate_advanced, validate_general,
+)
 from .wifi import async_set_wifi
 
 CONF_SSID = "ssid"  # form field names only; neither value is ever stored
@@ -222,6 +228,11 @@ def _select(options: list[str], current: str | None, translation_key: str | None
     return SelectSelector(SelectSelectorConfig(**cfg))
 
 
+# the satellite program's own values, used as suggestions when no satellite is connected
+CONVERSATION_DEFAULTS = {"end_of_speech_pause": 0.8, "reply_wait": 8, "follow_up_window": 5,
+                         "no_follow_up_while_music": True, "no_follow_up_after_home_commands": True}
+
+
 class FridayOptionsFlow(OptionsFlow):
     """Global settings of the F.R.I.D.A.Y. server: models per role, voice, monthly budget."""
 
@@ -238,6 +249,9 @@ class FridayOptionsFlow(OptionsFlow):
         return None
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> Any:
+        return self.async_show_menu(step_id="init", menu_options=["models", "conversation"])
+
+    async def async_step_models(self, user_input: dict[str, Any] | None = None) -> Any:
         if user_input is None:
             self._connection = self._server_connection()
             if self._connection is None:
@@ -251,7 +265,7 @@ class FridayOptionsFlow(OptionsFlow):
             self._models = user_input
             return await self.async_step_voice()
         # Embeddings are read-only: the server agent cannot reindex into an isolated store (reindex_unsupported).
-        return self.async_show_form(step_id="init",
+        return self.async_show_form(step_id="models",
                                     description_placeholders={"embeddings": current.get("embeddings", "?")},
                                     data_schema=vol.Schema({
             vol.Required("voice", default=current.get("voice")): _select(self._listing["voice"], current.get("voice")),
@@ -293,7 +307,60 @@ class FridayOptionsFlow(OptionsFlow):
         except HomeAssistantError as err:
             reason = str(err)
             return self.async_abort(reason=reason if reason == "embeddings_unavailable" else "apply_failed")
-        return self.async_create_entry(data={})
+        return self.async_create_entry(data=dict(self.config_entry.options))  # keeps the general settings
+
+    def _conversation_defaults(self) -> dict[str, Any] | None:
+        """Suggested values: the saved general settings, else the first satellite that reports them, else the
+        program's. None when satellites exist but none reports its values (program off): factory defaults could
+        silently replace their real values."""
+        values: dict[str, Any] = dict(CONVERSATION_DEFAULTS)
+        saved = self.config_entry.options.get(OPTIONS_GENERAL) or {}
+        found = False
+        for connection in (getattr(self.config_entry, "runtime_data", None) or {}).values():
+            hello = connection.hello
+            if (connection.connected and hello is not None and hello.device.get("kind") == DEVICE_KIND_SATELLITE
+                    and any(connection.state.get(k) is not None for k in GENERAL_KEYS)):
+                values.update({k: connection.state[k] for k in GENERAL_KEYS
+                               if connection.state.get(k) is not None
+                               and not (k == "follow_up_window" and connection.state[k] == 0)})
+                found = True
+                break
+        has_satellites = any(sub.subentry_type == "satellite" for sub in self.config_entry.subentries.values())
+        if not saved and not found and has_satellites:
+            return None
+        values.update(saved)
+        return values
+
+    async def async_step_conversation(self, user_input: dict[str, Any] | None = None) -> Any:
+        """How the conversation works: one value for every satellite (needs no server)."""
+        errors: dict[str, str] = {}
+        old = dict(self.config_entry.options.get(OPTIONS_GENERAL) or {})
+        if user_input is not None:
+            try:
+                new = {key: validate_general(key, user_input[key]) for key in GENERAL_KEYS}
+            except SettingError as err:
+                errors["base"] = err.code
+            else:
+                options = {**self.config_entry.options, OPTIONS_GENERAL: new}
+                self.hass.config_entries.async_update_entry(self.config_entry, options=options)
+                log_settings_change(self.hass, None, SCOPE_GENERAL, {
+                    k: (old.get(k, "unset"), v) for k, v in new.items() if old.get(k) != v})
+                self.hass.async_create_background_task(
+                    async_apply_general_all(self.hass, self.config_entry), "friday apply general settings")
+                return self.async_create_entry(data=options)
+        suggested = self._conversation_defaults() if user_input is None else user_input
+        if suggested is None:
+            return self.async_abort(reason="satellite_values_unknown")
+        fields: dict = {}
+        for key in GENERAL_KEYS:
+            spec = GENERAL_SPECS[key]
+            marker = vol.Required(key, description={"suggested_value": suggested.get(key)})
+            if spec["type"] == "bool":
+                fields[marker] = BooleanSelector()
+            else:
+                fields[marker] = NumberSelector(NumberSelectorConfig(
+                    min=spec["min"], max=spec["max"], step=spec["step"], mode=NumberSelectorMode.BOX))
+        return self.async_show_form(step_id="conversation", errors=errors, data_schema=vol.Schema(fields))
 
 
 class ServerSubentryFlow(ConfigSubentryFlow):
@@ -377,7 +444,7 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        return self.async_show_menu(step_id="reconfigure", menu_options=["connection", "wifi", "room_sensors"])
+        return self.async_show_menu(step_id="reconfigure", menu_options=["connection", "wifi", "room_sensors", "advanced"])
 
     async def async_step_wifi(
         self, user_input: dict[str, Any] | None = None
@@ -402,6 +469,63 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
                 vol.Required(CONF_WIFI_PASSWORD): _PASSWORD,
             }),
         )
+
+    async def async_step_advanced(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Engineering settings of this satellite (wake words, music restore delay, sound cutoff): sent, never
+        stored."""
+        connection = self._get_entry().runtime_data.get(self._get_reconfigure_subentry().subentry_id)
+        if connection is None or not connection.connected or connection.hello is None:
+            return self.async_abort(reason="satellite_unavailable")
+        caps = connection.hello.capabilities
+        descriptors = {d.key: d for d in caps}
+        keys = advanced_keys(caps)
+        state = dict(connection.state)
+        if not any(state.get(k) is not None for k in keys):  # program off: no values to show or keep
+            return self.async_abort(reason="satellite_values_unknown")
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                values = {k: validate_advanced(caps, k, user_input[k]) for k in keys if k in user_input}
+                modes = {k.removeprefix("wakeword_").removesuffix("_mode"): values.get(k, state.get(k))
+                         for k in keys if k.startswith("wakeword_") and k.endswith("_mode")}
+                if modes:
+                    check_wakewords(modes)
+            except SettingError as err:
+                errors["base"] = err.code
+            else:
+                changes = {k: (state.get(k), v) for k, v in values.items() if state.get(k) != v}
+                # a word that becomes active goes first: swapping words never leaves the Pi without one
+                changes = dict(sorted(changes.items(), key=lambda kv: not (
+                    kv[0].endswith("_mode") and kv[1][1] == "active")))
+                sent: dict[str, tuple] = {}
+                try:
+                    for key, (old, new) in changes.items():
+                        await connection.send("set", key=key, value=new)
+                        sent[key] = (old, new)
+                except HomeAssistantError:
+                    errors["base"] = "apply_failed"
+                log_settings_change(self.hass, connection, SCOPE_ADVANCED, sent)
+                if not errors:
+                    return self.async_abort(reason="advanced_saved")
+                user_input = {**state, **user_input}
+        suggested = user_input if user_input is not None else state
+        fields: dict = {}
+        for key in keys:
+            desc = descriptors[key]
+            marker = vol.Optional(key, description=(
+                {"suggested_value": suggested[key]} if suggested.get(key) is not None else {}))
+            if desc.platform == "select":
+                fields[marker] = SelectSelector(SelectSelectorConfig(
+                    options=list(desc.options or []), translation_key="wakeword_mode",
+                    mode=SelectSelectorMode.DROPDOWN))
+            elif desc.platform == "switch":
+                fields[marker] = BooleanSelector()
+            else:
+                fields[marker] = NumberSelector(NumberSelectorConfig(
+                    min=desc.min, max=desc.max, step=desc.step, mode=NumberSelectorMode.BOX))
+        return self.async_show_form(step_id="advanced", errors=errors, data_schema=vol.Schema(fields))
 
     async def async_step_room_sensors(
         self, user_input: dict[str, Any] | None = None
