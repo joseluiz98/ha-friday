@@ -1,11 +1,13 @@
 """Anel de LEDs: uma camada "estado -> aparência" e dois drivers (spec 2026-11-05 §11–§12).
 
 Estados (contrato): off, listen (conversa; com `direction` mostra a direção), think (cérebro), speak, dnd, alarm,
-setup, updating, error, muted, net_error (erro persistente de rede). O programa nunca cai por causa do anel: falha de driver vira NullRing/registro.
+setup, updating, error, muted, net_error (erro persistente de rede), update_pending (update achado e não instalado:
+é um FUNDO, só aparece no lugar de `off`; qualquer outro estado tem prioridade). O programa nunca cai por causa do anel: falha de driver vira NullRing/registro.
 Módulo puro: usb/vendor só são importados dentro de `default_xvf_transport` / `default_usb_find`."""
 import contextlib, io, math, os, sys, threading
 
-ESTADOS = ("off", "listen", "think", "speak", "dnd", "alarm", "setup", "updating", "error", "muted", "net_error")
+ESTADOS = ("off", "listen", "think", "speak", "dnd", "alarm", "setup", "updating", "error", "muted", "net_error",
+           "update_pending")
 
 # nomes do maestro (hardware.BITS_DO_ANEL) -> estado
 ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "cerebro": "think", "nao_perturbe": "dnd", "alarme": "alarm",
@@ -24,6 +26,24 @@ COR_PONTEIRO_VIZINHO = 0x000060
 COR_CONTAGEM = 0xFF8000  # laranja: não confunde com o vermelho do mudo nem do erro
 
 VID_SEEED, PID_XVF3800 = 0x2886, 0x001A
+
+
+class _Fundo:
+    """Camada comum do "update pendente" (spec OTA §6 passo 12): `pendente` troca o `off` por `update_pending`.
+    O driver guarda o último pedido cru em `_cru` e usa `_efetivo` para desenhar."""
+    pendente = False
+    _cru = None
+
+    def _efetivo(self, state):
+        return "update_pending" if state == "off" and self.pendente else state
+
+    def set_pending(self, on: bool) -> None:
+        on = bool(on)
+        if on == self.pendente:
+            return
+        self.pendente = on
+        if self._cru == "off":  # ocioso: redesenha na hora; em qualquer outro estado só vale quando voltar a `off`
+            self.show("off")
 
 
 class RingDriver:
@@ -59,10 +79,10 @@ class Contagem:
 # Jabra: estado -> nome do relatório HID de hoje (hardware.BITS_DO_ANEL)
 _JABRA = {"off": "parada", "listen": "ouvindo", "speak": "ouvindo", "think": "cerebro", "dnd": "nao_perturbe",
           "alarm": "alarme", "setup": "cerebro", "updating": "cerebro", "error": "alarme", "muted": "parada",
-          "net_error": "alarme"}
+          "net_error": "alarme", "update_pending": "cerebro"}  # o Jabra não tem amarelo: update_pending = luz do setup
 
 
-class JabraRing:
+class JabraRing(_Fundo):
     """Usa o `Anel` atual (sem cache: o comportamento tem de ser idêntico ao de antes, inclusive o detector do botão).
     A contagem usa os LEDs de volume (uma posição do PCM por LED): `posicao_fn(k)` escreve no mixer, sem gravar."""
     def __init__(self, anel, posicao_fn=None):
@@ -79,7 +99,8 @@ class JabraRing:
     def show(self, state, direction=None):
         if state not in _JABRA:
             raise ValueError(f"estado de anel desconhecido: {state}")
-        self._anel.mostrar(_JABRA[state])
+        self._cru = state
+        self._anel.mostrar(_JABRA[self._efetivo(state)])
 
     def reapply(self):
         self._ultima = None
@@ -92,10 +113,10 @@ class JabraRing:
 _XVF = {"speak": (3, 0x0000FF, None), "think": (1, 0x0000FF, SPEED_FAST), "dnd": (1, 0x8000FF, SPEED_SLOW),
         "alarm": (1, 0xFF8000, SPEED_FAST), "setup": (1, 0xFF8000, SPEED_SLOW), "updating": (1, 0xFFFFFF, SPEED_SLOW),
         "error": (1, 0xFF0000, SPEED_SLOW), "muted": (3, 0xFF0000, None),
-        "net_error": (1, 0xFF0000, SPEED_SLOW)}
+        "net_error": (1, 0xFF0000, SPEED_SLOW), "update_pending": (1, 0xFFC800, SPEED_SLOW)}  # amarelo, como a notificação das Echos
 
 
-class Xvf3800Ring:
+class Xvf3800Ring(_Fundo):
     """Dono único do anel do XVF3800. `transport.write(nome, valores)` (o vendor.xvf_host ou um falso nos testes).
     Escreve a cor antes do efeito; não reenvia o mesmo estado; falha de USB não levanta (reaplica no próximo show)."""
     def __init__(self, transport, log=None, timer_factory=None):
@@ -166,6 +187,8 @@ class Xvf3800Ring:
         else:
             self._volta = None
         self._pedido = (state, direction)
+        self._cru = state
+        state = self._efetivo(state)
         chave = (state, None if state != "listen" or direction is None else tuple(self._quadro(direction)))
         if chave == self._ultimo:
             return
@@ -199,6 +222,7 @@ class Xvf3800Ring:
             self._cancelar_volta()
             self._volta = None
             self._pedido = None
+            self._cru = None
             self._ultimo = None
         try:
             self._t.write("LED_EFFECT", [0])
@@ -206,7 +230,7 @@ class Xvf3800Ring:
             self._log(f"anel xvf3800: falha ao apagar ({type(e).__name__}: {e})")
 
 
-class NullRing:
+class NullRing(_Fundo):
     def countdown(self, fraction):
         pass
 

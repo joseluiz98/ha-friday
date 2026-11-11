@@ -126,7 +126,7 @@ class Satelite:
 
     def estado_publico(self):
         agora = time.time()
-        return dict(self.maestro.publico(), volume=self.volume.atual,
+        return dict(self.maestro.publico(), volume=self.volume.atual, update_pendente=bool(self.anel.pendente),
                     palavras=self._modos_palavras(),  # spec 2026-10-24: {nome: modo}, para o futuro sensor do HA
                     timers=[{"nome": t["nome"], "duracao_s": t["duracao_s"], "falta_s": t["falta_s"]}
                             for t in self.timers.consultar(agora)])
@@ -299,6 +299,8 @@ class Satelite:
                 self._tocar_frases(arg)
             elif nome == "anel":
                 self.anel.show(arg)
+            elif nome == "update_pendente":
+                self.anel.set_pending(arg)
             elif nome == "contagem":
                 self._contagem(*arg)
             elif nome == "teste_palavra":

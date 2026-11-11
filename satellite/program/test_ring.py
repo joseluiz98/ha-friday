@@ -117,6 +117,53 @@ class TestXvf(unittest.TestCase):
         r2.show("error")
         self.assertEqual(r2._t.chamadas, persistent)
 
+    def test_xvf_pending_color(self):
+        self.assertEqual(self.mostrar("update_pending"),
+                         [W("LED_COLOR", 0xFFC800), W("LED_SPEED", ring.SPEED_SLOW),
+                          W("LED_BRIGHTNESS", ring.BRIGHTNESS), W("LED_EFFECT", 1)])
+
+    def test_pending_replaces_off_only(self):
+        self.r.set_pending(True)
+        pendente = self.mostrar("update_pending")
+        self.r.show("off")
+        self.assertEqual(self.mostrar("listen"), [W("LED_DOA_COLOR", 0x000010, 0x0000FF), W("LED_EFFECT", 4)])
+        self.assertEqual(self.mostrar("off"), pendente)
+
+    def test_pending_does_not_hide_other_states(self):
+        self.r.set_pending(True)
+        self.assertEqual(self.mostrar("speak"), [W("LED_COLOR", 0x0000FF), W("LED_EFFECT", 3)])
+        self.assertEqual(self.mostrar("alarm")[-1], W("LED_EFFECT", 1))
+        self.assertEqual(self.mostrar("muted"), [W("LED_COLOR", 0xFF0000), W("LED_EFFECT", 3)])
+
+    def test_set_pending_redraws_when_idle(self):
+        self.r.show("off")
+        self.t.chamadas.clear()
+        self.r.set_pending(True)
+        self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 1))
+        self.assertEqual(self.t.chamadas[0], W("LED_COLOR", 0xFFC800))
+        self.t.chamadas.clear()
+        self.r.set_pending(False)
+        self.assertEqual(self.t.chamadas, [W("LED_EFFECT", 0)])
+
+    def test_set_pending_leaves_a_busy_ring_alone(self):
+        self.r.show("speak")
+        self.t.chamadas.clear()
+        self.r.set_pending(True)
+        self.assertEqual(self.t.chamadas, [])
+        self.assertEqual(self.mostrar("off")[0], W("LED_COLOR", 0xFFC800))
+
+    def test_set_pending_before_any_show_draws_nothing(self):
+        self.r.set_pending(True)
+        self.assertEqual(self.t.chamadas, [])
+
+    def test_error_returns_to_pending_background(self):
+        self.r.set_pending(True)
+        self.r.show("off")
+        self.r.show("error")
+        self.t.chamadas.clear()
+        self.timers[-1].fn()
+        self.assertEqual(self.t.chamadas[0], W("LED_COLOR", 0xFFC800))
+
     def test_muted_fica_ate_mudar(self):
         self.r.show("muted")
         self.assertEqual(self.timers, [])
@@ -182,6 +229,29 @@ class TestJabra(unittest.TestCase):
             r.show(estado, 90)
         self.assertEqual(j.nomes, ["parada", "ouvindo", "ouvindo", "cerebro", "nao_perturbe", "alarme", "cerebro",
                                    "cerebro", "alarme", "parada"])
+
+    def test_update_pending_is_a_known_state(self):
+        self.assertEqual(ring.ESTADOS[-1], "update_pending")
+        self.assertFalse(ring.NullRing().pendente)
+
+    def test_jabra_pending_uses_the_setup_light(self):
+        # o Jabra não tem amarelo: update_pending desenha o mesmo que setup
+        j = Jabra()
+        r = ring.JabraRing(j)
+        r.show("update_pending")
+        r.show("setup")
+        self.assertEqual(j.nomes, ["cerebro", "cerebro"])
+
+    def test_jabra_pending_replaces_off_only(self):
+        j = Jabra()
+        r = ring.JabraRing(j)
+        r.show("off")
+        r.set_pending(True)
+        r.show("off")
+        r.show("listen")
+        r.show("off")
+        r.set_pending(False)
+        self.assertEqual(j.nomes, ["parada", "cerebro", "cerebro", "ouvindo", "cerebro", "parada"])
 
     def test_net_error_on_jabra_uses_alarme(self):
         j = Jabra()
