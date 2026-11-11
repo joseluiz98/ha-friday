@@ -24,7 +24,7 @@ def _add(t, name, data: bytes, mode=0o644):
     t.addfile(info, io.BytesIO(data))
 
 
-def package(path: Path, tag: str, lock="L1", migrations=None, system=None):
+def package(path: Path, tag: str, lock="L1", migrations=None, system=None, sha="s1"):
     with tarfile.open(path, "w:gz") as t:
         _add(t, "program/friday_satelite.py", b"# program\n")
         _add(t, "program/sons/onboarding/ready.wav", b"RIFF")
@@ -35,7 +35,7 @@ def package(path: Path, tag: str, lock="L1", migrations=None, system=None):
              (ROOT / "agents/common/friday_agent_core/ota/migrations.py").read_bytes())
         _add(t, "program/requirements.lock", b"")
         _add(t, "agent/requirements.lock", b"")
-        _add(t, "manifest.json", json.dumps({"tag": tag, "lock_sha256": lock}).encode())
+        _add(t, "manifest.json", json.dumps({"tag": tag, "sha": sha, "lock_sha256": lock}).encode())
         for name, body in (migrations or {}).items():
             _add(t, f"migrations/{name}", body.encode())
         for name, body in (system or {"friday-satelite.service": "[Service]\n"}).items():
@@ -47,7 +47,7 @@ class Health(http.server.BaseHTTPRequestHandler):
     status = {"estado": "parada", "palavras_carregadas": ["friday"]}
 
     def do_GET(self):
-        body = json.dumps(Health.status).encode()
+        body = (json.dumps(Health.status) if isinstance(Health.status, dict) else Health.status).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -66,7 +66,7 @@ def env(tmp_path):
     fake.mkdir()
     log = tmp_path / "calls.log"
     for name, body in {
-        "systemctl": f'echo "systemctl $*" >> {log}; exit 0',
+        "systemctl": f'echo "systemctl $*" >> {log}; case "$*" in *friday-ota-activate*) exit 3 ;; esac; exit 0',
         "chown": "exit 0",
         "visudo": f'echo "visudo $*" >> {log}; [ -f {tmp_path}/visudo_fails ] && exit 1; exit 0',
         # detaches like systemd-run: drops its own options, exports --setenv, runs the rest in the background
@@ -220,7 +220,7 @@ def test_prune_keeps_current_and_previous(env):
     os.symlink("releases/v0.1.0", env["root"] / "opt/friday/current")
     (env["root"] / "var/lib/friday/ota.json").write_text(json.dumps({"previous": "v0.0.0-legacy"}))
     assert helper(env, "prune").returncode == 0
-    assert sorted(p.name for p in rels.iterdir()) == ["v0.0.0-legacy", "v0.1.0", "v0.3.0", "v0.4.0"]
+    assert sorted(p.name for p in rels.iterdir()) == [".v0.5.0.new", "v0.0.0-legacy", "v0.1.0"]
 
 
 def test_migration_0001_records_the_legacy_release_once(env):
@@ -241,3 +241,85 @@ def test_migration_0001_records_the_legacy_release_once(env):
     (leg / "program/friday_satelite.py").write_text("# touched\n")
     assert subprocess.run(["bash", str(MIGRATION)], env=e).returncode == 0  # idempotent
     assert (leg / "program/friday_satelite.py").read_text() == "# touched\n"
+
+
+# ---- review round 1 (C1, I2, I3, M1–M4)
+def _wheels(env, tag):
+    """A wheels tarball whose only content pip will never need (the fake pip below ignores it)."""
+    w = env["dl"] / f"{tag}-wheels.tar.gz"
+    with tarfile.open(w, "w:gz") as t:
+        _add(t, "README", b"x")
+    return w
+
+
+def test_legacy_stage_carries_the_openwakeword_models_from_oww(env):
+    oww_sp = env["root"] / "home/jose/oww/lib/python3.11/site-packages"
+    (oww_sp / "openwakeword/resources/models").mkdir(parents=True)
+    (oww_sp / "openwakeword/resources/models/melspectrogram.onnx").write_bytes(b"M")
+    pkg = package(env["dl"] / "v0.3.0.tar.gz", "v0.3.0", lock="NEW")
+    # pip is the one from the fresh venv: make it a no-op that creates the openwakeword package folder
+    e = dict(env["env"], FRIDAY_OTA_FAKE_PIP="1")
+    r = subprocess.run([sys.executable, str(HELPER), "stage", str(pkg), "v0.3.0", "--wheels", str(_wheels(env, "v0.3.0"))],
+                       env=e, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    sp = next((env["root"] / "opt/friday/releases/v0.3.0/venv/lib").glob("python3*/site-packages"))
+    assert (sp / "openwakeword/resources/models/melspectrogram.onnx").read_bytes() == b"M"
+
+
+def test_a_crash_in_the_health_check_still_rolls_back(env):
+    installed_current(env)
+    staged(env, "v0.2.0")
+    Health.status = "not a dict"  # the program answers garbage: _program_ok must not raise out
+    assert helper(env, "activate", "v0.2.0", detached=True).returncode == 2
+    assert state(env)["state"] == "rolled_back" and current(env) == "releases/v0.1.0"
+
+
+def test_recover_rolls_back_an_activation_cut_by_a_reboot(env):
+    installed_current(env)
+    staged(env, "v0.2.0")
+    os.remove(env["root"] / "opt/friday/current")
+    os.symlink("releases/v0.2.0", env["root"] / "opt/friday/current")  # switched, then the power went
+    (env["root"] / "var/lib/friday/ota.json").write_text(json.dumps(
+        {"tag": "v0.2.0", "previous": "v0.1.0", "state": "activating", "at": 1}))
+    assert helper(env, "recover", detached=True).returncode == 0
+    s = state(env)
+    assert (s["state"], s["stage"]) == ("rolled_back", "interrupted") and current(env) == "releases/v0.1.0"
+    assert helper(env, "recover", detached=True).returncode == 0 and state(env)["state"] == "rolled_back"
+
+
+def test_rollback_writes_the_state_before_restarting(env):
+    installed_current(env)
+    staged(env, "v0.2.0")
+    assert helper(env, "activate", "v0.2.0", detached=True).returncode == 0
+    log_before = env["log"].read_text()
+    assert helper(env, "rollback", detached=True).returncode == 0
+    assert state(env)["state"] == "rolled_back" and current(env) == "releases/v0.1.0"
+    assert "systemctl restart" in env["log"].read_text()[len(log_before):]
+
+
+def test_activating_the_current_release_keeps_previous(env):
+    installed_current(env)
+    staged(env, "v0.2.0")
+    assert helper(env, "activate", "v0.2.0", detached=True).returncode == 0
+    assert helper(env, "activate", "v0.2.0", detached=True).returncode == 0
+    assert state(env)["previous"] == "v0.1.0"
+
+
+def test_prune_keeps_only_current_and_previous_and_never_a_stage_in_progress(env):
+    rels = env["root"] / "opt/friday/releases"
+    for t in ("v0.1.0", "v0.2.0", "v0.3.0", "v0.4.0"):
+        (rels / t).mkdir()
+    (rels / ".v0.5.0.new").mkdir()
+    os.symlink("releases/v0.2.0", env["root"] / "opt/friday/current")
+    (env["root"] / "var/lib/friday/ota.json").write_text(json.dumps({"previous": "v0.1.0"}))
+    assert helper(env, "prune").returncode == 0
+    assert sorted(p.name for p in rels.iterdir()) == [".v0.5.0.new", "v0.1.0", "v0.2.0"]
+
+
+def test_a_different_package_under_a_staged_tag_is_staged_again(env):
+    installed_current(env)
+    staged(env, "v0.2.0")
+    (env["root"] / "opt/friday/releases/v0.2.0/program/marker").write_text("old")
+    pkg = package(env["dl"] / "v0.2.0b.tar.gz", "v0.2.0", sha="other")
+    assert helper(env, "stage", str(pkg), "v0.2.0").returncode == 0
+    assert not (env["root"] / "opt/friday/releases/v0.2.0/program/marker").exists()

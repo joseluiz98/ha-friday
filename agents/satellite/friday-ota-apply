@@ -9,8 +9,12 @@ is the symlink /opt/friday/current. Data never lives in a release (~/modelos, ~/
   friday-ota-apply stage <tarball> <tag> [--wheels <tarball>]   prepare releases/<tag> (venv included); nothing else
   friday-ota-apply activate <tag>     detaches (systemd-run), runs pending migrations, installs system files, switches
                                       `current`, restarts, proves health; or switches back and restarts
-  friday-ota-apply rollback           back to the previous release (manual / diagnostics)
-  friday-ota-apply prune              keep current, previous and the newest KEEP_RELEASES
+  friday-ota-apply rollback           back to the previous release (manual / diagnostics; detached)
+  friday-ota-apply recover            an activation cut by a reboot goes back (the agent runs it at start)
+  friday-ota-apply prune              keep only current and previous (the two good versions)
+
+Trust: the package's migrations and system/ files run as root by design (spec §9), so whoever may call this helper
+may run code as root; the path checks below are robustness against mistakes, not a security boundary.
 
 The outcome of `activate` is in /var/lib/friday/ota.json (0644): {"tag","previous","state","stage","error","at"},
 state = activating | installed | rolled_back | failed. Exit codes: 0 ok, 2 refused/failed (nothing switched).
@@ -48,6 +52,7 @@ MIGRATIONS = f"{R}/var/lib/friday/migrations.json"
 DOWNLOADS = f"{R}/var/lib/friday/ota/downloads"
 CONFIG = f"{R}/etc/friday-satelite/config.json"
 SONS = f"{R}/home/jose/satelite/sons"
+LEGACY_VENV = f"{R}/home/jose/oww"
 # system/ file -> where it goes (mode); anything else in system/ is ignored
 SYSTEM = {
     ".service": (f"{R}/etc/systemd/system", 0o644), ".timer": (f"{R}/etc/systemd/system", 0o644),
@@ -163,11 +168,12 @@ def _venv(new, wheels):
             raise Refused("pip", ((r.stderr or "").strip().splitlines() or ["pip failed"])[-1])
     finally:
         shutil.rmtree(wdir, ignore_errors=True)
-    # openWakeWord keeps its feature models outside the wheel: carry them from the running venv
-    old = site_packages(os.path.join(cur, "venv")) if cur else None
+    # openWakeWord keeps its feature models outside the wheel: carry them from the running venv (on the old
+    # layout, before migration 0001 ran, that is ~/oww)
+    old = site_packages(os.path.join(cur, "venv")) if cur else site_packages(LEGACY_VENV)
     old_models = os.path.join(old, "openwakeword", "resources", "models") if old else ""
     new_models = os.path.join(dest, "openwakeword", "resources", "models")
-    if os.path.isdir(old_models) and os.path.isdir(os.path.dirname(new_models)):
+    if os.path.isdir(old_models):
         os.makedirs(new_models, exist_ok=True)
         for n in os.listdir(old_models):
             if not os.path.exists(os.path.join(new_models, n)):
@@ -181,8 +187,16 @@ def stage(tarball, tag, wheels=None):
             raise Refused("args", "package outside the downloads folder")
     final = os.path.join(RELEASES, tag)
     if os.path.exists(os.path.join(final, ".complete")):
-        say(f"{tag} already staged")
-        return 0
+        with tarfile.open(tarball, "r:*") as t:
+            try:
+                incoming = json.load(t.extractfile("manifest.json"))
+            except (KeyError, ValueError, AttributeError):
+                raise Refused("layout", "package without manifest") from None
+        if incoming.get("sha") == manifest_of(final).get("sha"):
+            say(f"{tag} already staged")
+            return 0
+        if os.path.realpath(final) == os.path.realpath(CURRENT):
+            raise Refused("args", "a different package for the running release")
     new = os.path.join(RELEASES, f".{tag}.new")
     shutil.rmtree(new, ignore_errors=True)
     os.makedirs(new)
@@ -278,9 +292,9 @@ def _status():
 def _program_ok():
     try:
         code, st = _status()
-    except (OSError, ValueError, urllib.error.URLError):
+    except Exception:  # noqa: BLE001 - a program dying mid-answer (IncompleteRead, BadStatusLine...) is unhealthy
         return False, "program not answering"
-    if code != 200 or "estado" not in st:
+    if code != 200 or not isinstance(st, dict) or "estado" not in st:
         return False, "program status"
     if not st.get("palavras_carregadas"):
         return False, "no wake word loaded"
@@ -314,21 +328,28 @@ def _healthy():
     return False, why
 
 
+def _detach(args):
+    r = run(["systemd-run", "--unit", UNIT, "--collect", "--no-block", "--setenv=FRIDAY_OTA_DETACHED=1",
+             *[f"--setenv={k}={os.environ[k]}" for k in ("FRIDAY_OTA_ROOT", "FRIDAY_OTA_FAKE_BIN",
+               "FRIDAY_OTA_STATUS_URL", "FRIDAY_OTA_HEALTH_TIMEOUT", "FRIDAY_OTA_AGENT_STABLE_S",
+               "FRIDAY_OTA_AGENT_PORT") if os.environ.get(k)],
+             sys.executable, os.path.realpath(__file__), *args])
+    if r.returncode != 0:
+        raise Refused("detach", "systemd-run failed")
+    say(f"{' '.join(args)}: running detached (result in {STATE})")
+    return 0
+
+
 def activate(tag, detached=False):
     check_tag(tag)
     release = os.path.join(RELEASES, tag)
     if not os.path.exists(os.path.join(release, ".complete")):
         raise Refused("args", "release not staged")
-    if not detached:  # the agent that asked is restarted below: the work must not belong to it
-        r = run(["systemd-run", "--unit", UNIT, "--collect", "--no-block", "--setenv=FRIDAY_OTA_DETACHED=1",
-                 *[f"--setenv={k}={os.environ[k]}" for k in ("FRIDAY_OTA_ROOT", "FRIDAY_OTA_FAKE_BIN",
-                   "FRIDAY_OTA_STATUS_URL", "FRIDAY_OTA_HEALTH_TIMEOUT", "FRIDAY_OTA_AGENT_STABLE_S",
-                   "FRIDAY_OTA_AGENT_PORT") if os.environ.get(k)],
-                 sys.executable, os.path.realpath(__file__), "activate", tag])
-        if r.returncode != 0:
-            raise Refused("detach", "systemd-run failed")
-        say(f"activating {tag} (result in {STATE})")
+    if tag == current_tag() and read_state().get("state") == "installed":
+        say(f"{tag} is already the active release")  # keeps `previous` (the real way back)
         return 0
+    if not detached:  # the agent that asked is restarted below: the work must not belong to it
+        return _detach(["activate", tag])
     previous = None
     try:
         write_state(tag=tag, previous=current_tag(), state="activating")
@@ -344,28 +365,61 @@ def activate(tag, detached=False):
     except Exception as e:  # noqa: BLE001 - recorded, never silent
         write_state(tag=tag, previous=previous, state="failed", stage="activate", error=type(e).__name__)
         return 2
-    ok, why = _healthy()
+    try:
+        ok, why = _healthy()
+    except Exception as e:  # noqa: BLE001 - anything unexpected after the switch means: go back
+        ok, why = False, type(e).__name__
     if ok:
         write_state(tag=tag, previous=previous, state="installed")
         prune()
         return 0
+    return _back(tag, previous, "health", why)
+
+
+def _back(tag, previous, stage, why):
+    """Switches back to `previous` and restarts. The state is written BEFORE the restart: when the caller is the agent,
+    its restart may end this process too."""
     if previous and os.path.isdir(os.path.join(RELEASES, previous)):
-        _switch(previous)
-        _restart()
-        write_state(tag=tag, previous=previous, state="rolled_back", stage="health", error=why)
-    else:
-        write_state(tag=tag, previous=previous, state="failed", stage="health", error=why)
+        write_state(tag=tag, previous=previous, state="rolled_back", stage=stage, error=why)
+        try:
+            _switch(previous)
+            _restart()
+        except Exception as e:  # noqa: BLE001
+            write_state(tag=tag, previous=previous, state="failed", stage="rollback", error=type(e).__name__)
+            return 2
+        return 2
+    write_state(tag=tag, previous=previous, state="failed", stage=stage, error=why)
     return 2
 
 
-def rollback():
+def rollback(detached=False):
+    if not detached:
+        return _detach(["rollback"])
     st = read_state()
     prev = st.get("previous")
     if not prev or not os.path.isdir(os.path.join(RELEASES, prev)):
         raise Refused("rollback", "no previous release")
-    _switch(prev)
-    _restart()
-    write_state(tag=st.get("tag"), previous=prev, state="rolled_back", stage="manual")
+    _back(st.get("tag"), prev, "manual", "")
+    return 0
+
+
+def recover(detached=False):
+    """An activation cut by a reboot or a power loss (state `activating`, nobody running it): the release it switched
+    to is unproven, so the satellite goes back. The agent calls this at every start."""
+    st = read_state()
+    if st.get("state") != "activating":
+        return 0
+    if run(["systemctl", "is-active", "-q", UNIT]).returncode == 0:
+        return 0  # the activation is still running
+    if not detached:
+        return _detach(["recover"])
+    st = read_state()
+    if st.get("state") != "activating":
+        return 0
+    if st.get("tag") != current_tag():  # cut before the switch: nothing to undo
+        write_state(tag=st.get("tag"), previous=st.get("previous"), state="failed", stage="interrupted")
+        return 0
+    _back(st.get("tag"), st.get("previous"), "interrupted", "")
     return 0
 
 
@@ -377,11 +431,9 @@ def _vkey(tag):
 def prune():
     if not os.path.isdir(RELEASES):
         return 0
-    keep = {current_tag(), read_state().get("previous")}
-    tags = sorted((t for t in os.listdir(RELEASES) if not t.startswith(".")), key=_vkey)
-    keep |= set(tags[-KEEP_RELEASES:])
+    keep = {current_tag(), read_state().get("previous")}  # the KEEP_RELEASES (2) good versions of the spec
     for t in os.listdir(RELEASES):
-        if t not in keep:
+        if t not in keep and not t.startswith("."):  # a `.<tag>.new` belongs to a stage in progress
             shutil.rmtree(os.path.join(RELEASES, t), ignore_errors=True)
     return 0
 
@@ -393,8 +445,11 @@ def main(argv):
             return stage(argv[1], argv[2], wheels)
         if len(argv) == 2 and argv[0] == "activate":
             return activate(argv[1], detached=os.environ.get("FRIDAY_OTA_DETACHED") == "1")
+        detached = os.environ.get("FRIDAY_OTA_DETACHED") == "1"
         if argv == ["rollback"]:
-            return rollback()
+            return rollback(detached)
+        if argv == ["recover"]:
+            return recover(detached)
         if argv == ["prune"]:
             return prune()
     except Refused as e:
@@ -403,7 +458,7 @@ def main(argv):
     except Exception as e:  # noqa: BLE001
         say(f"failed: {type(e).__name__}")
         return 2
-    say("usage: stage <tarball> <tag> [--wheels <tarball>] | activate <tag> | rollback | prune")
+    say("usage: stage <tarball> <tag> [--wheels <tarball>] | activate <tag> | rollback | recover | prune")
     return 2
 
 
