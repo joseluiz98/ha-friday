@@ -42,8 +42,10 @@ from .const import (
 )
 from . import pairing, provisioning, room_climate
 from .const import DEVICE_KIND_SATELLITE, OPTIONS_GENERAL, SOURCE_HA_ENTITY, SOURCE_SATELLITE
-from .general import SCOPE_GENERAL, async_apply_general_all, log_settings_change
-from .settings import GENERAL_KEYS, GENERAL_SPECS, SettingError, validate_general
+from .general import SCOPE_ADVANCED, SCOPE_GENERAL, async_apply_general_all, log_settings_change
+from .settings import (
+    GENERAL_KEYS, GENERAL_SPECS, SettingError, advanced_keys, check_wakewords, validate_advanced, validate_general,
+)
 from .wifi import async_set_wifi
 
 CONF_SSID = "ssid"  # form field names only; neither value is ever stored
@@ -430,7 +432,7 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        return self.async_show_menu(step_id="reconfigure", menu_options=["connection", "wifi", "room_sensors"])
+        return self.async_show_menu(step_id="reconfigure", menu_options=["connection", "wifi", "room_sensors", "advanced"])
 
     async def async_step_wifi(
         self, user_input: dict[str, Any] | None = None
@@ -455,6 +457,59 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
                 vol.Required(CONF_WIFI_PASSWORD): _PASSWORD,
             }),
         )
+
+    async def async_step_advanced(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Engineering settings of this satellite (wake words, music ducking, sound cutoff): sent, never stored."""
+        connection = self._get_entry().runtime_data.get(self._get_reconfigure_subentry().subentry_id)
+        if connection is None or not connection.connected or connection.hello is None:
+            return self.async_abort(reason="satellite_unavailable")
+        caps = connection.hello.capabilities
+        descriptors = {d.key: d for d in caps}
+        keys = advanced_keys(caps)
+        state = dict(connection.state)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                values = {k: validate_advanced(caps, k, user_input[k]) for k in keys if k in user_input}
+                modes = {k.removeprefix("wakeword_").removesuffix("_mode"): values.get(k, state.get(k))
+                         for k in keys if k.startswith("wakeword_") and k.endswith("_mode")}
+                if modes:
+                    check_wakewords(modes)
+            except SettingError as err:
+                errors["base"] = err.code
+            else:
+                ducking_on = values.get("ducking", state.get("ducking"))
+                changes = {k: (state.get(k), v) for k, v in values.items() if state.get(k) != v
+                           # in the agent `set ducking_level` turns ducking on: skip it while ducking stays off
+                           and not (k == "ducking_level" and not ducking_on)}
+                sent: dict[str, tuple] = {}
+                try:
+                    for key, (old, new) in changes.items():
+                        await connection.send("set", key=key, value=new)
+                        sent[key] = (old, new)
+                except HomeAssistantError:
+                    errors["base"] = "apply_failed"
+                log_settings_change(self.hass, connection, SCOPE_ADVANCED, sent)
+                if not errors:
+                    return self.async_abort(reason="advanced_saved")
+                user_input = {**state, **user_input}
+        suggested = user_input if user_input is not None else state
+        fields: dict = {}
+        for key in keys:
+            desc = descriptors[key]
+            marker = vol.Optional(key, description=(
+                {"suggested_value": suggested[key]} if suggested.get(key) is not None else {}))
+            if desc.platform == "select":
+                fields[marker] = SelectSelector(SelectSelectorConfig(
+                    options=list(desc.options or []), translation_key="wakeword_mode"))
+            elif desc.platform == "switch":
+                fields[marker] = BooleanSelector()
+            else:
+                fields[marker] = NumberSelector(NumberSelectorConfig(
+                    min=desc.min, max=desc.max, step=desc.step, mode=NumberSelectorMode.BOX))
+        return self.async_show_form(step_id="advanced", errors=errors, data_schema=vol.Schema(fields))
 
     async def async_step_room_sensors(
         self, user_input: dict[str, Any] | None = None

@@ -111,7 +111,8 @@
           "menu_options": {
             "connection": "Conexão",
             "wifi": "Trocar o Wi-Fi",
-            "room_sensors": "Sensores do cômodo"
+            "room_sensors": "Sensores do cômodo",
+            "advanced": "Avançado"
           }
         },
         "connection": {
@@ -143,15 +144,35 @@
             "room_humidity_source": "Origem da umidade",
             "room_humidity_entity": "Entidade da umidade"
           }
+        },
+        "advanced": {
+          "title": "Avançado",
+          "description": "Ajustes de engenharia deste satélite. Só os valores que você mudar são enviados.",
+          "data": {
+            "wakeword_friday_mode": "Palavra de ativação friday",
+            "wakeword_friday_sensitivity": "Limiar da palavra friday",
+            "wakeword_sexta_feira_mode": "Palavra de ativação sexta_feira",
+            "wakeword_sexta_feira_sensitivity": "Limiar da palavra sexta_feira",
+            "ducking": "Baixar a música enquanto fala",
+            "ducking_level": "Nível da música enquanto fala",
+            "ducking_restore": "Música volta após",
+            "continuous_speech_limit": "Corte de som contínuo (0 = desligado)"
+          }
         }
       },
       "abort": {
         "reconfigure_successful": "Satélite atualizado.",
-        "wifi_changed": "Troca de Wi-Fi iniciada; o resultado aparece no diário e no sensor de troca de Wi-Fi."
+        "wifi_changed": "Troca de Wi-Fi iniciada; o resultado aparece no diário e no sensor de troca de Wi-Fi.",
+        "satellite_unavailable": "O satélite não está conectado.",
+        "advanced_saved": "Ajustes avançados enviados ao satélite."
       },
       "error": {
         "wifi_failed": "A rede nova não funcionou (ou o satélite está desconectado); a anterior foi mantida.",
-        "entity_required": "Escolha a entidade a espelhar."
+        "entity_required": "Escolha a entidade a espelhar.",
+        "one_active_word": "Pelo menos uma palavra de ativação precisa estar ativa.",
+        "out_of_range": "Algum valor está fora da faixa permitida.",
+        "bad_type": "Algum valor tem o tipo errado.",
+        "apply_failed": "O satélite recusou a alteração."
       }
     }
   },
@@ -197,6 +218,13 @@
         "slow": "Lenta",
         "normal": "Normal",
         "fast": "Rápida"
+      }
+    },
+    "wakeword_mode": {
+      "options": {
+        "active": "Ativa",
+        "shadow": "Sombra (só coleta)",
+        "off": "Desligada"
       }
     }
   },
