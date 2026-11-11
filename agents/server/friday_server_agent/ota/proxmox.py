@@ -85,8 +85,19 @@ class ProxmoxSnapshots:
         return self._call("POST", self._snap(),
                           {"snapname": name, "vmstate": "0", "description": "friday-ota"})
 
-    def rollback(self, name: str) -> str:
-        return self._call("POST", f"{self._snap(name)}/rollback")
+    def rollback(self, name: str, start: bool = False) -> str:
+        """`start` powers the VM on after a disk-only rollback; newer Proxmox also demands VM.PowerMgmt for it."""
+        return self._call("POST", f"{self._snap(name)}/rollback", {"start": "1"} if start else None)
+
+    def annotate(self, name: str, text: str) -> None:
+        """The snapshot's description lives on the host, so it survives the rollback of the VM's own disk."""
+        self._call("PUT", f"{self._snap(name)}/config", {"description": text[:200]})
+
+    def describe(self, name: str) -> str:
+        for s in self.list():
+            if s.get("name") == name:
+                return str(s.get("description") or "")
+        return ""
 
     def delete(self, name: str) -> str:
         return self._call("DELETE", self._snap(name))

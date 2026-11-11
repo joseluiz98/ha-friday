@@ -29,6 +29,8 @@ from .ota import http as otahttp
 from .ota import loop as otaloop
 from .ota import notify as otanotify
 from .ota import orchestrator as otaorc
+from .ota import proxmox as otapve
+from .ota import server_install as otasrv
 from .ota import repo as otarepo
 from .ota import store as otastore
 from friday_agent_core.ota.constants import POLL_GITHUB_S
@@ -162,9 +164,16 @@ async def main() -> None:
         vault = None
     chat = os.environ.get("FRIDAY_TELEGRAM_CHAT", "")
     notifier = otanotify.notifier_for(chat)
+    ota_repo = otarepo.VmRepo()
+    try:  # snapshot-only token (spec §16); without it a heavy server update fails before changing anything
+        snapshots = otapve.ProxmoxSnapshots(PVE, os.environ["FRIDAY_VMID"], otapve.load_token()) if PVE else None
+    except (OSError, KeyError) as err:
+        LOG.warning("OTA: no Proxmox snapshot access (%s)", type(err).__name__)
+        snapshots = None
+    installer = otasrv.ServerInstaller(ota_store, ota_repo, snapshots, lambda: status_token)
     orch = otaorc.Orchestrator(ota_store, otastore.TokenBook(),
                                otagh.GitHubWatcher(os.environ.get("FRIDAY_OTA_REPO", "joseluiz98/ha-friday")),
-                               otarepo.VmRepo(), vault, notifier)
+                               ota_repo, vault, notifier, installer=installer)
     state["ota_auto_install"] = ota_store.auto_install
     ota_kick = otaloop.Kick()
     kick = ota_kick.kick
@@ -243,6 +252,16 @@ async def main() -> None:
     tasks.append(pending_loop())
 
     tasks.append(otaloop.run(orch.poll, ota_kick, POLL_GITHUB_S))
+
+    async def idle_loop():  # continuous idle for heavy server updates (HEAVY_IDLE_S)
+        while True:
+            try:
+                await asyncio.to_thread(installer.sample_idle)
+            except Exception as err:  # noqa: BLE001
+                LOG.warning("OTA idle sample failed: %s", type(err).__name__)
+            await asyncio.sleep(30)
+
+    tasks.append(idle_loop())
     app = core.app()
     otahttp.add_routes(app, orch, lambda: status_token)  # satellites: their own tokens; request_install: status token
     provmod.add_routes(app, bundles)  # GET /v1/bundles/{one_time_token}: its own single-use token, no other auth

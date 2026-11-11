@@ -12,6 +12,7 @@ step "sweep (private list)" python3 scripts/sweep.py
 step "integration + agents + tools (VM, python:3.14)" bash scripts/test.sh
 step "satellite program" sh -c 'cd satellite/program && python3 -m unittest -q 2>&1 | tail -3 | grep -q "^OK"'
 step "satellite image" sh -c 'cd satellite/image && python3 -m unittest -q tests.test_payload_check tests.test_make_manifest tests.test_vault_payload'
+step "ota scripts" bash ota/test_self_update.sh
 rsync -az --delete --exclude __pycache__ --exclude .git ./ "$VM:$ALL/"
 step "voice gateway (friday image, production workspace)" ssh -o BatchMode=yes "$VM" \
   'sudo docker run --rm --entrypoint /opt/pc/bin/python -e FRIDAY_LOCAL_CONFIG=/w/local.example.env -v /srv/friday:/srv/friday -v $HOME/'"$ALL"'/voice_gateway:/w -w /w friday:2026.9.9 -m unittest -q'

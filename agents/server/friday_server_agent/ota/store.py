@@ -36,7 +36,7 @@ def _write_json(path: str, data, mode: int = 0o644) -> None:
 
 
 def _empty() -> dict:
-    return {"releases": {}, "soak": {}, "devices": {}, "server": {}, "auto_install": True, "pushes": [],
+    return {"releases": {}, "soak": {}, "devices": {}, "server": {}, "server_ota": {}, "auto_install": True, "pushes": [],
             "server_protocol": 1}
 
 

@@ -1,8 +1,9 @@
-# F.R.I.D.A.Y. em produção (spec 2026-10-18 §4.2). cd /opt/friday/image && docker compose up -d --build
+# F.R.I.D.A.Y. em produção (spec 2026-10-18 §4.2). A imagem é friday:<versão> (server/image/install.sh); a ativa é
+# FRIDAY_IMAGE_TAG em /opt/friday/image/.env (OTA, spec 2026-11-10 §8): cd /opt/friday/image && docker compose up -d --no-build
 services:
   friday:
     build: .
-    image: friday:2026.9.9
+    image: friday:${FRIDAY_IMAGE_TAG:-2026.9.9}
     container_name: friday
     network_mode: host
     restart: unless-stopped

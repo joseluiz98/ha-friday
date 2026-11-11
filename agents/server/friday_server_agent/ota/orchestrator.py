@@ -1,7 +1,8 @@
 """OTA orchestrator on the VM (spec 2026-11-10 §6, §13): GitHub → packages → offers to satellites → reports.
 
 Satellites pull (`offer`) and report (`report`); the orchestrator never pushes to them. It decides the target of each
-channel, the protocol gate, retries and the alpha soak; the server-side installer (Task 10) is plugged in later.
+channel, the protocol gate, retries and the alpha soak, and drives the server-side installer (`server_install`) toward
+the target of the server channel (spec §16 option a: the newest version an alpha device needs).
 
 Locking: `store.lock` only guards reading/writing the state (fast). Slow work — GitHub, git, package builds, Telegram —
 runs outside it; builds are serialized by `_build_lock`, so one tag is never built twice at once.
@@ -72,7 +73,7 @@ def _newer(tag: str, installed: str | None) -> bool:
 class Orchestrator:
     def __init__(self, store, tokens, watcher, repo, vault, notifier, build: Callable = pk.build_release,
                  wheels: Callable = wh.build, root: str = OTA_ROOT, clock: Callable[[], float] = time.time,
-                 prune: Callable = pk.prune_packages):
+                 prune: Callable = pk.prune_packages, installer=None):
         self.store, self.tokens, self.watcher, self.repo = store, tokens, watcher, repo
         self.vault, self.notifier, self._build, self._wheels = vault, notifier, build, wheels
         self.root, self._clock, self._prune = root, clock, prune
@@ -80,6 +81,8 @@ class Orchestrator:
         self._manifests: dict[str, object] = {}  # sha -> Manifest | None (immutable per sha)
         self._build_failed: dict[str, float] = {}
         self._build_lock = threading.Lock()
+        self.installer = installer
+        self._recovered = False
 
     # ---- reads under the state lock
     def _eligible(self) -> list[ch.Release]:
@@ -164,6 +167,10 @@ class Orchestrator:
                     self._manifest(sha)
                 except Exception as err:  # noqa: BLE001 - offer() retries it
                     LOG.warning("OTA: manifest %s failed: %s", t, type(err).__name__)
+        try:
+            self._server_step()
+        except Exception as err:  # noqa: BLE001 - the satellites' side must go on
+            LOG.error("OTA: server step failed: %s", type(err).__name__)
         keep = self._keep()
         with self._build_lock:
             try:
@@ -173,6 +180,92 @@ class Orchestrator:
                 LOG.warning("OTA: prune failed: %s", type(err).__name__)
         self._flush_pushes()
         return {"targets": {c: self.target(c) for c in ch.CHANNELS}, "built": built}
+
+    # ---- server side
+    def _server_step(self) -> None:
+        inst = self.installer
+        if inst is None:
+            return
+        if not self._recovered:  # a run cut by a crash, a reboot or a snapshot rollback
+            self._recovered = True
+            out = inst.recover()
+            if out:
+                self._server_result(out)
+        out = inst.absorb_self_result()
+        if out:
+            self._server_result(out)
+        inst.prune_snapshots()
+        now = self._clock()
+        with self.store.lock:
+            so = self.store.data["server_ota"]
+            channel = ch.server_channel([d["channel"] for d in self.store.data["devices"].values()])
+            tag = self.target(channel)
+            if not tag:
+                return
+            sha = self.store.release_infos()[tag].release.sha
+            manual, auto = bool(so.get("install_requested")), self.store.auto_install
+            current = so.get("installed_tag")
+            a = retry.Attempts.from_dict(so["attempts"]) if so.get("attempts") else None
+        if tag == current or not _newer(tag, current):  # the server never goes back by itself
+            return
+        if not (auto or manual) or (not manual and not retry.may_try(a, tag, now)):
+            return
+        man = self._manifest(sha)
+        if man is None:  # a release older than the OTA: the server side is installed by hand
+            return
+        self._package(tag)  # the retained archive (rollback source); the installer falls back to the clone
+        out = inst.apply(tag, sha, man, manual=manual)
+        self._server_result({**out, "tag": tag})
+
+    def _server_result(self, out: dict) -> None:
+        result, tag = out.get("result"), str(out.get("tag") or "")
+        if result == "deferred" or not TAG.match(tag):
+            return
+        now = self._clock()
+        man = None
+        with self.store.lock:
+            info = self.store.release_infos().get(tag)
+        if result == "installed" and info is not None:
+            try:
+                man = self._manifest(info.release.sha)
+            except Exception:  # noqa: BLE001
+                man = None
+        with self.store.lock:
+            so = self.store.data["server_ota"]
+            so["install_requested"] = False
+            stage, error = str(out.get("stage") or ""), str(out.get("error") or "")
+            if result == "installed":
+                so.update(installed_tag=tag, attempts=None)
+                if man is not None:
+                    self.store.data["server_protocol"] = int(man.protocol.get("server", 1))
+            elif result in ("rolled_back", "failed"):
+                a = retry.Attempts.from_dict(so["attempts"]) if so.get("attempts") else None
+                if a is None or a.version != tag:
+                    a = retry.reset(tag)
+                was_exhausted = a.exhausted
+                retry.record_failure(a, f"{out.get('component', '')} {stage}".strip(), error, now)
+                so["attempts"] = a.to_dict()
+                alpha = info is not None and info.release.prerelease
+                if alpha and (result == "rolled_back" or a.exhausted) and not self._promoted(tag, now):
+                    self.store.soak_fail(tag)
+                if a.exhausted and not was_exhausted:
+                    self.notifier.queue(nt.format_exhausted("o servidor", tag, a.last_stage, error,
+                                                            so.get("installed_tag")), self.store.data["pushes"])
+            try:
+                self.store.event("server", tag, str(result), stage, error)
+            except OSError as err:
+                LOG.warning("OTA: event log failed: %s", type(err).__name__)
+            self.store.save()
+
+    def install_server(self) -> str | None:
+        """Manual (HA button or voice): zero the attempts; the next poll installs without waiting for heavy idle."""
+        with self.store.lock:
+            so = self.store.data["server_ota"]
+            so.update(install_requested=True, attempts=None)
+            tag = self.target(ch.server_channel([d["channel"] for d in self.store.data["devices"].values()]))
+            self.store.event("server", tag, "install_requested")
+            self.store.save()
+            return tag
 
     def _flush_pushes(self) -> None:
         with self.store.lock:
@@ -297,5 +390,11 @@ class Orchestrator:
                                                     "last_report")}
                        for s, d in self.store.data["devices"].items()}
             releases = sorted((t for t in self.store.data["releases"] if TAG.match(t)), key=ch.version_key)
+            so = self.store.data["server_ota"]
+            server = {"installed": so.get("installed_tag"), "install_requested": bool(so.get("install_requested")),
+                      "attempts": so.get("attempts"), "integration_target": so.get("integration_target"),
+                      "running": (so.get("run") or {}).get("stage"),
+                      "components": {c: v.get("installed_tag") for c, v in self.store.data["server"].items()
+                                     if isinstance(v, dict)}}
             return {"auto_install": self.store.auto_install, "targets": {c: self.target(c) for c in ch.CHANNELS},
-                    "devices": devices, "releases": releases}
+                    "devices": devices, "releases": releases, "server": server}

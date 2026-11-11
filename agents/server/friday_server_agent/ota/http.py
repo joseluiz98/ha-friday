@@ -97,6 +97,10 @@ def make_handlers(orch, kick: Callable[[bool], None]):
         return {"ok": True}
 
     async def install(cmd: dict) -> dict:
+        if args(cmd).get("component") == "server":
+            await asyncio.to_thread(orch.install_server)
+            kick(False)
+            return {"ok": True}
         sat = args(cmd).get("sat_id")
         if not isinstance(sat, str) or not SAT_ID.match(sat):
             return {"ok": False, "error": "sat_id"}
