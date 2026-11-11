@@ -345,8 +345,8 @@ def activate(tag, detached=False):
     release = os.path.join(RELEASES, tag)
     if not os.path.exists(os.path.join(release, ".complete")):
         raise Refused("args", "release not staged")
-    if tag == current_tag() and read_state().get("state") == "installed":
-        say(f"{tag} is already the active release")  # keeps `previous` (the real way back)
+    if tag == current_tag():
+        say(f"{tag} is already the active release")  # never overwrites `previous` (the real way back)
         return 0
     if not detached:  # the agent that asked is restarted below: the work must not belong to it
         return _detach(["activate", tag])
@@ -393,9 +393,12 @@ def _back(tag, previous, stage, why):
 
 
 def rollback(detached=False):
+    st = read_state()
+    prev = st.get("previous")
+    if not prev or prev == current_tag() or not os.path.isdir(os.path.join(RELEASES, prev)):
+        raise Refused("rollback", "no previous release")  # seen by the caller, before detaching
     if not detached:
         return _detach(["rollback"])
-    st = read_state()
     prev = st.get("previous")
     if not prev or not os.path.isdir(os.path.join(RELEASES, prev)):
         raise Refused("rollback", "no previous release")

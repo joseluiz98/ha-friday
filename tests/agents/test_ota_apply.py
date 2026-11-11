@@ -323,3 +323,21 @@ def test_a_different_package_under_a_staged_tag_is_staged_again(env):
     pkg = package(env["dl"] / "v0.2.0b.tar.gz", "v0.2.0", sha="other")
     assert helper(env, "stage", str(pkg), "v0.2.0").returncode == 0
     assert not (env["root"] / "opt/friday/releases/v0.2.0/program/marker").exists()
+
+
+def test_rollback_without_a_way_back_is_refused_to_the_caller(env):
+    installed_current(env)
+    r = helper(env, "rollback")
+    assert r.returncode == 2 and "no previous release" in r.stdout
+    assert "systemd-run" not in (env["log"].read_text() if env["log"].exists() else "")
+
+
+def test_activating_the_current_release_never_touches_previous(env):
+    installed_current(env)
+    staged(env, "v0.2.0")
+    assert helper(env, "activate", "v0.2.0", detached=True).returncode == 0
+    s = json.loads((env["root"] / "var/lib/friday/ota.json").read_text())
+    s["state"] = "rolled_back"  # whatever happened after: the running release is not activated again
+    (env["root"] / "var/lib/friday/ota.json").write_text(json.dumps(s))
+    assert helper(env, "activate", "v0.2.0", detached=True).returncode == 0
+    assert state(env)["previous"] == "v0.1.0"
