@@ -58,3 +58,8 @@ class NullNotifier:
 
     def flush(self, store_pushes: list[dict]) -> int:
         return 0
+
+
+def notifier_for(chat: str | None):
+    """The real Notifier when a Telegram chat is configured; a blank or missing chat gives the NullNotifier."""
+    return Notifier(chat) if chat and chat.strip() else NullNotifier()

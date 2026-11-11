@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import threading
@@ -21,6 +22,7 @@ from .github import ReleaseInfo
 STATE_PATH = "/srv/friday/state/ota/state.json"
 EVENTS_PATH = "/srv/friday/state/ota/events.ndjson"
 TOKENS_PATH = "/srv/friday/secrets/ota_tokens.json"
+LOG = logging.getLogger("friday_server_agent.ota")
 
 
 def _write_json(path: str, data, mode: int = 0o644) -> None:
@@ -38,15 +40,51 @@ def _empty() -> dict:
             "server_protocol": 1}
 
 
+def _coerce(raw) -> dict | None:
+    """The saved state with every field of the right type, or None when the file is not a state at all."""
+    if not isinstance(raw, dict):
+        return None
+    data = _empty()
+    for key, default in data.items():
+        value = raw.get(key, default)
+        if isinstance(default, bool):
+            ok = isinstance(value, bool)
+        elif isinstance(default, int):
+            ok = isinstance(value, int) and not isinstance(value, bool)
+        else:
+            ok = isinstance(value, type(default))
+        data[key] = value if ok else default
+    data["devices"] = {k: v for k, v in data["devices"].items() if isinstance(v, dict)}
+    data["releases"] = {k: v for k, v in data["releases"].items() if isinstance(v, dict) and "tag" in v}
+    data["soak"] = {k: v for k, v in data["soak"].items() if isinstance(v, dict)}
+    data["pushes"] = [p for p in data["pushes"] if isinstance(p, dict) and isinstance(p.get("text"), str)]
+    return data
+
+
 class OtaStore:
     def __init__(self, path: str = STATE_PATH, events_path: str = EVENTS_PATH, clock=time.time):
         self.path, self.events_path, self._clock = path, events_path, clock
         self.lock = threading.RLock()
+        self.data = self._load()
+
+    def _load(self) -> dict:
         try:
-            with open(path, encoding="utf-8") as f:
-                self.data = {**_empty(), **json.load(f)}
+            with open(self.path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except FileNotFoundError:
+            return _empty()
         except (OSError, ValueError):
-            self.data = _empty()
+            raw = None
+        data = _coerce(raw)
+        if data is None:  # keep the bad file for a human; start clean (releases come back on the next poll)
+            backup = f"{self.path}.corrupt-{int(self._clock())}"
+            try:
+                os.replace(self.path, backup)
+            except OSError:
+                pass
+            LOG.error("OTA state unreadable; moved aside as %s", os.path.basename(backup))
+            return _empty()
+        return data
 
     def save(self) -> None:
         with self.lock:
@@ -103,18 +141,28 @@ class OtaStore:
             self.save()
 
 
+class TokenBookError(RuntimeError):
+    """The token file exists but cannot be read: issuing would wipe every satellite's token."""
+
+
 class TokenBook:
     """Per-satellite bearer tokens: only sha256 stored (0600 root); issuing again replaces the old one."""
 
     def __init__(self, path: str = TOKENS_PATH):
         self.path = path
+        self._lock = threading.Lock()
 
     def _load(self) -> dict:
         try:
             with open(self.path, encoding="utf-8") as f:
-                return json.load(f)
-        except (OSError, ValueError):
+                book = json.load(f)
+        except FileNotFoundError:
             return {}
+        except (OSError, ValueError) as err:
+            raise TokenBookError(f"token book unreadable: {type(err).__name__}") from err
+        if not isinstance(book, dict):
+            raise TokenBookError("token book is not an object")
+        return book
 
     @staticmethod
     def _hash(token: str) -> str:
@@ -122,11 +170,16 @@ class TokenBook:
 
     def issue(self, sat_id: str) -> str:
         token = secrets.token_urlsafe(32)
-        book = self._load()
-        book[sat_id] = self._hash(token)
-        _write_json(self.path, book, 0o600)
+        with self._lock:
+            book = self._load()
+            book[sat_id] = self._hash(token)
+            _write_json(self.path, book, 0o600)
         return token
 
     def check(self, sat_id: str, token: str) -> bool:
-        want = self._load().get(sat_id)
-        return bool(want and token) and hmac.compare_digest(want, self._hash(token))
+        try:
+            want = self._load().get(sat_id)
+        except TokenBookError:
+            LOG.error("OTA token book unreadable; refusing satellite")
+            return False
+        return isinstance(want, str) and bool(want and token) and hmac.compare_digest(want, self._hash(token))

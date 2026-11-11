@@ -26,6 +26,7 @@ from . import reminders as remmod
 from . import voice_switch as vsw
 from .ota import github as otagh
 from .ota import http as otahttp
+from .ota import loop as otaloop
 from .ota import notify as otanotify
 from .ota import orchestrator as otaorc
 from .ota import repo as otarepo
@@ -160,17 +161,13 @@ async def main() -> None:
         LOG.error("OTA: vault module unavailable: %s", type(err).__name__)
         vault = None
     chat = os.environ.get("FRIDAY_TELEGRAM_CHAT", "")
-    notifier = otanotify.Notifier(chat) if chat else otanotify.NullNotifier()
+    notifier = otanotify.notifier_for(chat)
     orch = otaorc.Orchestrator(ota_store, otastore.TokenBook(),
                                otagh.GitHubWatcher(os.environ.get("FRIDAY_OTA_REPO", "joseluiz98/ha-friday")),
                                otarepo.VmRepo(), vault, notifier)
     state["ota_auto_install"] = ota_store.auto_install
-    ota_kick = asyncio.Event()
-    ota_full = {"full": False}
-
-    def kick(full: bool) -> None:
-        ota_full["full"] = ota_full["full"] or full
-        ota_kick.set()
+    ota_kick = otaloop.Kick()
+    kick = ota_kick.kick
 
     async def set_dispatch(cmd: dict) -> dict:
         if cmd.get("key") == "ota_auto_install":
@@ -245,20 +242,7 @@ async def main() -> None:
 
     tasks.append(pending_loop())
 
-    async def ota_loop():
-        while True:
-            full, ota_full["full"] = ota_full["full"], False
-            try:
-                await asyncio.to_thread(orch.poll, full)
-            except Exception as err:  # noqa: BLE001 - the loop must survive a bad cycle
-                LOG.warning("OTA cycle failed: %s", type(err).__name__)
-            ota_kick.clear()
-            try:
-                await asyncio.wait_for(ota_kick.wait(), POLL_GITHUB_S)
-            except asyncio.TimeoutError:
-                pass
-
-    tasks.append(ota_loop())
+    tasks.append(otaloop.run(orch.poll, ota_kick, POLL_GITHUB_S))
     app = core.app()
     otahttp.add_routes(app, orch, lambda: status_token)  # satellites: their own tokens; request_install: status token
     provmod.add_routes(app, bundles)  # GET /v1/bundles/{one_time_token}: its own single-use token, no other auth

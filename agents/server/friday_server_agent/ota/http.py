@@ -76,8 +76,8 @@ def add_routes(app: web.Application, orch, status_token: Callable[[], str]) -> N
         sat = body.get("sat_id") if isinstance(body, dict) else None
         if not isinstance(sat, str) or not SAT_ID.match(sat):
             return web.json_response({"ok": False, "error": "sat_id"}, status=400)
-        await asyncio.to_thread(orch.install, sat)
-        return web.json_response({"ok": True, "target": orch.target(orch.store.device(sat)["channel"])})
+        target = await asyncio.to_thread(orch.install, sat)
+        return web.json_response({"ok": True, "target": target})
 
     app.router.add_get("/v1/ota/offer", offer)
     app.router.add_get("/v1/ota/package/{tag}/{name}", package)
@@ -114,7 +114,10 @@ def make_handlers(orch, kick: Callable[[bool], None]):
         sat = args(cmd).get("sat_id")
         if not isinstance(sat, str) or not SAT_ID.match(sat):
             return {"ok": False, "error": "sat_id"}
-        token = await asyncio.to_thread(orch.tokens.issue, sat)
+        try:
+            token = await asyncio.to_thread(orch.tokens.issue, sat)
+        except RuntimeError:  # TokenBookError: the file is unreadable and issuing would wipe the others
+            return {"ok": False, "error": "token_book"}
         return {"ok": True, "data": {"token": token, "url": f"http://{pv.bundle_host()}"}}
 
     return {"ota_status": status, "ota_check_now": check_now, "ota_install": install, "ota_set_auto": set_auto,

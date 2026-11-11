@@ -28,6 +28,7 @@ class World:
         self.releases = {r.release.tag: r for r in releases}
         self.manifests = manifests or {}
         self.built, self.pushed, self.now = [], [], 1000.0
+        self.repo_calls, self.repo_down, self.build_fails, self.gate = [], False, False, None
         self.store = st.OtaStore(str(tmp / "state.json"), str(tmp / "events.ndjson"))
         self.tokens = st.TokenBook(str(tmp / "tokens.json"))
         world = self
@@ -38,6 +39,14 @@ class World:
                 return dict(world.releases)
 
         class Repo:
+            def ensure(self):
+                world.repo_calls.append("ensure")
+                if world.repo_down:
+                    raise OSError("down")
+
+            def fetch_tags(self):
+                world.repo_calls.append("fetch")
+
             def manifest(self, sha):
                 return world.manifests.get(sha)
 
@@ -49,7 +58,11 @@ class World:
                 return 0
 
         def build(repo, tag, sha, vault, root, wheels):
+            if world.gate is not None:
+                world.gate.wait(5)
             world.built.append(tag)
+            if world.build_fails:
+                raise RuntimeError("no vault")
             return {"tag": tag, "sha": sha, "satellite": {"path": f"{root}/packages/{tag}/satellite.tar.gz",
                     "sha256": "s" * 64, "size": 10, "lock_sha256": "L" * 64, "wheels": f"/w/{tag}.tar.gz",
                     "protocol": {}}, "server": {"path": "a.tar"}}
@@ -65,7 +78,7 @@ def test_stable_satellite_gets_normal_release_not_prerelease(tmp_path):
     w = World(tmp_path, [rel("v0.2.0"), rel("v0.3.0"), rel("v0.4.0", pre=True)])
     w.orch.poll()
     o = w.offer("stable")
-    assert o["tag"] == "v0.3.0" and o["url"] == "/v1/ota/package/v0.3.0/satellite.tar.gz"
+    assert o["tag"] == "v0.3.0" and o["url"] == f"/v1/ota/package/v0.3.0/satellite.tar.gz?sat_id={SAT}"
     assert o["wheels_url"] is None and o["auto_install"] is True and o["install_requested"] is False
 
 
@@ -92,7 +105,7 @@ def test_wheels_offered_only_when_lock_differs(tmp_path):
     w = World(tmp_path, [rel("v0.3.0")])
     w.orch.poll()
     o = w.offer("stable", lock="X" * 64)
-    assert o["wheels_url"] == "/v1/ota/package/v0.3.0/wheels.tar.gz"
+    assert o["wheels_url"] == f"/v1/ota/package/v0.3.0/wheels.tar.gz?sat_id={SAT}"
 
 
 def test_satellite_offer_waits_for_required_server_protocol(tmp_path):
@@ -216,3 +229,111 @@ def test_retention_keeps_targets_and_installed(tmp_path):
     w.offer("stable", installed="v0.1.0")
     w.orch.poll()
     assert kept and kept[-1] == {"v0.1.0", "v0.3.0", "v0.4.0"}  # installed + the KEEP_RELEASES newest stable
+
+
+def test_offer_urls_carry_the_sat_id(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    o = w.offer("stable", lock="X" * 64)
+    assert o["url"] == f"/v1/ota/package/v0.3.0/satellite.tar.gz?sat_id={SAT}"
+    assert o["wheels_url"] == f"/v1/ota/package/v0.3.0/wheels.tar.gz?sat_id={SAT}"
+
+
+def test_poll_clones_and_fetches_and_survives_a_down_repo(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    assert w.repo_calls[:2] == ["ensure", "fetch"]
+    w.repo_down = True
+    w.orch.poll()  # no exception
+    assert w.offer("stable")["tag"] == "v0.3.0"
+
+
+def test_report_is_not_blocked_by_a_slow_build(tmp_path):
+    import threading
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.gate = threading.Event()
+    t = threading.Thread(target=w.orch.poll)
+    t.start()
+    done = threading.Event()
+    threading.Thread(target=lambda: (w.orch.report({"sat_id": SAT, "tag": "v0.3.0", "result": "failed",
+                                                     "stage": "download", "error": "x"}), done.set())).start()
+    assert done.wait(2), "report waited for the build"
+    w.gate.set()
+    t.join(5)
+
+
+def test_no_downgrade_offer(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    o = w.offer("stable", installed="v0.4.0")
+    assert o["tag"] is None and o["reason"] == "newer_installed"
+
+
+def test_transient_alpha_failure_does_not_block_promotion(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)])
+    w.orch.poll()
+    w.offer("alpha", sat="sat-0000a1")
+    w.orch.report({"sat_id": "sat-0000a1", "tag": "v0.4.0", "result": "failed", "stage": "download", "error": "net"})
+    w.orch.report({"sat_id": "sat-0000a1", "tag": "v0.4.0", "result": "installed", "stage": "", "error": ""})
+    w.now += SOAK_S
+    assert w.offer("stable")["tag"] == "v0.4.0"
+
+
+def test_failure_after_promotion_does_not_demote(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)])
+    w.orch.poll()
+    w.offer("alpha", sat="sat-0000a1")
+    w.orch.report({"sat_id": "sat-0000a1", "tag": "v0.4.0", "result": "installed", "stage": "", "error": ""})
+    w.now += SOAK_S
+    w.orch.report({"sat_id": "sat-0000a1", "tag": "v0.4.0", "result": "rolled_back", "stage": "health", "error": "e"})
+    assert w.offer("stable")["tag"] == "v0.4.0"
+
+
+def test_exhausted_pushes_once_even_with_duplicate_reports(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    for _ in range(7):
+        w.orch.report({"sat_id": SAT, "tag": "v0.3.0", "result": "failed", "stage": "download", "error": "x"})
+    assert len(w.pushed) == 1
+
+
+def test_package_file_only_for_targets_or_installed(tmp_path):
+    w = World(tmp_path, [rel("v0.2.0"), rel("v0.3.0"), rel("v0.4.0", pre=True)])
+    w.orch.poll()
+    for tag in ("v0.3.0", "v0.4.0", "v0.2.0"):
+        p = tmp_path / "ota" / "packages" / tag
+        p.mkdir(parents=True, exist_ok=True)
+        (p / "satellite.tar.gz").write_bytes(b"x")
+    assert w.orch.package_file("v0.3.0", "satellite.tar.gz")
+    assert w.orch.package_file("v0.4.0", "satellite.tar.gz") is None  # nobody on alpha
+    assert w.orch.package_file("v0.2.0", "satellite.tar.gz") is None
+
+
+def test_failed_build_backs_off(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.build_fails = True
+    w.orch.poll()
+    w.orch.poll()
+    w.offer("stable")
+    assert w.built == ["v0.3.0"]
+    w.now += 3601
+    w.orch.poll()
+    assert w.built == ["v0.3.0", "v0.3.0"]
+
+
+def test_corrupt_state_is_backed_up_and_reset(tmp_path):
+    (tmp_path / "state.json").write_text("[]")
+    s = st.OtaStore(str(tmp_path / "state.json"), str(tmp_path / "e.ndjson"))
+    assert s.data["devices"] == {} and list(tmp_path.glob("state.json.corrupt-*"))
+    (tmp_path / "state.json").write_text('{"devices": null}')
+    assert st.OtaStore(str(tmp_path / "state.json"), str(tmp_path / "e.ndjson")).data["devices"] == {}
+
+
+def test_token_book_refuses_to_issue_over_a_corrupt_file(tmp_path):
+    b = st.TokenBook(str(tmp_path / "t.json"))
+    b.issue("sat-0000b2")
+    (tmp_path / "t.json").write_text("{broken")
+    with pytest.raises(st.TokenBookError):
+        b.issue(SAT)
+    assert (tmp_path / "t.json").read_text() == "{broken"
+    assert b.check(SAT, "anything") is False

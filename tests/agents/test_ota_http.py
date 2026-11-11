@@ -50,7 +50,8 @@ async def test_package_download(tmp_path, aiohttp_client):
     tok = w.tokens.issue(SAT)
     c = await _client(aiohttp_client, w)
     h = {"Authorization": f"Bearer {tok}"}
-    r = await c.get(f"/v1/ota/package/v0.3.0/satellite.tar.gz?sat_id={SAT}", headers=h)
+    o = w.offer("stable")
+    r = await c.get(o["url"], headers=h)  # the offer's url as given
     assert r.status == 200 and await r.read() == b"PKG"
     assert (await c.get(f"/v1/ota/package/v0.3.0/state.json?sat_id={SAT}", headers=h)).status == 404
     assert (await c.get(f"/v1/ota/package/..%2F..%2Fx/satellite.tar.gz?sat_id={SAT}", headers=h)).status == 404
@@ -93,3 +94,27 @@ def test_agent_main_imports_with_ota_wired():
     import importlib
     m = importlib.import_module("friday_server_agent.__main__")
     assert hasattr(m, "main")
+
+
+
+async def test_kick_during_a_poll_is_not_lost():
+    import asyncio
+    from friday_server_agent.ota import loop as ol
+    calls, k = [], ol.Kick()
+
+    def poll(full):
+        calls.append(full)
+        if len(calls) == 1:
+            k.kick(True)  # pressed while the first poll runs
+    task = asyncio.ensure_future(ol.run(poll, k, period=3600))
+    for _ in range(50):
+        await asyncio.sleep(0.02)
+        if len(calls) >= 2:
+            break
+    task.cancel()
+    assert calls[:2] == [False, True]
+
+
+def test_blank_chat_gives_null_notifier():
+    from friday_server_agent.ota import notify as nt
+    assert isinstance(nt.notifier_for("  "), nt.NullNotifier) and isinstance(nt.notifier_for("123"), nt.Notifier)
