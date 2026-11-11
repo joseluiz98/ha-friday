@@ -158,3 +158,17 @@ async def test_advanced_without_changes_sends_nothing(hass):
     assert r["type"] == FlowResultType.ABORT and got == []
     await hass.config_entries.async_unload(entry.entry_id)
     await sat.stop()
+
+
+async def test_advanced_swapping_the_active_word_activates_first(hass):
+    """Turning friday on and sexta_feira off in one submit never leaves the Pi without an active word."""
+    got = []
+    sat = make_sat(got, state=dict(STATE, wakeword_friday_mode="active", wakeword_sexta_feira_mode="off"))
+    entry = await setup(hass, sat)
+    r = await open_advanced(hass, entry)
+    r = await hass.config_entries.subentries.async_configure(r["flow_id"], form_values(
+        wakeword_friday_mode="off", wakeword_sexta_feira_mode="active"))
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "advanced_saved"
+    assert got == [("wakeword_sexta_feira_mode", "active"), ("wakeword_friday_mode", "off")]
+    await hass.config_entries.async_unload(entry.entry_id)
+    await sat.stop()

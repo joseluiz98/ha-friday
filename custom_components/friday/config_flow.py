@@ -484,6 +484,9 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
                 changes = {k: (state.get(k), v) for k, v in values.items() if state.get(k) != v
                            # in the agent `set ducking_level` turns ducking on: skip it while ducking stays off
                            and not (k == "ducking_level" and not ducking_on)}
+                # a word that becomes active goes first: swapping words never leaves the Pi without one
+                changes = dict(sorted(changes.items(), key=lambda kv: not (
+                    kv[0].endswith("_mode") and kv[1][1] == "active")))
                 sent: dict[str, tuple] = {}
                 try:
                     for key, (old, new) in changes.items():
