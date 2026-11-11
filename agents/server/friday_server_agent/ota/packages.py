@@ -35,8 +35,8 @@ SYSTEM_SOURCES = ["satellite/program", "satellite/sync", "satellite/status", "sa
                   "agents/satellite/friday-ota-apply"]
 SYSTEM_SUFFIXES = (".service", ".timer", ".sh")
 # a release with ota/release.json (OTA era) must carry these; only pre-OTA refs may lack them
-# (Task 13 adds agents/satellite/friday-ota-apply to this list when the helper lands)
 REQUIRED_MODERN = ["satellite/program/requirements.lock", "agents/satellite/requirements.lock",
+                   "agents/satellite/friday-ota-apply",
                    "satellite/program/friday-satelite.service", "agents/satellite/friday-satellite-agent.service",
                    "agents/satellite/sudoers.friday-satellite-agent"]
 SCHEMA = 1

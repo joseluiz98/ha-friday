@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 User=jose
-WorkingDirectory=/home/jose/satelite
-ExecStart=/home/jose/oww/bin/python -u /home/jose/satelite/friday_satelite.py
+WorkingDirectory=/opt/friday/current/program
+ExecStart=/opt/friday/current/venv/bin/python -u /opt/friday/current/program/friday_satelite.py
 Restart=always
 RestartSec=3
 

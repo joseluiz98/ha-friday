@@ -94,9 +94,10 @@ PLANS = {
            ("agents/common/friday_agent_core/", "/opt/friday/agent/friday_agent_core", {}, True),
            ("tools/wakeword/training/", "/opt/friday/wwt/training", dict(skip_tests=True), False)],
     "ha": [("custom_components/friday/", "/config/custom_components/friday", {}, True)],
-    "satellite": [("satellite/program/", "/home/jose/satelite", dict(skip_tests=True, only_ext=".py", flat=True), False),
-                  ("agents/satellite/friday_satellite_agent/", "/opt/friday-satellite-agent/friday_satellite_agent", {}, True),
-                  ("agents/common/friday_agent_core/", "/opt/friday-satellite-agent/friday_agent_core", {}, True)],
+    # versioned layout (OTA, spec 2026-11-10): the release `current` points to
+    "satellite": [("satellite/program/", "/opt/friday/current/program", dict(skip_tests=True, only_ext=".py", flat=True), False),
+                  ("agents/satellite/friday_satellite_agent/", "/opt/friday/current/agent/friday_satellite_agent", {}, True),
+                  ("agents/common/friday_agent_core/", "/opt/friday/current/agent/friday_agent_core", {}, True)],
 }
 
 

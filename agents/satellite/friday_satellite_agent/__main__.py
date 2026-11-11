@@ -38,7 +38,9 @@ def read_timers() -> list | None:
         return None
 ETC_DIR = os.path.dirname(CONFIG)  # /etc/friday-satelite: pairable, ha_token, mic
 _exit = os._exit  # replaced in tests
-PROGRAM_DIR = os.environ.get("FRIDAY_SAT_PROGRAM_DIR", "/home/jose/satelite")
+# versioned layout (OTA, spec 2026-11-10); a satellite of the old layout until its first OTA install: ~/satelite
+PROGRAM_DIR = os.environ.get("FRIDAY_SAT_PROGRAM_DIR") or next(
+    (d for d in ("/opt/friday/current/program", "/home/jose/satelite") if os.path.isdir(d)), "/home/jose/satelite")
 BUNDLES = os.path.expanduser("~/.friday-agent/bundles")
 APPLY_AGENT = ["sudo", "-n", "/usr/local/sbin/friday-agent-apply"]
 ID_FILE = os.environ.get("FRIDAY_SAT_ID_FILE", "/etc/friday-satelite/id")

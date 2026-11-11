@@ -14,6 +14,10 @@ if [ "$COMP" = integration ]; then exec bash scripts/install-integration.sh "$SH
 HOST=${3:-$(cat /config/.friday/vm 2>/dev/null)}
 [ -n "$HOST" ] || { echo "no host (pass user@host or write /config/.friday/vm)" >&2; exit 2; }
 if [ "$COMP" = satellite ]; then
+  # a satellite on the versioned layout (OTA) is updated only by the OTA: alpha pre-release or the Install button
+  if ssh -o BatchMode=yes "$HOST" test -e /opt/friday/current; then
+    echo "refused: $HOST is on the OTA layout; publish a pre-release (alpha) or use Install in the integration" >&2; exit 2
+  fi
   PATHS="satellite/program scripts/lib agents"
   RUN="FRIDAY_VERSION_LINE='$LINE' bash satellite/program/install.sh && cd agents && sudo FRIDAY_VERSION_LINE='$LINE' bash satellite/install.sh"
 else

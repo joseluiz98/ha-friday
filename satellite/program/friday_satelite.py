@@ -128,6 +128,7 @@ class Satelite:
         agora = time.time()
         return dict(self.maestro.publico(), volume=self.volume.atual, update_pendente=bool(self.anel.pendente),
                     palavras=self._modos_palavras(),  # spec 2026-10-24: {nome: modo}, para o futuro sensor do HA
+                    palavras_carregadas=sorted(self.palavras_carregadas()),  # saúde do OTA (spec 2026-11-10 §6.9)
                     timers=[{"nome": t["nome"], "duracao_s": t["duracao_s"], "falta_s": t["falta_s"]}
                             for t in self.timers.consultar(agora)])
 

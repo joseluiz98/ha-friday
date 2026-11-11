@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+"""Root helper of the satellite OTA (spec 2026-11-10 §6.8–6.10; plan Task 13). Installed as
+/usr/local/sbin/friday-ota-apply (root:root 0755); the agent (user jose) runs it through sudoers.
+
+Every version lives in /opt/friday/releases/<tag>/{program,agent,venv,system,migrations,manifest.json}; the active one
+is the symlink /opt/friday/current. Data never lives in a release (~/modelos, ~/vozes, ~/gravacoes, ~/satelite/sons,
+~/satelite/estado, /etc/friday-satelite).
+
+  friday-ota-apply stage <tarball> <tag> [--wheels <tarball>]   prepare releases/<tag> (venv included); nothing else
+  friday-ota-apply activate <tag>     detaches (systemd-run), runs pending migrations, installs system files, switches
+                                      `current`, restarts, proves health; or switches back and restarts
+  friday-ota-apply rollback           back to the previous release (manual / diagnostics)
+  friday-ota-apply prune              keep current, previous and the newest KEEP_RELEASES
+
+The outcome of `activate` is in /var/lib/friday/ota.json (0644): {"tag","previous","state","stage","error","at"},
+state = activating | installed | rolled_back | failed. Exit codes: 0 ok, 2 refused/failed (nothing switched).
+FRIDAY_OTA_ROOT / FRIDAY_OTA_FAKE_BIN / FRIDAY_OTA_STATUS_URL / FRIDAY_OTA_HEALTH_TIMEOUT / FRIDAY_OTA_AGENT_STABLE_S
+exist for tests only: sudo's env_reset drops them in production.
+"""
+import glob
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+TAG = re.compile(r"^v\d+\.\d+\.\d+$")
+LEGACY = "v0.0.0-legacy"
+HEALTH_TIMEOUT_S = int(os.environ.get("FRIDAY_OTA_HEALTH_TIMEOUT", "180"))  # = constants.HEALTH_TIMEOUT_S
+AGENT_STABLE_S = int(os.environ.get("FRIDAY_OTA_AGENT_STABLE_S", "20"))
+KEEP_RELEASES = 2  # = constants.KEEP_RELEASES
+AGENT_PORT = int(os.environ.get("FRIDAY_OTA_AGENT_PORT", "8701"))
+UNIT = "friday-ota-activate"
+
+R = os.environ.get("FRIDAY_OTA_ROOT", "").rstrip("/")
+OPT = f"{R}/opt/friday"
+RELEASES = f"{OPT}/releases"
+CURRENT = f"{OPT}/current"
+STATE = f"{R}/var/lib/friday/ota.json"
+MIGRATIONS = f"{R}/var/lib/friday/migrations.json"
+DOWNLOADS = f"{R}/var/lib/friday/ota/downloads"
+CONFIG = f"{R}/etc/friday-satelite/config.json"
+SONS = f"{R}/home/jose/satelite/sons"
+# system/ file -> where it goes (mode); anything else in system/ is ignored
+SYSTEM = {
+    ".service": (f"{R}/etc/systemd/system", 0o644), ".timer": (f"{R}/etc/systemd/system", 0o644),
+    "asound.conf": (f"{R}/etc", 0o644), "satelite-status.sh": (f"{R}/usr/local/bin", 0o755),
+    "sync_recordings.sh": (f"{R}/home/jose/satelite-sync", 0o755),
+    "friday-agent-apply": (f"{R}/usr/local/sbin", 0o755), "friday-wifi-apply": (f"{R}/usr/local/sbin", 0o755),
+    "friday-ota-apply": (f"{R}/usr/local/sbin", 0o755),
+}
+SUDOERS_SRC, SUDOERS_DEST = "sudoers.friday-satellite-agent", f"{R}/etc/sudoers.d/friday-satellite-agent"
+if os.environ.get("FRIDAY_OTA_FAKE_BIN"):
+    os.environ["PATH"] = os.environ["FRIDAY_OTA_FAKE_BIN"] + os.pathsep + os.environ.get("PATH", "")
+
+
+class Refused(Exception):
+    def __init__(self, stage, error=""):
+        super().__init__(f"{stage}: {error}")
+        self.stage, self.error = stage, str(error)[:200]
+
+
+def say(msg):
+    print(f"friday-ota-apply: {msg}", flush=True)
+
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, check=False, **kw)
+
+
+def check_tag(tag):
+    if not isinstance(tag, str) or not TAG.match(tag):
+        raise Refused("args", "bad tag")
+
+
+def inside(path, base):
+    real = os.path.realpath(path)
+    return real == os.path.realpath(base) or real.startswith(os.path.realpath(base) + os.sep)
+
+
+def read_state():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_state(**fields):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    data = {"at": time.time(), "stage": "", "error": "", **fields}
+    tmp = STATE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, sort_keys=True)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATE)
+
+
+def current_tag():
+    try:
+        return os.path.basename(os.readlink(CURRENT))
+    except OSError:
+        return None
+
+
+def site_packages(venv):
+    found = glob.glob(os.path.join(venv, "lib", "python3*", "site-packages"))
+    return found[0] if found else None
+
+
+def manifest_of(release):
+    try:
+        with open(os.path.join(release, "manifest.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def extract(tarball, dest):
+    with tarfile.open(tarball, "r:*") as t:
+        if hasattr(tarfile, "data_filter"):
+            t.extractall(dest, filter="data")
+        else:  # Python < 3.11.4: refuse anything that is not a plain file or folder inside dest
+            for m in t.getmembers():
+                if not (m.isfile() or m.isdir()) or not inside(os.path.join(dest, m.name), dest):
+                    raise Refused("extract", "unsafe member")
+            t.extractall(dest)  # noqa: S202 - members checked above
+
+
+# ------------------------------------------------------------------------------------------------- stage
+def _venv(new, wheels):
+    cur = os.path.realpath(CURRENT) if os.path.lexists(CURRENT) else None
+    lock = manifest_of(new).get("lock_sha256")
+    same_lock = bool(cur and lock and manifest_of(cur).get("lock_sha256") == lock and not wheels)
+    # a hardlinked venv takes everything (pip included) from the running one; a fresh one needs its own pip
+    cmd = [sys.executable, "-m", "venv"] + (["--without-pip"] if same_lock else []) + [os.path.join(new, "venv")]
+    if run(cmd).returncode != 0:
+        raise Refused("venv", "python -m venv failed")
+    dest = site_packages(os.path.join(new, "venv"))
+    if same_lock:
+        src = site_packages(os.path.join(cur, "venv"))
+        if not src or run(["cp", "-al", src + "/.", dest + "/"]).returncode != 0:
+            raise Refused("venv", "hardlink copy failed")
+        return
+    if not wheels:
+        raise Refused("wheels", "requirements changed and no wheels were given")
+    wdir = tempfile.mkdtemp(prefix="friday-wheels-")
+    try:
+        extract(wheels, wdir)
+        pip = os.path.join(new, "venv", "bin", "pip")
+        cmd = [pip, "install", "-q", "--no-index", "--no-deps", "--find-links", wdir]
+        for lock in ("program/requirements.lock", "agent/requirements.lock"):
+            cmd += ["-r", os.path.join(new, lock)]
+        r = run(cmd, capture_output=True, text=True, timeout=3600)
+        if r.returncode != 0:
+            raise Refused("pip", ((r.stderr or "").strip().splitlines() or ["pip failed"])[-1])
+    finally:
+        shutil.rmtree(wdir, ignore_errors=True)
+    # openWakeWord keeps its feature models outside the wheel: carry them from the running venv
+    old = site_packages(os.path.join(cur, "venv")) if cur else None
+    old_models = os.path.join(old, "openwakeword", "resources", "models") if old else ""
+    new_models = os.path.join(dest, "openwakeword", "resources", "models")
+    if os.path.isdir(old_models) and os.path.isdir(os.path.dirname(new_models)):
+        os.makedirs(new_models, exist_ok=True)
+        for n in os.listdir(old_models):
+            if not os.path.exists(os.path.join(new_models, n)):
+                shutil.copy2(os.path.join(old_models, n), os.path.join(new_models, n))
+
+
+def stage(tarball, tag, wheels=None):
+    check_tag(tag)
+    for p in [tarball] + ([wheels] if wheels else []):
+        if not (os.path.isfile(p) and inside(p, DOWNLOADS)):
+            raise Refused("args", "package outside the downloads folder")
+    final = os.path.join(RELEASES, tag)
+    if os.path.exists(os.path.join(final, ".complete")):
+        say(f"{tag} already staged")
+        return 0
+    new = os.path.join(RELEASES, f".{tag}.new")
+    shutil.rmtree(new, ignore_errors=True)
+    os.makedirs(new)
+    try:
+        extract(tarball, new)
+        ok = (os.path.isfile(os.path.join(new, "program", "friday_satelite.py"))
+              and os.path.isfile(os.path.join(new, "agent", "friday_satellite_agent", "__main__.py"))
+              and os.path.isdir(os.path.join(new, "agent", "friday_agent_core")))
+        if not ok or manifest_of(new).get("tag") != tag:
+            raise Refused("layout", "not a satellite package of this tag")
+        _venv(new, wheels)
+        run(["chown", "-R", "root:root", new])
+        run(["chmod", "-R", "u=rwX,go=rX", new])
+        open(os.path.join(new, ".complete"), "w").close()
+        shutil.rmtree(final, ignore_errors=True)
+        os.replace(new, final)
+    except BaseException:
+        shutil.rmtree(new, ignore_errors=True)
+        raise
+    say(f"{tag} staged")
+    return 0
+
+
+# ------------------------------------------------------------------------------------------------- activate
+def _migrations(release, tag, previous):
+    sys.path.insert(0, os.path.join(release, "agent"))
+    from friday_agent_core.ota import migrations as mg  # the runner of the release being installed
+    env = {"FRIDAY_TAG": tag, "FRIDAY_RELEASE_DIR": release, "FRIDAY_PREVIOUS": previous or "",
+           "FRIDAY_OTA_ROOT": R}
+    try:
+        os.makedirs(os.path.dirname(MIGRATIONS), exist_ok=True)
+        return mg.run_pending(os.path.join(release, "migrations"), MIGRATIONS, env)
+    except mg.MigrationError as e:
+        raise Refused("migrations", str(e)) from None
+
+
+def _install_system(release):
+    sysdir = os.path.join(release, "system")
+    names = sorted(os.listdir(sysdir)) if os.path.isdir(sysdir) else []
+    if SUDOERS_SRC in names:  # checked before anything is installed: a bad sudoers locks the agent out
+        r = run(["visudo", "-cf", os.path.join(sysdir, SUDOERS_SRC)], capture_output=True)
+        if r.returncode != 0:
+            raise Refused("system", "sudoers does not parse")
+    for n in names:
+        src = os.path.join(sysdir, n)
+        if n == SUDOERS_SRC:
+            dest, mode = SUDOERS_DEST, 0o440
+        else:
+            rule = SYSTEM.get(n) or next((v for k, v in SYSTEM.items() if k.startswith(".") and n.endswith(k)), None)
+            if rule is None:
+                continue
+            dest, mode = os.path.join(rule[0], n), rule[1]
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copyfile(src, dest + ".new")
+        os.chmod(dest + ".new", mode)
+        os.replace(dest + ".new", dest)
+    sons = os.path.join(release, "program", "sons")  # sounds are data: merged, never deleted
+    if os.path.isdir(sons):
+        for root, _d, files in os.walk(sons):
+            out = os.path.join(SONS, os.path.relpath(root, sons))
+            os.makedirs(out, exist_ok=True)
+            for f in files:
+                shutil.copy2(os.path.join(root, f), os.path.join(out, f))
+        run(["chown", "-R", "jose:jose", SONS])
+
+
+def _switch(tag):
+    tmp = CURRENT + ".new"
+    if os.path.lexists(tmp):
+        os.remove(tmp)
+    os.symlink(os.path.join("releases", tag), tmp)
+    os.replace(tmp, CURRENT)
+
+
+def _restart():
+    run(["systemctl", "daemon-reload"])
+    run(["systemctl", "restart", "friday-satelite", "friday-satellite-agent"])
+
+
+def _status():
+    url = os.environ.get("FRIDAY_OTA_STATUS_URL")
+    token = ""
+    if not url:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+        url = f"http://127.0.0.1:{cfg.get('porta_local', 8700)}/status"
+        token = cfg.get("senha_porta_local", "")
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"} if token else {})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return r.status, json.load(r)
+
+
+def _program_ok():
+    try:
+        code, st = _status()
+    except (OSError, ValueError, urllib.error.URLError):
+        return False, "program not answering"
+    if code != 200 or "estado" not in st:
+        return False, "program status"
+    if not st.get("palavras_carregadas"):
+        return False, "no wake word loaded"
+    if st.get("net_exhausted") is True:
+        return False, "no network"
+    return True, ""
+
+
+def _agent_port_ok():
+    try:
+        with socket.create_connection(("127.0.0.1", AGENT_PORT), timeout=3):
+            return True
+    except OSError:
+        return False
+
+
+def _healthy():
+    end = time.monotonic() + HEALTH_TIMEOUT_S
+    agent_since, why = None, "timeout"
+    while time.monotonic() < end:
+        active = run(["systemctl", "is-active", "-q", "friday-satellite-agent"]).returncode == 0
+        agent_since = (agent_since or time.monotonic()) if active and _agent_port_ok() else None
+        ok, why = _program_ok()
+        if not active:
+            why = "agent not active"
+        elif agent_since is None:
+            why = "agent port closed"
+        elif ok and time.monotonic() - agent_since >= AGENT_STABLE_S:
+            return True, ""
+        time.sleep(2)
+    return False, why
+
+
+def activate(tag, detached=False):
+    check_tag(tag)
+    release = os.path.join(RELEASES, tag)
+    if not os.path.exists(os.path.join(release, ".complete")):
+        raise Refused("args", "release not staged")
+    if not detached:  # the agent that asked is restarted below: the work must not belong to it
+        r = run(["systemd-run", "--unit", UNIT, "--collect", "--no-block", "--setenv=FRIDAY_OTA_DETACHED=1",
+                 *[f"--setenv={k}={os.environ[k]}" for k in ("FRIDAY_OTA_ROOT", "FRIDAY_OTA_FAKE_BIN",
+                   "FRIDAY_OTA_STATUS_URL", "FRIDAY_OTA_HEALTH_TIMEOUT", "FRIDAY_OTA_AGENT_STABLE_S",
+                   "FRIDAY_OTA_AGENT_PORT") if os.environ.get(k)],
+                 sys.executable, os.path.realpath(__file__), "activate", tag])
+        if r.returncode != 0:
+            raise Refused("detach", "systemd-run failed")
+        say(f"activating {tag} (result in {STATE})")
+        return 0
+    previous = None
+    try:
+        write_state(tag=tag, previous=current_tag(), state="activating")
+        _migrations(release, tag, current_tag())
+        previous = current_tag()  # after 0001, a satellite of the old layout has `current` -> v0.0.0-legacy
+        write_state(tag=tag, previous=previous, state="activating", stage="system")
+        _install_system(release)
+        _switch(tag)
+        _restart()
+    except Refused as e:
+        write_state(tag=tag, previous=previous, state="failed", stage=e.stage, error=e.error)
+        return 2
+    except Exception as e:  # noqa: BLE001 - recorded, never silent
+        write_state(tag=tag, previous=previous, state="failed", stage="activate", error=type(e).__name__)
+        return 2
+    ok, why = _healthy()
+    if ok:
+        write_state(tag=tag, previous=previous, state="installed")
+        prune()
+        return 0
+    if previous and os.path.isdir(os.path.join(RELEASES, previous)):
+        _switch(previous)
+        _restart()
+        write_state(tag=tag, previous=previous, state="rolled_back", stage="health", error=why)
+    else:
+        write_state(tag=tag, previous=previous, state="failed", stage="health", error=why)
+    return 2
+
+
+def rollback():
+    st = read_state()
+    prev = st.get("previous")
+    if not prev or not os.path.isdir(os.path.join(RELEASES, prev)):
+        raise Refused("rollback", "no previous release")
+    _switch(prev)
+    _restart()
+    write_state(tag=st.get("tag"), previous=prev, state="rolled_back", stage="manual")
+    return 0
+
+
+def _vkey(tag):
+    m = re.match(r"^v(\d+)\.(\d+)\.(\d+)", tag)
+    return tuple(int(x) for x in m.groups()) if m else (-1,)
+
+
+def prune():
+    if not os.path.isdir(RELEASES):
+        return 0
+    keep = {current_tag(), read_state().get("previous")}
+    tags = sorted((t for t in os.listdir(RELEASES) if not t.startswith(".")), key=_vkey)
+    keep |= set(tags[-KEEP_RELEASES:])
+    for t in os.listdir(RELEASES):
+        if t not in keep:
+            shutil.rmtree(os.path.join(RELEASES, t), ignore_errors=True)
+    return 0
+
+
+def main(argv):
+    try:
+        if len(argv) >= 3 and argv[0] == "stage":
+            wheels = argv[argv.index("--wheels") + 1] if "--wheels" in argv else None
+            return stage(argv[1], argv[2], wheels)
+        if len(argv) == 2 and argv[0] == "activate":
+            return activate(argv[1], detached=os.environ.get("FRIDAY_OTA_DETACHED") == "1")
+        if argv == ["rollback"]:
+            return rollback()
+        if argv == ["prune"]:
+            return prune()
+    except Refused as e:
+        say(f"refused at {e.stage}: {e.error}")
+        return 2
+    except Exception as e:  # noqa: BLE001
+        say(f"failed: {type(e).__name__}")
+        return 2
+    say("usage: stage <tarball> <tag> [--wheels <tarball>] | activate <tag> | rollback | prune")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

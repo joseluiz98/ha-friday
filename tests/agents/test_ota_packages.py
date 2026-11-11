@@ -29,6 +29,7 @@ def _extra_tree(cfg):
     (rel / "agents/satellite/requirements.lock").write_text("aiohttp==3.13.0\n")
     (rel / "agents/satellite/friday-satellite-agent.service").write_text("[Service]")
     (rel / "agents/satellite/sudoers.friday-satellite-agent").write_text("jose ALL=(root) NOPASSWD: /bin/true")
+    (rel / "agents/satellite/friday-ota-apply").write_text("#!/usr/bin/env python3")
     (rel / "satellite/asound.conf").write_text("pcm.!default {}")
     (rel / "ota").mkdir()
     (rel / "ota/release.json").write_text(json.dumps({"schema": 1, "protocol": {"satellite": 1, "server": 1, "update": 1},
@@ -62,7 +63,8 @@ def test_satellite_package_layout(src):
     assert files["agent/friday_agent_core/FRIDAY_VERSION"] == f"v9.9.9 {SHA}\n".encode()
     assert files["migrations/0001_layout.sh"] == b"exit 0" and "system/install.sh" not in files
     assert {"system/friday-satelite.service", "system/friday-satellite-agent.service", "system/asound.conf",
-            "system/sudoers.friday-satellite-agent", "program/requirements.lock", "agent/requirements.lock"} <= set(files)
+            "system/sudoers.friday-satellite-agent", "system/friday-ota-apply", "program/requirements.lock",
+            "agent/requirements.lock"} <= set(files)
     man = json.loads(files["manifest.json"])
     assert man["tag"] == "v9.9.9" and man["sha"] == SHA and man["schema"] == 1 and man["migrations"] == ["0001_layout.sh"]
     assert man["lock_sha256"] == pk.lock_sha256(b"numpy==2.3.0\n", b"aiohttp==3.13.0\n") == info["lock_sha256"]

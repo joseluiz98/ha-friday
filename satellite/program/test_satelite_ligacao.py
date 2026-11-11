@@ -195,6 +195,15 @@ class TestComandos(Base):
         self.assertFalse(self.s.estado_publico()["update_pendente"])
         self.assertFalse(self.s.comando_porta({"acao": "update_pending", "ligado": "x"})["ok"])
 
+    async def test_estado_publico_lista_as_palavras_carregadas(self):
+        # a saúde do OTA (friday-ota-apply) exige palavra carregada: lista vazia até a captura criar o modelo
+        self.assertEqual(self.s.estado_publico()["palavras_carregadas"], [])
+
+        class Modelo:
+            models = {"sexta_feira": 1, "friday": 1}
+        self.s._modelo_palavra = Modelo()
+        self.assertEqual(self.s.estado_publico()["palavras_carregadas"], ["friday", "sexta_feira"])
+
     async def test_timer_criado_vai_para_o_arquivo(self):
         self.s._agir("conectar", None)
         self.s._de_fora("comando", {"id": "c1", "acao": "timer_criar", "duracao_s": 600, "nome": "arroz"})
