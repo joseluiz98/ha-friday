@@ -107,11 +107,14 @@ class ImageBuilder:
             return {"ok": False, "error": "busy"}
         before = self._read()
         self._write(tag=tag, status="building", error="", started_at=self._clock())  # before: a quick failure wins
-        r = self._run(["systemd-run", "--unit", UNIT, "--collect", "--property=Nice=19",
-                       "--property=IOSchedulingClass=idle",
-                       f"--setenv=PYTHONPATH={os.environ.get('PYTHONPATH', '')}",
-                       sys.executable, "-m", "friday_server_agent.ota.image", "build", tag, sha],
-                      capture_output=True, text=True, timeout=60)
+        try:
+            r = self._run(["systemd-run", "--unit", UNIT, "--collect", "--property=Nice=19",
+                           "--property=IOSchedulingClass=idle",
+                           f"--setenv=PYTHONPATH={os.environ.get('PYTHONPATH', '')}",
+                           sys.executable, "-m", "friday_server_agent.ota.image", "build", tag, sha],
+                          capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            r = subprocess.CompletedProcess([], 1)
         if r.returncode != 0:
             self._write(**{k: before.get(k) for k in ("tag", "status", "error", "started_at")})
             return {"ok": False, "error": "systemd-run"}
@@ -146,7 +149,10 @@ class ImageBuilder:
         for d in ("out", "src", "tmp"):
             shutil.rmtree(os.path.join(self.work, d), ignore_errors=True)
         for p in glob.glob(os.path.join(self.work, "build", "*.img")):
-            os.remove(p)
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
     def _log(self, stage: str, r) -> None:
         try:

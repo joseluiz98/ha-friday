@@ -219,3 +219,12 @@ def test_server_install_waits_for_the_image_build_and_vice_versa(tmp_path):
     w.orch.images.state = {"tag": "v0.1.0", "status": "ok"}
     w.store.data["server_ota"]["run"] = {"tag": "v0.3.0", "stage": "install"}
     assert w.orch.image_build("v0.3.0") == {"ok": False, "error": "server_busy"}
+
+
+
+def test_an_already_built_stable_tag_is_not_built_again(tmp_path):
+    from tests.agents.test_ota_orchestrator import man
+    w = OrchWorld(tmp_path, [rel("v0.3.0")], {rel("v0.3.0").release.sha: man()})
+    w.orch.images = FakeImages({"tag": "v0.3.0", "status": "ok"})
+    w.orch.poll()
+    assert w.orch.images.started == [] and w.store.data["server_ota"]["image_auto"] == "v0.3.0"

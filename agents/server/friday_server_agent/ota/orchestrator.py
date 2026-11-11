@@ -282,6 +282,10 @@ class Orchestrator:
         st = self.images.status()
         with self.store.lock:
             so = self.store.data["server_ota"]
+            if tag and st.get("tag") == tag and st.get("status") == "ok" and so.get("image_auto") != tag:
+                so["image_auto"] = tag  # already built (by hand, or before this agent): nothing to do
+                self.store.save()
+                return
             if not tag or so.get("image_auto") == tag or st.get("status") == "building":
                 return  # once per stable tag: an error waits for the button (no retry storm of a 1-hour build)
             if isinstance(so.get("run"), dict):
