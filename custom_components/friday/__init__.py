@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -13,6 +15,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import slugify
 
 from .connection import FridayConnection
+from .general import entity_id_for, general_listeners
 from . import provisioning
 from .recordings import RecordingView
 from .services import async_register_services
@@ -72,6 +75,33 @@ LEGACY_TITLE_PREFIX = "F.R.I.D.A.Y. "
 RENAMED_KEYS = {"follow_up": "reply_wait"}
 
 
+# 10/11: keys that left the device page (engineering settings: forms + friday.set_setting). Their old entities
+# are removed from the registry on setup. Entity unique_id = "<device>_<key>".
+RETIRED_KEYS = frozenset({
+    "reply_wait", "follow_up_window", "no_follow_up_while_music", "no_follow_up_after_home_commands",
+    "end_of_speech_pause", "continuous_speech_limit", "ducking", "ducking_level", "ducking_restore",
+    "close_mic_awaiting_reply", "continue_listening_while_speaking",
+})
+_RETIRED_WAKEWORD = re.compile(r"^.+_wakeword_.+_(mode|sensitivity)$")
+
+
+def _remove_retired_entities(hass: HomeAssistant, entry: FridayConfigEntry) -> None:
+    reg = er.async_get(hass)
+    for entity in list(er.async_entries_for_config_entry(reg, entry.entry_id)):
+        if _RETIRED_WAKEWORD.match(entity.unique_id) or any(
+                entity.unique_id.endswith(f"_{key}") for key in RETIRED_KEYS):
+            reg.async_remove(entity.entity_id)
+
+
+def _reload_fingerprint(entry: ConfigEntry) -> str:
+    """What a reload depends on: entry data and the subentries. Options (general settings) are left out."""
+    return json.dumps({
+        "data": dict(entry.data),
+        "subentries": {sid: [sub.subentry_id, sub.subentry_type, sub.title, dict(sub.data)]
+                       for sid, sub in entry.subentries.items()},
+    }, sort_keys=True, default=str)
+
+
 def _migrate_renamed_keys(hass: HomeAssistant, entry: FridayConfigEntry) -> None:
     """Move registry entries from an old descriptor key to its new one. The default entity_id follows the key; an
     entity_id the user renamed is kept."""
@@ -100,6 +130,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
     """Start one connection per subentry; entities appear once each hello arrives."""
     connections: dict[str, FridayConnection] = {}
     _migrate_renamed_keys(hass, entry)
+    _remove_retired_entities(hass, entry)
     for subentry in list(entry.subentries.values()):
         # 31/10: titles no longer repeat the integration name ("F.R.I.D.A.Y. Server" -> "Server")
         if subentry.title.startswith(LEGACY_TITLE_PREFIX):
@@ -126,6 +157,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
         entry.async_on_unload(connection.add_availability_listener(_late_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_server_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
+        on_up, on_changes = general_listeners(hass, entry, connection)
+        entry.async_on_unload(connection.add_availability_listener(on_up))
+        entry.async_on_unload(connection.add_listener(on_changes))
         sub = entry.subentries[subentry_id]
         if sub.data.get("provisioned") is False:
             _watch_new_satellite(hass, entry, subentry_id, sub, connection)
@@ -134,6 +168,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
             entry.async_on_unload(_area_listener(hass, entry, subentry_id, connection))
         await connection.start()
 
+    hass.data.setdefault(DOMAIN, {}).setdefault("fingerprints", {})[entry.entry_id] = _reload_fingerprint(entry)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 
@@ -173,9 +208,7 @@ def _watch_new_satellite(hass, entry, subentry_id, subentry, connection) -> None
         _on_up(True)
 
 
-def _entity_id(connection, descriptor) -> str:
-    device_id = connection.hello.device["id"]
-    return f"{descriptor.platform}.friday_{slugify(device_id)}_{slugify(descriptor.key)}"
+_entity_id = entity_id_for
 
 
 def _change_listener(hass, connection):
@@ -318,7 +351,10 @@ def apply_satellite_area(
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Subentry added, removed or edited: reload."""
+    """Subentry added, removed or edited: reload. Options-only changes (general settings) do not reload."""
+    fingerprints = hass.data.setdefault(DOMAIN, {}).setdefault("fingerprints", {})
+    if fingerprints.get(entry.entry_id) == _reload_fingerprint(entry):
+        return
     await hass.config_entries.async_reload(entry.entry_id)
 
 

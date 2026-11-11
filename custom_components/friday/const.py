@@ -32,6 +32,8 @@ PROXMOX_FIELDS = (
 DEFAULT_PROXMOX_URL = ""  # each install types its own Proxmox address
 DEFAULT_PROXMOX_NODE = "hypervisor"
 
+OPTIONS_GENERAL = "general"  # key in entry.options: settings shared by every satellite
+
 EVENT_CHANGE = "friday_change"
 # Entities that only mirror a reading are not logged as changes.
 READ_ONLY_PLATFORMS = ("sensor", "binary_sensor")
