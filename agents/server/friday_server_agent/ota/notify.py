@@ -48,3 +48,13 @@ class Notifier:
                 kept.append(push)
         store_pushes[:] = kept
         return sent
+
+
+class NullNotifier:
+    """No FRIDAY_TELEGRAM_CHAT: pushes stay queued in the state (visible in HA) and are never sent."""
+
+    def queue(self, text: str, store_pushes: list[dict]) -> None:
+        store_pushes.append({"at": 0, "text": text})
+
+    def flush(self, store_pushes: list[dict]) -> int:
+        return 0

@@ -24,6 +24,13 @@ from . import provisioning as provmod
 from . import voices as voicesmod
 from . import reminders as remmod
 from . import voice_switch as vsw
+from .ota import github as otagh
+from .ota import http as otahttp
+from .ota import notify as otanotify
+from .ota import orchestrator as otaorc
+from .ota import repo as otarepo
+from .ota import store as otastore
+from friday_agent_core.ota.constants import POLL_GITHUB_S
 
 LOG = logging.getLogger("friday_server_agent")
 SECRETS = os.environ.get("FRIDAY_SECRETS_DIR", "/srv/friday/secrets")
@@ -146,7 +153,34 @@ async def main() -> None:
     voice_set = vsw.make_set_handler(switch, state, lambda ch: core.push_state(ch, "ha"))
     budget_set = costmod.make_set_handler(tracker, state, lambda ch: core.push_state(ch, "ha")) if tracker else None
 
+    ota_store = otastore.OtaStore()
+    try:
+        vault = provmod._vault()
+    except (OSError, ImportError) as err:  # without the vault no package builds; the rest of the agent still runs
+        LOG.error("OTA: vault module unavailable: %s", type(err).__name__)
+        vault = None
+    chat = os.environ.get("FRIDAY_TELEGRAM_CHAT", "")
+    notifier = otanotify.Notifier(chat) if chat else otanotify.NullNotifier()
+    orch = otaorc.Orchestrator(ota_store, otastore.TokenBook(),
+                               otagh.GitHubWatcher(os.environ.get("FRIDAY_OTA_REPO", "joseluiz98/ha-friday")),
+                               otarepo.VmRepo(), vault, notifier)
+    state["ota_auto_install"] = ota_store.auto_install
+    ota_kick = asyncio.Event()
+    ota_full = {"full": False}
+
+    def kick(full: bool) -> None:
+        ota_full["full"] = ota_full["full"] or full
+        ota_kick.set()
+
     async def set_dispatch(cmd: dict) -> dict:
+        if cmd.get("key") == "ota_auto_install":
+            value = cmd.get("value")
+            if not isinstance(value, bool):
+                return {"ok": False, "error": "value"}
+            await asyncio.to_thread(orch.set_auto, value)
+            state["ota_auto_install"] = value
+            await core.push_state({"ota_auto_install": value}, "ha")
+            return {"ok": True}
         if cmd.get("key") == "budget_brl" and budget_set:
             return await budget_set(cmd)
         return await voice_set(cmd)
@@ -160,15 +194,22 @@ async def main() -> None:
     store.reindexer = embmod.Reindexer(store)
     store.read_activity = read_activity
 
-    bundles = provmod.BundleStore(consolidate=voicesmod.consolidate)
+    bundles = provmod.BundleStore(consolidate=voicesmod.consolidate, package_for_update=orch.package_for_update)
+    cmd_handlers = cmds.make_handlers(_log_tail, cmds.compose_restart, lambda m, d: core.push_log(m, d), read_activity)
+
+    async def press_dispatch(cmd: dict) -> dict:
+        if cmd.get("key") == "ota_check_now":
+            kick(True)
+            return {"ok": True}
+        return await cmd_handlers["press"](cmd)
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,
                       "diagnostics": diagmod.make_handler(lambda: dict(state), lambda: diagmod.load_literals(SECRETS, OPENCLAW_JSON, ENV_FILE) + tuple(x for x in (token, status_token, pve) if x)),
                       **modelsmod.make_handlers(store),
                       **provmod.make_handlers(bundles),
-                      **cmds.make_handlers(_log_tail, cmds.compose_restart,
-                                           lambda m, d: core.push_log(m, d), read_activity)})
+                      **cmd_handlers, "press": press_dispatch,
+                      **otahttp.make_handlers(orch, kick)})
 
     async def loop(fn, arg, period, label, src):
         while True:
@@ -203,7 +244,23 @@ async def main() -> None:
             await asyncio.sleep(30)
 
     tasks.append(pending_loop())
+
+    async def ota_loop():
+        while True:
+            full, ota_full["full"] = ota_full["full"], False
+            try:
+                await asyncio.to_thread(orch.poll, full)
+            except Exception as err:  # noqa: BLE001 - the loop must survive a bad cycle
+                LOG.warning("OTA cycle failed: %s", type(err).__name__)
+            ota_kick.clear()
+            try:
+                await asyncio.wait_for(ota_kick.wait(), POLL_GITHUB_S)
+            except asyncio.TimeoutError:
+                pass
+
+    tasks.append(ota_loop())
     app = core.app()
+    otahttp.add_routes(app, orch, lambda: status_token)  # satellites: their own tokens; request_install: status token
     provmod.add_routes(app, bundles)  # GET /v1/bundles/{one_time_token}: its own single-use token, no other auth
     runner = web.AppRunner(app)
     await runner.setup()

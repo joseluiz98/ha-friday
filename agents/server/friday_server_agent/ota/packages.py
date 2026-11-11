@@ -172,7 +172,7 @@ def build_satellite(archive: Callable[[str, list], bytes], tag: str, sha: str, v
             pass
         raise
     return {"path": final, "sha256": _sha_file(final), "size": os.path.getsize(final),
-            "lock_sha256": manifest["lock_sha256"], "protocol": manifest["protocol"]}
+            "lock_sha256": manifest["lock_sha256"], "protocol": manifest["protocol"], "heavy": manifest["heavy"]}
 
 
 def build_release(repo, tag: str, sha: str, vault, root: str, wheels: Callable[[list, str], str]) -> dict:

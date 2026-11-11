@@ -1,0 +1,95 @@
+"""OTA HTTP API for satellites and WS commands for HA (plan 2026-11-10 Task 8)."""
+import sys
+from pathlib import Path
+
+from aiohttp import web
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agents" / "server"))
+from friday_server_agent.ota import http as oh  # noqa: E402
+
+from tests.agents.test_ota_orchestrator import SAT, World, rel  # noqa: E402
+
+
+async def _client(aiohttp_client, w, status_token="st"):
+    app = web.Application()
+    oh.add_routes(app, w.orch, lambda: status_token)
+    return await aiohttp_client(app)
+
+
+def _pkg(tmp_path, tag="v0.3.0"):
+    p = tmp_path / "ota" / "packages" / tag
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "satellite.tar.gz").write_bytes(b"PKG")
+    return p
+
+
+async def test_offer_needs_the_satellite_token(tmp_path, aiohttp_client):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    tok = w.tokens.issue(SAT)
+    c = await _client(aiohttp_client, w)
+    q = f"/v1/ota/offer?sat_id={SAT}&channel=stable&installed=v0.2.0&protocol=1&lock_sha256=" + "L" * 64
+    assert (await c.get(q)).status == 401
+    assert (await c.get(q, headers={"Authorization": "Bearer nope"})).status == 401
+    r = await c.get(q, headers={"Authorization": f"Bearer {tok}"})
+    assert r.status == 200 and (await r.json())["tag"] == "v0.3.0"
+
+
+async def test_token_of_another_satellite_is_refused(tmp_path, aiohttp_client):
+    w = World(tmp_path, [rel("v0.3.0")])
+    other = w.tokens.issue("sat-0000b2")
+    c = await _client(aiohttp_client, w)
+    r = await c.get(f"/v1/ota/offer?sat_id={SAT}&channel=stable", headers={"Authorization": f"Bearer {other}"})
+    assert r.status == 401
+
+
+async def test_package_download(tmp_path, aiohttp_client):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    _pkg(tmp_path)
+    tok = w.tokens.issue(SAT)
+    c = await _client(aiohttp_client, w)
+    h = {"Authorization": f"Bearer {tok}"}
+    r = await c.get(f"/v1/ota/package/v0.3.0/satellite.tar.gz?sat_id={SAT}", headers=h)
+    assert r.status == 200 and await r.read() == b"PKG"
+    assert (await c.get(f"/v1/ota/package/v0.3.0/state.json?sat_id={SAT}", headers=h)).status == 404
+    assert (await c.get(f"/v1/ota/package/..%2F..%2Fx/satellite.tar.gz?sat_id={SAT}", headers=h)).status == 404
+
+
+async def test_report_and_bad_report(tmp_path, aiohttp_client):
+    w = World(tmp_path, [rel("v0.3.0")])
+    tok = w.tokens.issue(SAT)
+    c = await _client(aiohttp_client, w)
+    h = {"Authorization": f"Bearer {tok}"}
+    ok = await c.post("/v1/ota/report", headers=h, json={"sat_id": SAT, "tag": "v0.3.0", "result": "installed"})
+    assert ok.status == 200 and w.store.device(SAT)["installed"] == "v0.3.0"
+    bad = await c.post("/v1/ota/report", headers=h, json={"sat_id": SAT, "tag": "v0.3.0", "result": "maybe"})
+    assert bad.status == 400 and (await bad.json())["error"] == "result"
+
+
+async def test_request_install_uses_the_status_token(tmp_path, aiohttp_client):
+    w = World(tmp_path, [rel("v0.3.0")])
+    c = await _client(aiohttp_client, w, status_token="st")
+    assert (await c.post("/v1/ota/request_install", json={"sat_id": SAT})).status == 401
+    r = await c.post("/v1/ota/request_install", json={"sat_id": SAT}, headers={"Authorization": "Bearer st"})
+    assert r.status == 200 and w.store.device(SAT)["install_requested"] is True
+
+
+async def test_ws_handlers(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    kicked = []
+    h = oh.make_handlers(w.orch, kick=lambda full: kicked.append(full))
+    assert (await h["ota_set_auto"]({"enabled": False}))["ok"] and w.store.auto_install is False
+    issued = await h["ota_issue_token"]({"sat_id": SAT})
+    assert issued["ok"] and w.tokens.check(SAT, issued["data"]["token"]) and issued["data"]["url"].endswith(":8801")
+    assert (await h["ota_issue_token"]({"sat_id": "bad"}))["ok"] is False
+    assert (await h["ota_install"]({"sat_id": SAT}))["ok"] and w.store.device(SAT)["install_requested"]
+    assert (await h["ota_check_now"]({}))["ok"] and kicked == [True]
+    st = await h["ota_status"]({})
+    assert st["ok"] and st["data"]["auto_install"] is False
+
+
+def test_agent_main_imports_with_ota_wired():
+    import importlib
+    m = importlib.import_module("friday_server_agent.__main__")
+    assert hasattr(m, "main")
