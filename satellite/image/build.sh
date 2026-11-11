@@ -34,7 +34,7 @@ fi
 [ ${#missing[@]} -eq 0 ] || { printf 'missing: %s\n' "${missing[@]}" >&2; exit 1; }
 
 DATE=$(date +%Y%m%d)
-NAME=friday-satellite-$DATE
+NAME=${FRIDAY_IMG_NAME:-friday-satellite-$DATE}   # the OTA names it by tag: friday-satellite-<tag>
 T0=$(date +%s)
 mkdir -p "$WORK"; $SUDO mkdir -p "$OUTDIR"; $SUDO chown "$(id -u):$(id -g)" "$OUTDIR"
 BASE_XZ=$WORK/$(basename "$BASE_URL")

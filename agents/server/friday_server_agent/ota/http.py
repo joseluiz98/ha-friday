@@ -124,5 +124,15 @@ def make_handlers(orch, kick: Callable[[bool], None]):
             return {"ok": False, "error": "token_book"}
         return {"ok": True, "data": {"token": token, "url": f"http://{pv.bundle_host()}"}}
 
+    async def image_build(cmd: dict) -> dict:
+        tag = args(cmd).get("tag")
+        if tag is not None and (not isinstance(tag, str) or not TAG.match(tag)):
+            return {"ok": False, "error": "tag"}
+        out = await asyncio.to_thread(orch.image_build, tag)
+        return {"ok": bool(out.get("ok")), **({"error": out["error"]} if out.get("error") else {})}
+
+    async def image_status(cmd: dict) -> dict:
+        return {"ok": True, "data": await asyncio.to_thread(orch.image_status)}
+
     return {"ota_status": status, "ota_check_now": check_now, "ota_install": install, "ota_set_auto": set_auto,
-            "ota_issue_token": issue_token}
+            "ota_issue_token": issue_token, "image_build": image_build, "image_status": image_status}

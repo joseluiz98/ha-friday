@@ -26,6 +26,7 @@ from . import reminders as remmod
 from . import voice_switch as vsw
 from .ota import github as otagh
 from .ota import http as otahttp
+from .ota import image as otaimg
 from .ota import loop as otaloop
 from .ota import notify as otanotify
 from .ota import orchestrator as otaorc
@@ -173,7 +174,7 @@ async def main() -> None:
     installer = otasrv.ServerInstaller(ota_store, ota_repo, snapshots, lambda: status_token)
     orch = otaorc.Orchestrator(ota_store, otastore.TokenBook(),
                                otagh.GitHubWatcher(os.environ.get("FRIDAY_OTA_REPO", "joseluiz98/ha-friday")),
-                               ota_repo, vault, notifier, installer=installer)
+                               ota_repo, vault, notifier, installer=installer, images=otaimg.ImageBuilder())
     state["ota_auto_install"] = ota_store.auto_install
     ota_kick = otaloop.Kick()
     kick = ota_kick.kick

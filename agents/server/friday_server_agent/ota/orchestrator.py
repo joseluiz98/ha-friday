@@ -73,7 +73,7 @@ def _newer(tag: str, installed: str | None) -> bool:
 class Orchestrator:
     def __init__(self, store, tokens, watcher, repo, vault, notifier, build: Callable = pk.build_release,
                  wheels: Callable = wh.build, root: str = OTA_ROOT, clock: Callable[[], float] = time.time,
-                 prune: Callable = pk.prune_packages, installer=None):
+                 prune: Callable = pk.prune_packages, installer=None, images=None):
         self.store, self.tokens, self.watcher, self.repo = store, tokens, watcher, repo
         self.vault, self.notifier, self._build, self._wheels = vault, notifier, build, wheels
         self.root, self._clock, self._prune = root, clock, prune
@@ -82,6 +82,7 @@ class Orchestrator:
         self._build_failed: dict[str, float] = {}
         self._build_lock = threading.Lock()
         self.installer = installer
+        self.images = images
 
     # ---- reads under the state lock
     def _eligible(self) -> list[ch.Release]:
@@ -170,6 +171,10 @@ class Orchestrator:
             self._server_step()
         except Exception as err:  # noqa: BLE001 - the satellites' side must go on
             LOG.error("OTA: server step failed: %s", type(err).__name__)
+        try:
+            self._image_step()
+        except Exception as err:  # noqa: BLE001
+            LOG.error("OTA: image step failed: %s", type(err).__name__)
         keep = self._keep()
         with self._build_lock:
             try:
@@ -198,6 +203,9 @@ class Orchestrator:
             channel = ch.server_channel([d["channel"] for d in self.store.data["devices"].values()])
             tag = self.target(channel)
             if not tag:
+                if so.get("install_requested"):  # a press with nothing to install must not latch for a later release
+                    so["install_requested"] = False
+                    self.store.save()
                 return
             sha = self.store.release_infos()[tag].release.sha
             manual, auto = bool(so.get("install_requested")), self.store.auto_install
@@ -243,6 +251,8 @@ class Orchestrator:
                 self.notifier.queue(nt.format_rollback_failed(tag, error), self.store.data["pushes"])
                 so["attempts"] = retry.Attempts(version=tag, failures=99, exhausted=True, last_stage=stage,
                                                 last_error=error[:200]).to_dict()
+                if info is not None and info.release.prerelease and not self._promoted(tag, now):
+                    self.store.soak_fail(tag)  # a broken way back is the strongest evidence against promotion
             elif result in ("rolled_back", "failed"):
                 a = retry.Attempts.from_dict(so["attempts"]) if so.get("attempts") else None
                 if a is None or a.version != tag:
@@ -261,6 +271,38 @@ class Orchestrator:
             except OSError as err:
                 LOG.warning("OTA: event log failed: %s", type(err).__name__)
             self.store.save()
+
+    # ---- provisioning image (spec §10): built once when a tag becomes the stable target; by hand at any time
+    def _image_step(self) -> None:
+        if self.images is None:
+            return
+        tag = self.target("stable")
+        st = self.images.status()
+        if not tag or st.get("tag") == tag or st.get("status") == "building":
+            return  # an error on this very tag waits for the manual button (no retry storm of a 1-hour build)
+        with self.store.lock:
+            if isinstance(self.store.data["server_ota"].get("run"), dict):
+                return  # never alongside a server install (both are heavy on the VM)
+        self.image_build(tag)
+
+    def image_build(self, tag: str | None = None) -> dict:
+        if self.images is None:
+            return {"ok": False, "error": "unavailable"}
+        tag = tag or self.target("stable")
+        if not tag:
+            return {"ok": False, "error": "no_stable_release"}
+        with self.store.lock:
+            info = self.store.release_infos().get(tag)
+        if info is None or not self._package(tag):
+            return {"ok": False, "error": "package_missing"}
+        out = self.images.start(tag, info.release.sha)
+        with self.store.lock:
+            self.store.event("image", tag, "image_build" if out.get("ok") else "image_refused", "",
+                             str(out.get("error") or ""))
+        return out
+
+    def image_status(self) -> dict:
+        return self.images.status() if self.images is not None else {"status": None}
 
     def install_server(self) -> str | None:
         """Manual (HA button or voice): zero the attempts; the next poll installs without waiting for heavy idle."""
