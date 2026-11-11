@@ -153,9 +153,8 @@ async def test_retired_entities_removed(hass):
     await connected(entry, 1)
     await hass.async_block_till_done()
     left = {e.unique_id for e in er.async_entries_for_config_entry(reg, entry.entry_id)}
-    assert "sat1_vol" in left
-    assert not left & {"sat1_reply_wait", "sat1_wakeword_friday_mode", "sat1_wakeword_sexta_feira_sensitivity",
-                       "sat1_ducking"}
+    assert "sat1_vol" in left and "sat1_ducking" in left  # 11/11: ducking is back on the device page
+    assert not left & {"sat1_reply_wait", "sat1_wakeword_friday_mode", "sat1_wakeword_sexta_feira_sensitivity"}
     await stop(hass, entry, [sat])
 
 

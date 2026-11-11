@@ -79,7 +79,7 @@ RENAMED_KEYS = {"follow_up": "reply_wait"}
 # are removed from the registry on setup. Entity unique_id = "<device>_<key>".
 RETIRED_KEYS = frozenset({
     "reply_wait", "follow_up_window", "no_follow_up_while_music", "no_follow_up_after_home_commands",
-    "end_of_speech_pause", "continuous_speech_limit", "ducking", "ducking_level", "ducking_restore",
+    "end_of_speech_pause", "continuous_speech_limit", "ducking_restore",
     "close_mic_awaiting_reply", "continue_listening_while_speaking",
 })
 _RETIRED_WAKEWORD = re.compile(r"^.+_wakeword_.+_(mode|sensitivity)$")

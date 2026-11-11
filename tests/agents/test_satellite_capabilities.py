@@ -387,6 +387,7 @@ def test_continue_listening_while_speaking_switch():
 
 
 USER_PAGE = {"volume", "do_not_disturb", "mute", "whisper_mode", "turn_sounds", "alarm_volume", "alarm_ramp",
+             "ducking", "ducking_level",
              "follow_up_mode", "voice_enabled", "reboot", "reset_network", "reset_home"}
 
 
@@ -403,7 +404,7 @@ def test_page_has_only_user_controls():
 def test_engineering_keys_hidden_with_ranges():
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     for k in ("reply_wait", "follow_up_window", "no_follow_up_while_music", "no_follow_up_after_home_commands",
-              "end_of_speech_pause", "continuous_speech_limit", "ducking", "ducking_level", "ducking_restore",
+              "end_of_speech_pause", "continuous_speech_limit", "ducking_restore",
               "wakeword_friday_mode", "wakeword_friday_sensitivity"):
         assert keys[k].get("hidden") is True, k
     assert (keys["continuous_speech_limit"]["min"], keys["continuous_speech_limit"]["max"],

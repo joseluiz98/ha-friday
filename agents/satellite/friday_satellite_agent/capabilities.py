@@ -68,9 +68,9 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         # 10/11: R13 speech_max_s; 0 = off. Step 5: the program refuses 1..4 s
         _d("continuous_speech_limit", "number", "Continuous sound cutoff", min=0, max=120, step=5, unit="s",
            category=c, mode="box", icon="mdi:timer-sand", hidden=True),
-        _d("ducking", "switch", "Music ducking", category=c, icon="mdi:music-note-minus", hidden=True),
-        _d("ducking_level", "number", "Ducking level", min=1, max=25, step=1, unit="%", category=c, mode="box",
-           hidden=True),
+        # 11/11: ducking and its level stay on the device page; only the restore delay is engineering
+        _d("ducking", "switch", "Music ducking", category=c, icon="mdi:music-note-minus"),
+        _d("ducking_level", "number", "Ducking level", min=1, max=25, step=1, unit="%", category=c, mode="box"),
         _d("ducking_restore", "number", "Ducking restore delay", min=0, max=10, step=0.5, unit="s",
            category=c, mode="box", hidden=True),
         _d("voice_enabled", "switch", "Voice Program", category=c, icon="mdi:account-voice"),

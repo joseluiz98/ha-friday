@@ -100,8 +100,6 @@ async def _set_setting(call: ServiceCall) -> None:
             check_wakewords(modes)
         except SettingError as err:
             raise _refuse(key, err) from err
-    if key == "ducking_level" and not state.get("ducking"):
-        raise ServiceValidationError("Turn ducking on first.")
     try:
         await connection.send("set", key=key, value=value)
     except HomeAssistantError as err:

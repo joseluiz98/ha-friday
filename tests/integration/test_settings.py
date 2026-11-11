@@ -47,18 +47,16 @@ def test_validate_advanced_from_descriptors():
     assert st.validate_advanced(caps, "wakeword_friday_mode", "shadow") == "shadow"
     assert code(st.validate_advanced, caps, "wakeword_friday_sensitivity", 1.0) == "out_of_range"
     assert st.validate_advanced(caps, "wakeword_friday_sensitivity", 0.35) == 0.35
-    v = st.validate_advanced(caps, "ducking_level", 20.0)
-    assert v == 20 and isinstance(v, int)
+    assert code(st.validate_advanced, caps, "ducking_level", 20) == "unknown_key"  # 11/11: on the device page
     assert st.validate_advanced(caps, "ducking_restore", 1.5) == 1.5
     assert code(st.validate_advanced, caps, "wakeword_other_mode", "active") == "unknown_key"
     assert code(st.validate_advanced, caps, "volume", 5) == "unknown_key"
-    assert code(st.validate_advanced, caps, "ducking", "on") == "bad_type"
-    assert st.validate_advanced(caps, "ducking", True) is True
+    assert code(st.validate_advanced, caps, "ducking", True) == "unknown_key"
 
 
 def test_advanced_keys_in_descriptor_order():
     assert st.advanced_keys(_caps()) == [
-        "ducking", "ducking_level", "ducking_restore", "continuous_speech_limit",
+        "ducking_restore", "continuous_speech_limit",
         "wakeword_friday_mode", "wakeword_friday_sensitivity"]
     assert st.advanced_keys([Descriptor("volume", "number", "V")]) == []
 

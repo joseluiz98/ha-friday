@@ -153,8 +153,6 @@
             "wakeword_friday_sensitivity": "Wake word friday threshold",
             "wakeword_sexta_feira_mode": "Wake word sexta_feira",
             "wakeword_sexta_feira_sensitivity": "Wake word sexta_feira threshold",
-            "ducking": "Lower music while talking",
-            "ducking_level": "Music level while talking",
             "ducking_restore": "Music back after",
             "continuous_speech_limit": "Continuous sound cutoff (0 = off)"
           }

@@ -30,6 +30,7 @@ from homeassistant.helpers.selector import (
     EntitySelectorConfig,
     SelectSelector,
     SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -472,7 +473,8 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
     async def async_step_advanced(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Engineering settings of this satellite (wake words, music ducking, sound cutoff): sent, never stored."""
+        """Engineering settings of this satellite (wake words, music restore delay, sound cutoff): sent, never
+        stored."""
         connection = self._get_entry().runtime_data.get(self._get_reconfigure_subentry().subentry_id)
         if connection is None or not connection.connected or connection.hello is None:
             return self.async_abort(reason="satellite_unavailable")
@@ -493,10 +495,7 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
             except SettingError as err:
                 errors["base"] = err.code
             else:
-                ducking_on = values.get("ducking", state.get("ducking"))
-                changes = {k: (state.get(k), v) for k, v in values.items() if state.get(k) != v
-                           # in the agent `set ducking_level` turns ducking on: skip it while ducking stays off
-                           and not (k == "ducking_level" and not ducking_on)}
+                changes = {k: (state.get(k), v) for k, v in values.items() if state.get(k) != v}
                 # a word that becomes active goes first: swapping words never leaves the Pi without one
                 changes = dict(sorted(changes.items(), key=lambda kv: not (
                     kv[0].endswith("_mode") and kv[1][1] == "active")))
@@ -519,7 +518,8 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
                 {"suggested_value": suggested[key]} if suggested.get(key) is not None else {}))
             if desc.platform == "select":
                 fields[marker] = SelectSelector(SelectSelectorConfig(
-                    options=list(desc.options or []), translation_key="wakeword_mode"))
+                    options=list(desc.options or []), translation_key="wakeword_mode",
+                    mode=SelectSelectorMode.DROPDOWN))
             elif desc.platform == "switch":
                 fields[marker] = BooleanSelector()
             else:

@@ -120,7 +120,7 @@ async def test_set_setting_validation_errors(hass):
     await refused(hass, key="close_mic_awaiting_reply", value=True)
     await refused(hass, key="wakeword_friday_mode", value="shadow")  # advanced key needs a device
     await refused(hass, device_id=device_id(hass, entry, "srv"), key="wakeword_friday_mode", value="shadow")
-    await refused(hass, device_id=sat, key="ducking_level", value=15)  # ducking is off
+    await refused(hass, device_id=sat, key="ducking_level", value=15)  # an entity on the device page
     await refused(hass, device_id=sat, key="reply_wait", value=9)  # general keys take no device
     await refused(hass, device_id=sat, key="volume", value=3)  # entity keys do not go through the service
     assert got == [] and "general" not in entry.options

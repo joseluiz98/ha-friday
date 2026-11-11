@@ -9,8 +9,8 @@ from custom_components.friday.const import DOMAIN
 from .test_connection import FakeAgent, fast_backoff, hello_msg, wait_for  # noqa: F401
 
 CAPS = [
-    {"key": "ducking", "platform": "switch", "name": "D", "hidden": True},
-    {"key": "ducking_level", "platform": "number", "name": "L", "min": 1, "max": 25, "step": 1, "hidden": True},
+    {"key": "ducking", "platform": "switch", "name": "D", "category": "config"},
+    {"key": "ducking_level", "platform": "number", "name": "L", "min": 1, "max": 25, "step": 1, "category": "config"},
     {"key": "ducking_restore", "platform": "number", "name": "R", "min": 0, "max": 10, "step": 0.5, "hidden": True},
     {"key": "continuous_speech_limit", "platform": "number", "name": "C", "min": 0, "max": 120, "step": 5,
      "hidden": True},
@@ -24,7 +24,7 @@ CAPS = [
      "step": 0.01, "hidden": True},
     {"key": "vol", "platform": "number", "name": "Volume", "min": 0, "max": 10, "step": 1},
 ]
-STATE = {"ducking": True, "ducking_level": 20, "ducking_restore": 1.0, "continuous_speech_limit": 0,
+STATE = {"ducking_restore": 1.0, "continuous_speech_limit": 0,
          "wakeword_friday_mode": "off", "wakeword_friday_sensitivity": 0.5,
          "wakeword_sexta_feira_mode": "active", "wakeword_sexta_feira_sensitivity": 0.35}
 
@@ -94,9 +94,9 @@ async def test_advanced_sends_only_changes_and_logs(hass):
     entry = await setup(hass, sat)
     r = await open_advanced(hass, entry)
     r = await hass.config_entries.subentries.async_configure(
-        r["flow_id"], form_values(wakeword_friday_mode="shadow", ducking_level=15))
+        r["flow_id"], form_values(wakeword_friday_mode="shadow", ducking_restore=2.0))
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "advanced_saved"
-    assert sorted(got) == [("ducking_level", 15), ("wakeword_friday_mode", "shadow")]
+    assert sorted(got) == [("ducking_restore", 2.0), ("wakeword_friday_mode", "shadow")]
     assert any("wakeword_friday_mode off → shadow" in m and m.startswith("Advanced settings") for m in seen)
     assert dict(entry.subentries["s0"].data) == {"host": "127.0.0.1", "port": sat.port, "token": "t"}
     await hass.config_entries.async_unload(entry.entry_id)
@@ -126,15 +126,14 @@ async def test_advanced_aborts_when_disconnected(hass):
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_advanced_ducking_off_does_not_send_level(hass):
-    got = []
-    sat = make_sat(got)
+async def test_advanced_has_no_ducking_and_word_modes_are_dropdowns(hass):
+    """11/11: ducking and its level live on the device page; the word modes are dropdowns."""
+    sat = make_sat([])
     entry = await setup(hass, sat)
     r = await open_advanced(hass, entry)
-    r = await hass.config_entries.subentries.async_configure(
-        r["flow_id"], form_values(ducking=False, ducking_level=15))
-    assert r["type"] == FlowResultType.ABORT and r["reason"] == "advanced_saved"
-    assert got == [("ducking", False)]
+    fields = {str(k): v for k, v in r["data_schema"].schema.items()}
+    assert "ducking" not in fields and "ducking_level" not in fields and "ducking_restore" in fields
+    assert fields["wakeword_friday_mode"].config["mode"] == "dropdown"
     await hass.config_entries.async_unload(entry.entry_id)
     await sat.stop()
 
@@ -143,7 +142,7 @@ async def test_advanced_apply_failure_shows_error(hass):
     sat = make_sat([], answer={"ok": False, "error": "rejected"})
     entry = await setup(hass, sat)
     r = await open_advanced(hass, entry)
-    r = await hass.config_entries.subentries.async_configure(r["flow_id"], form_values(ducking_level=15))
+    r = await hass.config_entries.subentries.async_configure(r["flow_id"], form_values(ducking_restore=2.0))
     assert r["type"] == FlowResultType.FORM and r["errors"] == {"base": "apply_failed"}
     await hass.config_entries.async_unload(entry.entry_id)
     await sat.stop()

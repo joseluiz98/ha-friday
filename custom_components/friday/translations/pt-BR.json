@@ -153,8 +153,6 @@
             "wakeword_friday_sensitivity": "Limiar da palavra friday",
             "wakeword_sexta_feira_mode": "Palavra de ativação sexta_feira",
             "wakeword_sexta_feira_sensitivity": "Limiar da palavra sexta_feira",
-            "ducking": "Baixar a música enquanto fala",
-            "ducking_level": "Nível da música enquanto fala",
             "ducking_restore": "Música volta após",
             "continuous_speech_limit": "Corte de som contínuo (0 = desligado)"
           }
