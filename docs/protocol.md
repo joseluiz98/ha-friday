@@ -46,6 +46,9 @@ Sent right after connecting.
   `wifi_ssid`, so the network name is not recorded unless asked for.
 - `hidden: true` marks a protocol-only command: it is never turned into an
   entity, but Home Assistant may still send it as a command.
+  The satellite agent marks its engineering settings (wake word modes and thresholds, music ducking, speech
+  limits, conversation timings) as `hidden`; the integration still reads their `min`/`max`/`step`/`options` and
+  writes them through its settings forms and the `friday.set_setting` service.
 
 ### state
 
