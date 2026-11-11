@@ -424,13 +424,13 @@ class ServerInstaller:
         run = dict(run)
         run["work"] = run.get("work") or os.path.join(self.paths["root"], "work", "recover")
         os.makedirs(run["work"], exist_ok=True)
+        if run.get("switched") and self.busy():
+            return None  # undoing a switched container (snapshot or image) restarts the voice: after the conversation
         if run.get("stage") == "handoff":
             if self._self_running() or os.path.exists(self._self_paths()[2]):
                 return None  # absorb_self_result() takes it from here
             out = self._rollback(run, "server-agent", StepFailed("handoff", "the self update left no result"))
             return {**out, "tag": run["tag"]}
-        if run.get("switched") and self.busy():
-            return None
         stage, error = "interrupted", run.get("stage", "")
         snap = run.get("snapshot")
         if snap and self.snapshots is not None:
@@ -587,15 +587,17 @@ class ServerInstaller:
             return None
         except (OSError, ValueError):
             out = {"tag": "", "result": "failed", "stage": "handoff"}
-        try:
-            os.remove(result)
-        except OSError:
-            pass
         if not isinstance(out, dict):
             out = {"tag": "", "result": "failed", "stage": "handoff"}
         with self.store.lock:
             run = self._ota().get("run")
         run = dict(run) if isinstance(run, dict) and run.get("stage") == "handoff" else None
+        if run and out.get("result") != "installed" and run.get("switched") and self.busy():
+            return None  # the revert restarts the voice: the result file waits for the end of the conversation
+        try:
+            os.remove(result)
+        except OSError:
+            pass
         tag = str(out.get("tag") or (run or {}).get("tag") or "")
         out.update(component="server-agent", tag=tag)
         if out.get("result") == "installed":

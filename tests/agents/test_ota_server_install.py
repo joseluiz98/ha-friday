@@ -500,3 +500,33 @@ def test_server_never_goes_back_by_itself(tmp_path):
     w.store.data["server_ota"]["installed_tag"] = "v0.4.0"  # an alpha device left the channel
     w.orch.poll()
     assert w.orch.installer.calls == []
+
+
+def test_handoff_revert_waits_for_the_end_of_the_conversation(tmp_path):
+    w = World(tmp_path, changed=["server/image/Dockerfile", "agents/server/x.py"])
+    assert w.inst.apply("v0.3.0", NEW, MANIFEST, manual=True)["result"] == "handed_off"
+    assert w.store.data["server_ota"]["run"]["switched"] is True
+    Path(w.paths["root"], "self.json").write_text('{"tag": "v0.3.0", "result": "rolled_back", "stage": "health"}')
+    w.busy_flag = True
+    w.write_activity()
+    assert w.inst.recover() is None and w.inst.absorb_self_result() is None
+    assert Path(w.paths["root"], "self.json").exists() and w.image == "friday:v0.3.0"
+    w.busy_flag = False
+    w.write_activity()
+    assert w.inst.absorb_self_result()["result"] == "rolled_back"
+    Path(w.paths["root"], "self.json").unlink(missing_ok=True)
+    assert "run" not in w.store.data["server_ota"]
+
+
+def test_failed_way_back_on_alpha_fails_the_soak(tmp_path):
+    bad = {"result": "failed", "component": "container", "stage": "rollback", "error": "x"}
+    w = _orch(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)], results=[bad], alpha=True)
+    w.orch.poll()
+    assert w.store.data["soak"]["v0.4.0"]["failed"] is True
+
+
+def test_install_request_with_no_target_is_dropped(tmp_path):
+    w = _orch(tmp_path, [])
+    w.orch.install_server()
+    w.orch.poll()
+    assert w.store.data["server_ota"]["install_requested"] is False
