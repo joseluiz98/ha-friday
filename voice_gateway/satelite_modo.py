@@ -382,19 +382,31 @@ class PortaoDeFala:
     ESPERA_MAX_S = 2.0   # quanto tempo segura áudio sem texto que decida
     MARCADOR = "<no speech>"
 
-    def __init__(self, agora=time.monotonic):
-        self._agora = agora
+    def __init__(self, agora=time.monotonic, sempre=False):
+        # sempre=True (12/11): armado em todo turno, sem prazo. Numa conversa comum o Gemini também "fica calado"
+        # falando o marcador (fala dirigida a outra pessoa no cômodo), e ele saía no alto-falante.
+        self._agora, self._sempre = agora, sempre
         self._estado, self._ate, self._desde, self._texto = "ocioso", 0.0, 0.0, ""
+        self.segurou_s = 0.0  # quanto o último turno decidido ficou segurado (medição do atraso)
+        if sempre:
+            self.armar()
 
     def armar(self):
         self._estado, self._ate, self._texto = "esperando", self._agora() + self.JANELA_S, ""
 
     def _soltar(self):
         self._estado = "ocioso"
+        self.segurou_s = self._agora() - self._desde
         return "soltar"
 
     def tratar(self, tipo: str, texto: str = "") -> str:
-        if self._estado == "esperando" and self._agora() >= self._ate:
+        acao = self._tratar(tipo, texto)
+        if self._sempre and tipo == "fim":
+            self.armar()
+        return acao
+
+    def _tratar(self, tipo: str, texto: str) -> str:
+        if self._estado == "esperando" and not self._sempre and self._agora() >= self._ate:
             self._estado = "ocioso"
         if self._estado == "ocioso":
             return "passar"
@@ -418,6 +430,7 @@ class PortaoDeFala:
         visto = self._texto.lstrip().lower()
         if visto.startswith(self.MARCADOR):
             self._estado = "descartando"
+            self.segurou_s = self._agora() - self._desde
             return "descartar"
         if self.MARCADOR.startswith(visto):
             return "segurar"                          # ainda pode ser o marcador

@@ -125,6 +125,33 @@ class TestVolumeETimers(unittest.TestCase):
         self.t[0] += sm.PortaoDeFala.JANELA_S + 0.1
         self.assertEqual(g.tratar("audio"), "passar")                   # o turno do modelo não veio: fala normal
 
+    def test_portao_sempre_armado_descarta_o_marcador_em_qualquer_turno(self):
+        # 12/11: numa conversa comum o Gemini quis ficar calado (fala dirigida a outra pessoa) e o marcador
+        # "<no speech>{pause}" saiu no alto-falante duas vezes; o portão só estava armado depois do volume.
+        self.t = [100.0]
+        g = sm.PortaoDeFala(agora=lambda: self.t[0], sempre=True)
+        for _ in range(2):                                              # 1º turno e os seguintes
+            self.assertEqual(g.tratar("audio"), "segurar")
+            self.assertEqual(g.tratar("texto", "<no speech>{pause}"), "descartar")
+            self.assertEqual(g.tratar("fim"), "descartar")
+        self.t[0] += sm.PortaoDeFala.JANELA_S * 10                      # sem prazo: segue armado
+        self.assertEqual(g.tratar("audio"), "segurar")
+        self.assertEqual(g.tratar("texto", "Oi, tudo bem."), "soltar")
+        self.assertEqual(g.tratar("audio"), "passar")
+        self.assertEqual(g.tratar("fim"), "passar")
+        self.assertEqual(g.tratar("audio"), "segurar")                  # rearmado para o próximo turno
+
+    def test_portao_sempre_armado_mede_quanto_segurou(self):
+        self.t = [100.0]
+        g = sm.PortaoDeFala(agora=lambda: self.t[0], sempre=True)
+        g.tratar("audio"); self.t[0] += 0.3
+        self.assertEqual(g.tratar("texto", "Claro"), "soltar")
+        self.assertAlmostEqual(g.segurou_s, 0.3)
+        g.tratar("fim")
+        g.tratar("audio"); self.t[0] += sm.PortaoDeFala.ESPERA_MAX_S + 0.1
+        self.assertEqual(g.tratar("audio"), "soltar")
+        self.assertGreater(g.segurou_s, sm.PortaoDeFala.ESPERA_MAX_S)
+
     def test_args_timer_com_id_vira_timer_id_e_valida_o_formato(self):
         # 14/10: o `id` do comando é o do envelope; o do timer vai como timer_id
         self.assertEqual(sm.args_timer({"acao": "cancelar", "id": "t1a2b3c"}), {"acao": "timer_cancelar", "timer_id": "t1a2b3c"})
