@@ -13,7 +13,7 @@ def _iso(agora: float) -> str:
 
 
 def _linha(chave, sessao, alvo, prompt, resposta, ok, erro, dur_ms, ferramentas, turno, agora, whisper=False,
-           wake_word=None):
+           wake_word=None, speech_gate=None):
     r = {"ts": _iso(agora), "prompt": prompt, "response": resposta, "ok": ok, "error": erro,
          "durationMs": dur_ms, "sessionKey": chave, "sessionId": sessao, "speakTarget": alvo,
          "warmState": None, "mode": "friday", "tools": ferramentas, "turnNumber": turno, "resumed": False}
@@ -21,6 +21,8 @@ def _linha(chave, sessao, alvo, prompt, resposta, ok, erro, dur_ms, ferramentas,
         r["whisper"] = True
     if wake_word:  # 28/10: a palavra que abriu a conversa, só no 1º turno (Jarvis Logbook)
         r["wakeWord"] = wake_word
+    if speech_gate:  # 12/11: quanto o portão de fala segurou o começo do turno, e se o descartou (<no speech>)
+        r["speechGate"] = speech_gate
     return r
 
 
@@ -36,6 +38,7 @@ class Turnos:
     def _novo(self):
         self._usuario, self._ela, self._ferramentas, self._t_usuario = [], [], [], None
         self._ids = set()
+        self._portao = []
 
     def usuario(self, texto: str, agora: float):
         self._usuario.append(texto)
@@ -44,6 +47,10 @@ class Turnos:
     def entrega_do_cerebro(self, pedido: str, agora: float):
         self._usuario.append(f"[resposta do cérebro a: {pedido}]")
         self._t_usuario = agora
+
+    def portao(self, acao: str, segurou_s: float):
+        """Decisão do portão de fala neste turno: "released" (a fala saiu) ou "dropped" (marcador descartado)."""
+        self._portao.append({"action": acao, "heldMs": int(round(segurou_s * 1000))})
 
     def ela(self, texto: str):
         self._ela.append(texto)
@@ -62,7 +69,7 @@ class Turnos:
         dur = int(round((agora - self._t_usuario) * 1000)) if self._t_usuario else None
         r = _linha(self.chave, self.sessao, self.alvo, "".join(self._usuario).strip(),
                    "".join(self._ela).strip(), True, None, dur, self._ferramentas, self.numero, agora,
-                   self.whisper, self.wake_word if self.numero == 1 else None)
+                   self.whisper, self.wake_word if self.numero == 1 else None, self._portao)
         self._novo()
         return r
 

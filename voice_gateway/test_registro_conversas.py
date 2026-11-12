@@ -27,6 +27,18 @@ class TestTurnos(unittest.TestCase):
                          ("friday", 1, True, None, False))
         self.assertEqual(r["ts"], "2026-10-06T13:00:05.000Z")
 
+    def test_portao_de_fala_vai_para_a_linha_do_turno(self):
+        # 12/11: o tempo que o portão segura cada turno fica no registro permanente, não só no log do container
+        tr = rc.Turnos("k", "voz-x", "sat")
+        tr.usuario("que horas são", t(1)); tr.portao("released", 0.1234); tr.ela("Nove horas.")
+        r = tr.ela_parou(t(3))
+        self.assertEqual(r["speechGate"], [{"action": "released", "heldMs": 123}])
+        tr.usuario("conversa com outra pessoa", t(4)); tr.portao("dropped", 0.05); tr.ela("<no speech>{pause}")
+        r = tr.ela_parou(t(5))
+        self.assertEqual(r["speechGate"], [{"action": "dropped", "heldMs": 50}])
+        tr.usuario("oi", t(6)); tr.ela("Oi.")
+        self.assertNotIn("speechGate", tr.ela_parou(t(7)))      # turno sem decisão do portão: sem o campo
+
     def test_turnos_numerados_e_parada_sem_conteudo_nao_grava(self):
         tr = rc.Turnos("friday-pagina", "voz-y", "pagina")
         self.assertIsNone(tr.ela_parou(t(1)))

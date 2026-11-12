@@ -736,13 +736,24 @@ except Exception as _erro:  # noqa: BLE001
 
 
 class SegurarFalaDepoisDoVolume(FrameProcessor):
-    """Segura o áudio do primeiro turno depois de um volume aplicado e o descarta se o texto dele for o marcador
-    "<no speech>{pause}" que o Gemini 3.8 fala; qualquer outra fala é liberada na hora (sm.PortaoDeFala)."""
+    """Segura o começo do áudio de cada turno dela e o descarta se o texto dele for o marcador "<no speech>{pause}"
+    que o Gemini 3.8 fala quando decide ficar calada; qualquer outra fala é liberada na hora (sm.PortaoDeFala).
+    Nasceu para o turno depois do volume (13/10); desde 12/11 vale para todo turno (portão com sempre=True)."""
 
-    def __init__(self, portao):
+    def __init__(self, portao, sessao="", ao_decidir=None):
         super().__init__()
-        self._portao = portao
-        self._guardados = []
+        self._portao, self._sessao = portao, sessao
+        # 12/11: ao_decidir(acao, segurou_s, fecha_turno) leva a decisão ao registro permanente de conversas
+        self._ao_decidir = ao_decidir
+        self._guardados, self._registrado = [], False
+
+    def _registrar(self, acao, fecha_turno=False):
+        if self._ao_decidir and (not self._registrado or fecha_turno):
+            try:
+                self._ao_decidir(acao if not self._registrado else None, self._portao.segurou_s, fecha_turno)
+            except Exception:
+                logger.exception("falha ao registrar o portão de fala")
+        self._registrado = True
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -759,16 +770,30 @@ class SegurarFalaDepoisDoVolume(FrameProcessor):
             await self.push_frame(frame, direction)
             return
         acao = self._portao.tratar(tipo, texto)
+        try:
+            await self._agir(acao, tipo, frame, direction)
+        finally:
+            if tipo == "fim":
+                self._registrado = False
+
+    async def _agir(self, acao, tipo, frame, direction):
         if acao == "segurar":
             self._guardados.append((frame, direction))
             return
         if acao == "descartar":
+            if not self._registrado:
+                logger.info(f"[{self._sessao}] turno sem fala (<no speech>) descartado; "
+                            f"segurado {self._portao.segurou_s:.2f}s")
+            # o turno descartado não chega ao alto-falante, então não há "parou de falar": o fim fecha a linha dele
+            self._registrar("dropped", fecha_turno=(tipo == "fim"))
             self._guardados.clear()
             if tipo == "fim":  # o quadro de fim de turno segue, para o resto do pipeline fechar o turno
                 await self.push_frame(frame, direction)
             return
         if acao == "soltar":
             guardados, self._guardados = self._guardados, []
+            logger.info(f"[{self._sessao}] portão de fala: soltou após {self._portao.segurou_s:.2f}s ({tipo})")
+            self._registrar("released")
             for q, d in guardados:
                 await self.push_frame(q, d)
         await self.push_frame(frame, direction)
@@ -1142,6 +1167,14 @@ async def bot(runner_args: RunnerArguments):
                        satelite_id if eh_satelite else "pagina", whisper=sussurro,  # 22/10: marca no Logbook
                        wake_word=sm.wake_word(corpo))  # 28/10: palavra que abriu, só no 1º turno
 
+    def portao_decidiu(acao, segurou_s, fecha_turno):
+        if acao:
+            turnos.portao(acao, segurou_s)
+        if fecha_turno:
+            linha = turnos.ela_parou(datetime.now().timestamp())
+            if linha:
+                GRAVADOR.enviar(linha)
+
     async def avisar_pi(dados: dict):
         if eh_satelite:
             await worker.queue_frames([RTVIServerMessageFrame(data=dados)])
@@ -1340,7 +1373,7 @@ async def bot(runner_args: RunnerArguments):
         finally:
             respostas_pi.pop(cid, None)
 
-    portao_fala = sm.PortaoDeFala()
+    portao_fala = sm.PortaoDeFala(sempre=True)  # 12/11: o marcador também sai em conversa comum
 
     async def volume_do_satelite(params: FunctionCallParams):
         try:
@@ -1441,7 +1474,7 @@ async def bot(runner_args: RunnerArguments):
             SinaisDaConversa(estado, ao_falar=vigia_fala),
             *([turnos_pi] if turnos_pi else []),
             llm,
-            SegurarFalaDepoisDoVolume(portao_fala),
+            SegurarFalaDepoisDoVolume(portao_fala, sessao, ao_decidir=portao_decidiu),
             *([voz_sussurrada] if voz_sussurrada else []),
             transport.output(),
             assistant_aggregator,
