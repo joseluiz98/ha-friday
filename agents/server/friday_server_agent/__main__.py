@@ -8,6 +8,7 @@ import logging
 import os
 import ssl
 import subprocess
+import urllib.parse
 import urllib.request
 
 from aiohttp import web
@@ -33,6 +34,7 @@ PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8801"))
 OPENCLAW_JSON = os.environ.get("FRIDAY_OPENCLAW_JSON", "/srv/friday/home/.openclaw/openclaw.json")
 ENV_FILE = "/srv/friday/friday.env"
 PVE = os.environ.get("FRIDAY_PVE_API", "")  # e.g. https://<proxmox>:8006/api2/json/nodes/<node>; from /srv/friday/state/local.env
+PVE_BACKUP_STORAGE = os.environ.get("FRIDAY_PVE_BACKUP_STORAGE", "backup")  # the vzdump job's target storage
 # Touched by friday-memory-index.service (ExecStartPost) after each successful reindex.
 # Written by the bot (activity.py): open sessions, brain turns in flight, heartbeat (minor 13 of 19/10).
 ACTIVITY_FILE = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")
@@ -115,11 +117,24 @@ def sample_status(token: str) -> dict:
     return c.status_changes(status)
 
 
+def _backup_runs(header: str, limit: int = 8) -> list:
+    """Latest vzdump tasks with their log text (per-guest outcome lives only in the log)."""
+    runs = []
+    for t in _get(f"{PVE}/tasks?typefilter=vzdump&limit={limit}&source=all", header, True).get("data") or []:
+        upid = urllib.parse.quote(t.get("upid", ""), safe="")
+        log = _get(f"{PVE}/tasks/{upid}/log?limit=5000", header, True).get("data") or []
+        runs.append((t, [ln.get("t", "") for ln in log]))
+    return runs
+
+
 def sample_proxmox(header: str) -> dict:
     return c.proxmox_metrics(
         _get(f"{PVE}/status", header, True),
         _get(f"{PVE}/disks/smart?disk=/dev/nvme0n1", header, True),
-        _get(f"{PVE}/tasks?typefilter=vzdump&limit=1&source=all", header, True))
+        _get(f"{PVE}/tasks?typefilter=vzdump&limit=1&source=all", header, True),
+        _backup_runs(header),
+        _get(f"{PVE}/storage/{PVE_BACKUP_STORAGE}/status", header, True),
+        {"data": _get(f"{PVE}/qemu", header, True).get("data", []) + _get(f"{PVE}/lxc", header, True).get("data", [])})
 
 
 async def main() -> None:
