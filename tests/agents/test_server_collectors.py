@@ -49,7 +49,46 @@ def test_proxmox_metrics_maps_fields():
     assert m["last_backup_attributes"] == {"status": "OK"}
     empty = c.proxmox_metrics({}, {}, {})
     assert empty == {"host_available_mb": None, "nvme_temperature": None, "last_backup": None,
-                     "last_backup_attributes": None}
+                     "last_backup_attributes": None, "backup_oldest_guest": None,
+                     "backup_oldest_guest_attributes": None, "backup_storage_used_pct": None,
+                     "backup_storage_used_pct_attributes": None}
+
+
+def _run(end, *lines):
+    return ({"endtime": end}, list(lines))
+
+
+def test_backup_oldest_guest_ages_when_one_guest_fails():
+    # 13/11/2026: the job ran today (LXC ok) but the VM's last good dump was two days before
+    runs = [_run(1763017000, "INFO: Starting Backup of VM 101 (qemu)",
+                 "ERROR: Backup of VM 101 failed - vma_queue_write: write error - Broken pipe",
+                 "INFO: Finished Backup of VM 102 (00:00:13)"),
+            _run(1762845000, "INFO: Finished Backup of VM 101 (00:04:35)", "INFO: Finished Backup of VM 102 (00:00:13)")]
+    guests = {"data": [{"vmid": 101}, {"vmid": 102}, {"vmid": 900, "template": 1}]}
+    m = c.backup_guest_metrics(runs, guests)
+    assert m["backup_oldest_guest"] == "2025-11-11T07:10:00+00:00"
+    assert m["backup_oldest_guest_attributes"] == {
+        "guests": {"101": "2025-11-11T07:10:00+00:00", "102": "2025-11-13T06:56:40+00:00"}, "missing": []}
+
+
+def test_backup_oldest_guest_unknown_when_a_guest_never_succeeded():
+    runs = [_run(1763017000, "ERROR: Backup of VM 101 failed", "INFO: Finished Backup of VM 102 (00:00:13)")]
+    m = c.backup_guest_metrics(runs, {"data": [{"vmid": 101}, {"vmid": 102}]})
+    assert m["backup_oldest_guest"] is None
+    assert m["backup_oldest_guest_attributes"]["missing"] == ["101"]
+
+
+def test_backup_oldest_guest_falls_back_to_logged_ids_without_guest_list():
+    m = c.backup_guest_metrics([_run(1763017000, "INFO: Finished Backup of VM 102 (00:00:13)")], {})
+    assert m["backup_oldest_guest"] == "2025-11-13T06:56:40+00:00"
+    assert c.backup_guest_metrics([], {}) == {"backup_oldest_guest": None, "backup_oldest_guest_attributes": None}
+
+
+def test_backup_storage_used_pct():
+    m = c.backup_storage_metrics({"data": {"total": 90_000_000_000, "used": 82_800_000_000,
+                                           "avail": 2_700_000_000}})
+    assert m == {"backup_storage_used_pct": 92.0, "backup_storage_used_pct_attributes": {"available_gb": 2.7}}
+    assert c.backup_storage_metrics({"data": {"total": 0}})["backup_storage_used_pct"] is None
 
 
 def test_memory_index_last_success_from_stamp_mtime():

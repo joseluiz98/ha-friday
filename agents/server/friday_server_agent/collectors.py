@@ -125,7 +125,8 @@ class Source:
         return {k: None for k in self.keys} if self.failures == self.limit else {}
 
 
-def proxmox_metrics(node_status: dict, smart: dict, last_vzdump: dict) -> dict:
+def proxmox_metrics(node_status: dict, smart: dict, last_vzdump: dict, backup_runs: list | None = None,
+                    storage: dict | None = None, guests: dict | None = None) -> dict:
     mem = (node_status.get("data") or {}).get("memory") or {}
     avail = mem.get("available", mem.get("free"))
     mb = round(avail / 1048576) if isinstance(avail, (int, float)) else None
@@ -135,7 +136,46 @@ def proxmox_metrics(node_status: dict, smart: dict, last_vzdump: dict) -> dict:
     backup = datetime.fromtimestamp(end, timezone.utc).isoformat() if end else None
     status = data[0].get("status") if data else None
     return {"host_available_mb": mb, "nvme_temperature": int(found[0]) if found else None,
-            "last_backup": backup, "last_backup_attributes": {"status": status} if status else None}
+            "last_backup": backup, "last_backup_attributes": {"status": status} if status else None,
+            **backup_guest_metrics(backup_runs or [], guests or {}), **backup_storage_metrics(storage or {})}
+
+
+_FINISHED = re.compile(r"Finished Backup of VM (\d+)")
+
+
+def backup_guest_metrics(runs: list, guests: dict) -> dict:
+    """13/11/2026: the job end time (last_backup) hides a guest whose dump failed while another one worked (VM 101
+    had no backup on 12-13/11 and the sensor showed today). State = the OLDEST of each guest's last successful dump,
+    so any guest falling behind ages the sensor; a guest with no success in the runs read makes it unknown.
+    runs = [(task, [log line text, ...]), ...] for the latest vzdump tasks (the read-only token can read task logs
+    with Sys.Audit, but listing backup files needs VM.Backup); guests = {"data": [{vmid, template}, ...]}."""
+    newest: dict[str, int] = {}
+    for task, lines in runs:
+        when = task.get("endtime") or task.get("starttime")
+        if not isinstance(when, (int, float)):
+            continue
+        for line in lines:
+            m = _FINISHED.search(line)
+            if m:
+                newest[m.group(1)] = max(newest.get(m.group(1), 0), int(when))
+    ids = sorted({str(g["vmid"]) for g in guests.get("data") or [] if g.get("vmid") is not None
+                  and not g.get("template")}) or sorted(newest)
+    if not ids:
+        return {"backup_oldest_guest": None, "backup_oldest_guest_attributes": None}
+    per = {i: (datetime.fromtimestamp(newest[i], timezone.utc).isoformat() if i in newest else None) for i in ids}
+    missing = [i for i in ids if i not in newest]
+    oldest = None if missing else datetime.fromtimestamp(min(newest[i] for i in ids), timezone.utc).isoformat()
+    return {"backup_oldest_guest": oldest, "backup_oldest_guest_attributes": {"guests": per, "missing": missing}}
+
+
+def backup_storage_metrics(storage: dict) -> dict:
+    d = storage.get("data") or {}
+    total, used, avail = d.get("total"), d.get("used"), d.get("avail")
+    if not isinstance(total, (int, float)) or not total or not isinstance(used, (int, float)):
+        return {"backup_storage_used_pct": None, "backup_storage_used_pct_attributes": None}
+    return {"backup_storage_used_pct": round(used * 100 / total, 1),
+            "backup_storage_used_pct_attributes": {"available_gb": round(avail / 1e9, 1)}
+            if isinstance(avail, (int, float)) else None}
 
 
 def memory_index_metrics(stamp_mtime: float | None) -> dict:
@@ -183,7 +223,10 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("host_available_mb", "Proxmox host available memory", unit="MB", available=proxmox, **m),
         s("nvme_temperature", "Proxmox NVMe temperature", unit="°C", device_class="temperature",
           available=proxmox, **m),
-        s("last_backup", "Proxmox last backup", device_class="timestamp", available=proxmox),
+        s("last_backup", "Proxmox backup job last run", device_class="timestamp", available=proxmox),
+        s("backup_oldest_guest", "Proxmox backup oldest guest", device_class="timestamp", available=proxmox),
+        s("backup_storage_used_pct", "Proxmox backup storage used", unit="%", icon="mdi:harddisk",
+          available=proxmox, **m),
         *cost.descriptors(),
         cost.BUDGET_DESCRIPTOR,
         {**VOICE_DESCRIPTOR, "available": True},
