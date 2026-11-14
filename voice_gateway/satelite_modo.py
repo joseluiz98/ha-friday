@@ -690,3 +690,24 @@ def resultado_definir_comodo(fatos: dict, area_id, resposta) -> dict:
     if not isinstance(resposta, dict):
         return {"ok": False, "erro": "o satélite não confirmou"}
     return resultado if resposta.get("ok") else {"ok": False, "erro": resposta.get("erro", "o satélite recusou")}
+
+
+# Plano OTA 2026-11-10 Task 20: pedir a instalação da versão nova por voz. Sem parâmetro: o satélite é o da conversa, e o
+# canal (stable/alpha) só muda na página da integração.
+DESCRICAO_INSTALAR_ATUALIZACAO = (
+    "Pede ao servidor a instalação da versão nova do software deste satélite. A instalação acontece depois que esta "
+    "conversa terminar, com o satélite parado, e leva alguns minutos; durante ela o satélite não atende. Devolve a "
+    "versão pedida, ou que não há versão nova, ou que este satélite já está nela.")
+
+
+def resultado_instalar_atualizacao(resposta) -> dict:
+    """O que o agente da VM respondeu a POST /v1/ota/request_install ({"ok", "target", "installed"})."""
+    if not isinstance(resposta, dict) or not resposta.get("ok"):
+        return {"ok": False, "erro": "o pedido não chegou ao servidor; nada foi pedido"}
+    alvo, instalada = resposta.get("target"), resposta.get("installed")
+    if not alvo:
+        return {"ok": True, "fato": "O servidor não tem atualização disponível para este satélite."}
+    if alvo == instalada:
+        return {"ok": True, "fato": f"Este satélite já está na versão {alvo}; não há atualização para instalar."}
+    return {"ok": True, "fato": f"A atualização {alvo} foi pedida ao servidor e ainda não foi instalada: ela é "
+                                f"instalada quando esta conversa terminar."}

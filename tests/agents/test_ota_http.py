@@ -174,3 +174,12 @@ def test_agent_publishes_image_and_integration_target_descriptors():
     from friday_server_agent import collectors as c
     keys = {d["key"]: d["platform"] for d in c.capabilities(False)}
     assert keys["ota_server"] == "update" and keys["image_build"] == "button" and keys["image_latest"] == "sensor"
+
+
+async def test_request_install_tells_the_installed_version(tmp_path, aiohttp_client):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    w.store.device(SAT)["installed"] = "v0.3.0"
+    c = await _client(aiohttp_client, w, status_token="st")
+    r = await c.post("/v1/ota/request_install", json={"sat_id": SAT}, headers={"Authorization": "Bearer st"})
+    assert await r.json() == {"ok": True, "target": "v0.3.0", "installed": "v0.3.0"}

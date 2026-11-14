@@ -79,7 +79,8 @@ def add_routes(app: web.Application, orch, status_token: Callable[[], str]) -> N
         if not isinstance(sat, str) or not SAT_ID.match(sat):
             return web.json_response({"ok": False, "error": "sat_id"}, status=400)
         target = await asyncio.to_thread(orch.install, sat)
-        return web.json_response({"ok": True, "target": target})
+        installed = (await asyncio.to_thread(orch.status))["devices"].get(sat, {}).get("installed")
+        return web.json_response({"ok": True, "target": target, "installed": installed})
 
     app.router.add_get("/v1/ota/offer", offer)
     app.router.add_get("/v1/ota/package/{tag}/{name}", package)
