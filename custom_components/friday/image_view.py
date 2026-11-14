@@ -89,7 +89,7 @@ class FridayImageView(HomeAssistantView):
         if not valid_name(name):
             return web.Response(status=404)
         path = os.path.join(_folder(request.app["hass"]), name)
-        if not await asyncio.to_thread(os.path.isfile, path):
+        if not await asyncio.to_thread(lambda: os.path.isfile(path) and not os.path.islink(path)):
             return web.Response(status=404)
         return web.FileResponse(path, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 

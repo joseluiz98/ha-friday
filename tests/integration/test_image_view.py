@@ -119,3 +119,12 @@ async def test_image_latest_sensor_gets_download_url(hass):
     assert st.attributes["status"] == "ok"
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
+
+
+async def test_a_symlink_in_the_folder_is_not_served(hass, hass_client, view_ready, image_dir, tmp_path):
+    secret = tmp_path / "secret"
+    secret.write_text("x")
+    import os
+    os.symlink(secret, os.path.join(hass.data[DOMAIN]["image_dir"], "friday-satellite-v0.8.0.img.xz"))
+    client = await hass_client()
+    assert (await client.get("/api/friday/image/friday-satellite-v0.8.0.img.xz")).status == 404
