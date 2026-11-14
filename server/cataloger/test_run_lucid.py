@@ -331,6 +331,19 @@ class TestCheckAndRestore(unittest.TestCase):
         self.assertEqual((self.fri / "MEMORY.md").read_text(encoding="utf-8"), self.mem)
         self.assertEqual((self.fri / "USER.md").read_text(encoding="utf-8"), self.user)
 
+    def test_user_md_ja_acima_do_teto_sem_crescer_nao_restaura(self):
+        # 11/11: o cérebro passou o USER.md do teto sozinho; o Lucid não aumentou nada e não pode prender o dia
+        (self.bk / "USER.md").write_text("x" * 3845, encoding="utf-8")
+        (self.fri / "USER.md").write_text("y" * 3845, encoding="utf-8")
+        self.assertEqual(rl.check_and_restore(self.fri, self.bk), "ok")
+        self.assertEqual((self.fri / "USER.md").read_text(encoding="utf-8"), "y" * 3845)
+
+    def test_user_md_acima_do_teto_e_maior_que_o_backup_restaura(self):
+        (self.bk / "USER.md").write_text("x" * 3845, encoding="utf-8")
+        (self.fri / "USER.md").write_text("y" * 3846, encoding="utf-8")
+        self.assertEqual(rl.check_and_restore(self.fri, self.bk), "restored_user_md_over_cap")
+        self.assertEqual((self.fri / "USER.md").read_text(encoding="utf-8"), "x" * 3845)
+
     def test_tudo_certo_nao_toca(self):
         novo = self.mem + "- fato <!-- lucid: date=2026-10-19 evidence=10:00 said_by=unknown source=voice -->\n"
         (self.fri / "MEMORY.md").write_text(novo, encoding="utf-8")
@@ -634,6 +647,22 @@ class TestMain(unittest.TestCase):
         self.assertEqual(runs[0]["directives_changed"], 0)
         self.assertIn("A sala tem dois Echos.", (self.fri / "MEMORY.md").read_text(encoding="utf-8"))
         self.assertTrue((self.cat / "out" / "voice-briefing.md").exists())
+        self.assertIn("--done 2026-10-20", self._done())
+
+    def test_main_user_md_ja_acima_do_teto_termina_o_dia(self):
+        # 11/11: o dia 09/11 voltava toda noite como restored_user_md_over_cap
+        base = USER_MD.replace("status: superseded", "status: active")
+        user = base.replace("## Related", "- " + "x" * (3990 - len(base) - 4) + "\n\n## Related")
+        self.assertGreater(len(rl.normalize_user_md(user)), rl.USER_MD_CAP)
+        (self.fri / "USER.md").write_text(user, encoding="utf-8")
+        (self.cat / "backups" / "20261020" / "USER.md").write_text(user, encoding="utf-8")
+        self._gemini(self._result(directives=[{"text": "Prefer long explanations when asked.", "replaces": None,
+                                               "evidence": ["09:00"]}]))
+        rl.main(["--max-days", "1"])
+        runs = self._runs()
+        self.assertEqual(runs[0]["status"], "user_md_full")
+        self.assertEqual(runs[0]["directives_changed"], 0)
+        self.assertIn("A sala tem dois Echos.", (self.fri / "MEMORY.md").read_text(encoding="utf-8"))
         self.assertIn("--done 2026-10-20", self._done())
 
     def test_main_move_superseded_e_grava_diretriz(self):

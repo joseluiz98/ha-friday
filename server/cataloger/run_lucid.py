@@ -97,10 +97,12 @@ def check_and_restore(friday_ws, backup_dir):
     """Confere o resultado; restaura MEMORY.md e USER.md do backup se algo deu errado."""
     friday_ws, backup_dir = Path(friday_ws), Path(backup_dir)
     mem_antes, mem_depois = _read(backup_dir / "MEMORY.md"), _read(friday_ws / "MEMORY.md")
-    user_depois = _read(friday_ws / "USER.md")
+    user_antes, user_depois = _read(backup_dir / "USER.md"), _read(friday_ws / "USER.md")
     if lost_lines(mem_antes, mem_depois):
         status = "restored_memory_loss"
-    elif len(user_depois) > USER_MD_CAP:
+    elif len(user_depois) > USER_MD_CAP and len(user_depois) > len(user_antes):
+        # Só quando o Lucid aumentou o arquivo. Já acima do teto antes (o cérebro grava diretrizes sozinho, 11/11):
+        # restaurar não muda nada e prenderia o mesmo dia toda noite; o runner registra `user_md_full`.
         status = "restored_user_md_over_cap"
     else:
         return "ok"
