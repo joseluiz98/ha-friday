@@ -176,13 +176,22 @@ async def main() -> None:
                                otagh.GitHubWatcher(os.environ.get("FRIDAY_OTA_REPO", "joseluiz98/ha-friday")),
                                ota_repo, vault, notifier, installer=installer, images=otaimg.ImageBuilder())
     state["ota_auto_install"] = ota_store.auto_install
-    state["ota_server"] = orch.server_entity()
+    def ota_state() -> dict:
+        """The server's OTA entities: its update, the integration's target (Task 18 installs it through HACS) and
+        the newest provisioning image (state = tag; attributes built_at/status/error/files)."""
+        img = orch.image_status() or {}
+        return {"ota_server": orch.server_entity(),
+                "ota_integration_target": orch.status()["server"].get("integration_target"),
+                "image_latest": img.get("tag"),
+                "image_latest_attributes": {k: img.get(k) for k in ("built_at", "status", "error", "files")}}
+
+    state.update(ota_state())
 
     async def ota_state_push() -> None:
-        value = await asyncio.to_thread(orch.server_entity)
-        if state.get("ota_server") != value:
-            state["ota_server"] = value
-            await core.push_state({"ota_server": value}, "agent")
+        changes = {k: v for k, v in (await asyncio.to_thread(ota_state)).items() if state.get(k) != v}
+        if changes:
+            state.update(changes)
+            await core.push_state(changes, "agent")
     ota_kick = otaloop.Kick()
     kick = ota_kick.kick
 
@@ -215,6 +224,10 @@ async def main() -> None:
         if cmd.get("key") == "ota_check_now":
             kick(True)
             return {"ok": True}
+        if cmd.get("key") == "image_build":
+            out = await asyncio.to_thread(orch.image_build, None)
+            await ota_state_push()
+            return {"ok": bool(out.get("ok")), **({"error": out["error"]} if out.get("error") else {})}
         return await cmd_handlers["press"](cmd)
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),

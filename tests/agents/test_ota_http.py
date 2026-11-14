@@ -168,3 +168,9 @@ async def test_loop_pushes_state_after_each_poll():
     except asyncio.CancelledError:
         pass
     assert pushed == [1]
+
+
+def test_agent_publishes_image_and_integration_target_descriptors():
+    from friday_server_agent import collectors as c
+    keys = {d["key"]: d["platform"] for d in c.capabilities(False)}
+    assert keys["ota_server"] == "update" and keys["image_build"] == "button" and keys["image_latest"] == "sensor"
