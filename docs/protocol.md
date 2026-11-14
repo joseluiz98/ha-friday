@@ -32,7 +32,7 @@ Sent right after connecting.
 ### Descriptor
 
 ```json
-{"key":"...","platform":"sensor|binary_sensor|number|switch|select|button|event",
+{"key":"...","platform":"sensor|binary_sensor|number|switch|select|button|event|update",
  "name":"...","category":null,"icon":"...","unit":"...","device_class":"...",
  "state_class":"...","min":0,"max":10,"step":1,"mode":"...",
  "options":["..."],"event_types":["..."],"available":true,"hidden":false,"enabled_default":true}
@@ -40,12 +40,29 @@ Sent right after connecting.
 
 - `category`: `null`, `"config"` or `"diagnostic"`.
 - Absent fields mean the Home Assistant default.
-- A descriptor whose `platform` is not one of the seven above is skipped (its
+- A descriptor whose `platform` is not one of the eight above is skipped (its
   key is reported in `Hello.skipped`); the rest of the hello is still used.
 - `enabled_default: false` creates the entity disabled in the entity registry (the user can enable it); used for
   `wifi_ssid`, so the network name is not recorded unless asked for.
 - `hidden: true` marks a protocol-only command: it is never turned into an
   entity, but Home Assistant may still send it as a command.
+
+### Platform `update`
+
+An OTA (firmware or software) update. Descriptor: `{"key":"<k>","platform":"update","name":"..."}`; the state under
+`<k>` is an object (a missing or non-object state makes the entity `unknown`):
+
+```json
+{"installed":"v0.2.1","latest":"v0.3.0","in_progress":false,
+ "title":"...","release_url":null,"summary":null}
+```
+
+`installed`/`latest` are strings or `null` (the entity is `on` when they differ); `in_progress` maps to Home
+Assistant's progress flag; `summary` is the full release text (the entity attribute is cut to 255 characters, the
+full text is served as release notes). Installing sends the command `ota_install` with `key=<k>`; only the latest
+version can be installed (any other requested version is refused in Home Assistant). The agent may answer an error
+such as `in_progress` or `no_credentials`, which is shown to the user. State changes of this platform are not
+logged as `friday_change` events (they only mirror a reading).
 
 ### state
 

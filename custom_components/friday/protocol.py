@@ -12,7 +12,7 @@ from typing import Any
 PROTOCOL_VERSION = 1
 
 KNOWN_PLATFORMS = frozenset(
-    {"sensor", "binary_sensor", "number", "switch", "select", "button", "event"}
+    {"sensor", "binary_sensor", "number", "switch", "select", "button", "event", "update"}
 )
 
 
