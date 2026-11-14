@@ -407,9 +407,10 @@ class Orchestrator:
         if not meta:
             return offer_payload(None, auto_install=auto, reason="package_missing")
         sat = meta["satellite"]
-        return offer_payload(tag, sat_id, sha, sat["sha256"], sat["size"],
-                             wheels=sat.get("lock_sha256") != lock_sha256 and bool(sat.get("wheels")),
-                             heavy=bool(sat.get("heavy")), install_requested=requested, auto_install=auto)
+        wheels = sat.get("lock_sha256") != lock_sha256 and bool(sat.get("wheels"))
+        # spec §16: new wheels (a pip install on the Pi 3) make the update heavy, whatever release.json says
+        return offer_payload(tag, sat_id, sha, sat["sha256"], sat["size"], wheels=wheels,
+                             heavy=bool(sat.get("heavy")) or wheels, install_requested=requested, auto_install=auto)
 
     def _save_quiet(self) -> None:
         try:

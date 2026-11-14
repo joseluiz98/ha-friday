@@ -349,3 +349,12 @@ def test_a_pre_ota_release_is_never_a_channel_target(tmp_path):
     assert w.orch.offer(SAT, "stable", None, 1, "")["tag"] is None
     assert w.orch.package_for_update() is None  # the bootstrap packs the agent's own version instead
     assert w.orch.server_entity()["latest"] is None
+
+
+def test_an_offer_with_new_wheels_is_heavy(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    same = w.orch.offer(SAT, "stable", None, 1, "L" * 64)
+    other = w.orch.offer(SAT, "stable", None, 1, "x" * 64)
+    assert same["wheels_url"] is None and same["heavy"] is False
+    assert other["wheels_url"] and other["heavy"] is True
