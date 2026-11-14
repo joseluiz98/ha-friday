@@ -18,6 +18,7 @@ from collections.abc import Callable
 import json
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -239,34 +240,49 @@ class Orchestrator:
         dev = (st.get("devices") or {}).get(self.sat_id) or {}
         return dev, (st.get("targets") or {}).get(dev.get("channel") or "stable")
 
+    @staticmethod
+    def _at_least(installed, target) -> bool:
+        def key(t):
+            m = re.match(r"^v(\d+)\.(\d+)\.(\d+)$", t or "")
+            return tuple(int(x) for x in m.groups()) if m else None
+        a, b = key(installed), key(target)
+        return a is not None and b is not None and a >= b
+
     async def _step_ota_converge(self) -> None:
-        """Until the release of the satellite's channel is installed (the satellite reports `installed` to the VM)."""
+        """Until the satellite runs the release of its channel (or a newer one): it reports `installed` to the VM. A
+        transient failure is retried by the satellite itself inside the window; a rollback ends the step."""
         server = self.server_connection()
         if server is None:
             raise StepError("server_offline")
         dev, target = await self._ota_device(server)
-        if not target or dev.get("installed") == target:
+        if not target or self._at_least(dev.get("installed"), target):
             return
         before = dev.get("last_report")
-        await self.say(["updating"])
         c = await self._wait_connected()
-        await c.send("ota_install", timeout=20)
+        try:
+            await c.send("ota_install", timeout=20)
+        except HomeAssistantError as err:
+            if str(err) != "in_progress":  # an install already running: wait for it like ours
+                raise
+        await self.say(["updating"])
+        deadline = time.monotonic() + OTA_CONVERGE_TIMEOUT_S
         waited, slow = 0, False
-        while waited < OTA_CONVERGE_TIMEOUT_S:
+        while waited < OTA_CONVERGE_TIMEOUT_S and time.monotonic() < deadline:
             await self._sleep(OTA_POLL_S)
             waited += OTA_POLL_S
             if waited >= OTA_SLOW_S and not slow:
                 slow = True
                 await self.say(["update_slow"])
             try:
-                dev, _ = await self._ota_device(server)
+                dev, now_target = await self._ota_device(server)
             except HomeAssistantError:
                 continue  # the VM busy or restarting: keep waiting
-            if dev.get("installed") == target:
+            target = now_target or target
+            if self._at_least(dev.get("installed"), target):
                 return
             rep = dev.get("last_report") or {}
-            if rep != before and rep.get("tag") == target and rep.get("result") in ("rolled_back", "failed"):
-                raise StepError(f"ota_{rep['result']}: {rep.get('stage') or '?'}")
+            if rep != before and rep.get("result") == "rolled_back":
+                raise StepError(f"ota_rolled_back: {rep.get('stage') or '?'}")
         raise StepError("ota_timeout")
 
     async def _step_voices(self) -> None:

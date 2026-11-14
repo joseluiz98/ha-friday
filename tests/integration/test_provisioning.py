@@ -482,3 +482,41 @@ async def test_new_satellite_does_not_get_the_silent_credential(hass):
     _issue_missing_ota_credentials(hass, entry, sat)
     await hass.async_block_till_done()
     assert sat.names() == [] and server.names() == []
+
+
+async def test_converge_accepts_a_newer_installed_release(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    server.responses["ota_status"] = [ota_status(installed="v0.4.0", target="v0.3.0")]
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    assert (await orch.steps_state())["ota_converge"] == "done" and "ota_install" not in sat.names()
+
+
+async def test_converge_waits_through_a_transient_failure_and_a_moving_target(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    blip = {"at": 5, "tag": "v0.3.0", "result": "failed", "stage": "download", "error": "timeout"}
+    server.responses["ota_status"] = [ota_status(installed="v0.2.1"), ota_status(installed="v0.2.1", report=blip),
+                                      ota_status(installed="v0.3.0", target="v0.3.1"),
+                                      ota_status(installed="v0.3.1", target="v0.3.1")]
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    assert (await orch.steps_state())["ota_converge"] == "done"
+    assert server.names().count("ota_status") == 4
+
+
+async def test_converge_waits_for_an_install_already_running(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    sat.responses["ota_install"] = HomeAssistantError("in_progress")
+    server.responses["ota_status"] = [ota_status(installed="v0.2.1"), ota_status(installed="v0.3.0")]
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    assert (await orch.steps_state())["ota_converge"] == "done"
+
+
+async def test_converge_says_nothing_when_the_satellite_refuses(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    sat.responses["ota_install"] = HomeAssistantError("no_credentials")
+    server.responses["ota_status"] = [ota_status(installed="v0.2.1")]
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    assert (await orch.steps_state())["ota_converge"] == "failed" and ["updating"] not in said(sat)

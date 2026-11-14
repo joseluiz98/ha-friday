@@ -243,7 +243,7 @@ class Provisioner:
 
     async def apply_bundle(self, kind, url, sha256) -> dict:
         slow = None
-        if kind == "update":
+        if kind == "update" and not self._versioned():  # nothing is installed by this step on the versioned layout
             await self.say(["updating"])
 
             async def warn_slow() -> None:

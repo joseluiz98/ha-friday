@@ -490,3 +490,17 @@ async def test_update_on_the_versioned_layout_changes_nothing(env):
     r = await p.apply_bundle("update", "http://vm/b", sha(blob))
     assert r == {"ok": True, "data": {"program_restart": "skipped", "versioned": True}}
     assert sorted(os.listdir(env / "program")) == before and applied == [] and exits == []
+
+
+async def test_update_on_the_versioned_layout_says_nothing(env):
+    blob = tar_bytes(UPDATE)
+    p, program, *_ = make(env, {"http://vm/b": blob})
+    p._versioned = lambda: True
+    said = []
+
+    async def say(keys):
+        said.append(keys)
+        return True
+    p.say = say
+    await p.apply_bundle("update", "http://vm/b", sha(blob))
+    assert said == []
