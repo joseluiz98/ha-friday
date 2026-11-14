@@ -118,3 +118,16 @@ async def test_kick_during_a_poll_is_not_lost():
 def test_blank_chat_gives_null_notifier():
     from friday_server_agent.ota import notify as nt
     assert isinstance(nt.notifier_for("  "), nt.NullNotifier) and isinstance(nt.notifier_for("123"), nt.Notifier)
+
+
+async def test_offer_with_install_flag_asks_for_the_install(tmp_path, aiohttp_client):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    tok = w.tokens.issue(SAT)
+    w.store.device(SAT)["attempts"] = {"version": "v0.3.0", "failures": 4, "exhausted": True}
+    c = await _client(aiohttp_client, w)
+    h = {"Authorization": f"Bearer {tok}"}
+    r = await c.get(f"/v1/ota/offer?sat_id={SAT}&channel=stable&installed=v0.2.0&install=1", headers=h)
+    body = await r.json()
+    assert body["tag"] == "v0.3.0" and body["install_requested"] is True
+    assert w.store.device(SAT)["attempts"] is None

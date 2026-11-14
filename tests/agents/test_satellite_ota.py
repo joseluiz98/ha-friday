@@ -120,7 +120,7 @@ async def test_new_offer_downloads_stages_and_installs_when_idle(tmp_path):
     assert w.helper.calls[1] == ["activate", "v0.3.0"]
     assert {"acao": "ring", "state": "updating"} in w.program.commands
     assert not list((tmp_path / "downloads").iterdir())  # the helper copied it: nothing big stays
-    assert json.loads((tmp_path / "state.json").read_text())["activating"] == "v0.3.0"
+    assert json.loads((tmp_path / "state.json").read_text())["activating"]["tag"] == "v0.3.0"
 
 
 async def test_channel_installed_and_lock_go_in_the_offer(tmp_path):
@@ -162,7 +162,7 @@ async def test_auto_install_off_only_downloads_and_lights_pending(tmp_path):
 
 
 @pytest.mark.parametrize("busy", [{"estado": "conversa"}, {"timers": [{"nome": "x"}]}, {"alarme": "x"},
-                                  {"musica": True}, {"pendentes": 1}])
+                                  {"musica": True}, {"pendentes": 1}, {"fila_entregas": 1}])
 async def test_a_busy_satellite_defers_the_automatic_install(tmp_path, busy):
     w = World(tmp_path, program=Program({**IDLE, **busy}))
     await w.c.step()
@@ -225,7 +225,7 @@ async def test_reports_result_left_by_helper(tmp_path):
     w = World(tmp_path)
     await w.c.step()
     assert w.verbs()[-1] == "activate"
-    w.helper_result(tag="v0.3.0", previous="v0.2.1", state="rolled_back", stage="health", error="program")
+    w.helper_result(tag="v0.3.0", previous="v0.2.1", state="rolled_back", stage="health", error="program", at=w.now)
     w2 = World.__new__(World)  # the agent that comes back: same files, new process
     w2.__dict__.update(w.__dict__)
     w2.helper = Helper()
@@ -247,7 +247,7 @@ async def test_reports_result_left_by_helper(tmp_path):
 async def test_installed_result_clears_pending_and_prunes(tmp_path):
     w = World(tmp_path)
     await w.c.step()
-    w.helper_result(tag="v0.3.0", previous="v0.2.1", state="installed")
+    w.helper_result(tag="v0.3.0", previous="v0.2.1", state="installed", at=w.now)
     await w.c.report_activation()
     assert w.http.reports[-1]["result"] == "installed"
     assert {"acao": "update_pending", "ligado": False} in w.program.commands and w.verbs()[-1] == "prune"
@@ -256,7 +256,7 @@ async def test_installed_result_clears_pending_and_prunes(tmp_path):
 async def test_still_activating_reports_nothing(tmp_path):
     w = World(tmp_path)
     await w.c.step()
-    w.helper_result(tag="v0.3.0", state="activating")
+    w.helper_result(tag="v0.3.0", state="activating", at=w.now)
     await w.c.report_activation()
     assert w.http.reports == []
     n = len(w.http.calls)
@@ -292,15 +292,21 @@ async def test_local_retry_respects_next_at(tmp_path):
 
 
 async def test_a_report_the_vm_missed_is_sent_again(tmp_path):
-    w = World(tmp_path, Http(body=b"tampered"))
-    w.http.down = True
-    await w.c.step()  # offer fails: nothing happens
-    w.http.down = False
+    class Flaky(Http):
+        fail_posts = 1
+
+        async def post_json(self, url, body, token):
+            if self.fail_posts:
+                self.fail_posts -= 1
+                raise OSError("down")
+            return await super().post_json(url, body, token)
+    w = World(tmp_path, Flaky(body=b"tampered"))
     await w.c.step()
-    assert len(w.http.reports) == 1
-    w.c.data["unsent"] = w.http.reports.pop()
+    assert w.http.reports == []
+    assert json.loads((tmp_path / "state.json").read_text())["unsent"][0]["result"] == "failed"
     await w.c.step()
-    assert w.http.reports and "unsent" not in json.loads((tmp_path / "state.json").read_text())
+    assert [r["result"] for r in w.http.reports] == ["failed"]
+    assert "unsent" not in json.loads((tmp_path / "state.json").read_text())
 
 
 async def test_without_credentials_the_vm_is_never_called(tmp_path):
@@ -340,9 +346,108 @@ async def test_activation_refused_before_detaching_is_a_failure(tmp_path):
     w = World(tmp_path, helper=Helper({"activate": (2, "friday-ota-apply: refused at args: bad tag")}))
     await w.c.step()
     assert w.http.reports[-1]["stage"] == "args"
-    assert "activating" not in json.loads((tmp_path / "state.json").read_text())
-    assert w.program.commands[-1] == {"acao": "ring", "state": "off"} or {"acao": "ring", "state": "off"} in \
-        w.program.commands
+    state = json.loads((tmp_path / "state.json").read_text())
+    assert "activating" not in state and state["attempts"]["failures"] == 1 and "staged" not in state
+    rings = [c["state"] for c in w.program.commands if c.get("acao") == "ring"]
+    assert rings == ["updating", "off"] and w.c.in_progress is False
+
+
+def _restart(w):
+    """The agent that comes back: same files, new process."""
+    return ota.OtaClient(SAT, w.program, w.http, w.helper, clock=lambda: w.now, state_path=w.c.state_path,
+                         result_path=w.c.result_path, downloads=w.c.downloads, channel_file=w.c.channel_file,
+                         token_file=w.c.token_file, current=w.c.current, helper_path=w.c.helper_path,
+                         sudo=w.fake_sudo)
+
+
+async def test_a_stale_result_of_the_same_tag_is_not_reported(tmp_path):
+    w = World(tmp_path)
+    w.helper_result(tag="v0.3.0", state="rolled_back", at=w.now - 100)  # an earlier attempt of the same tag
+    await w.c.step()
+    assert w.verbs()[-1] == "activate"
+    w.c.kick()
+    await w.c.step()
+    assert w.http.reports == [] and w.c.in_progress
+
+
+async def test_a_result_that_never_comes_unblocks_after_the_deadline(tmp_path):
+    w = World(tmp_path)
+    await w.c.step()  # activate; the helper never writes anything
+    w.now += ota.ACTIVATE_DEADLINE_S + 1
+    await w.c.step()
+    assert "recover" in w.verbs()
+    assert w.http.reports[0]["stage"] == "activate" and w.http.reports[0]["error"] == "lost"
+
+
+async def test_helper_raising_on_activate_does_not_wedge(tmp_path):
+    class Boom(Helper):
+        async def __call__(self, args):
+            if args[0] == "activate":
+                raise OSError("exec")
+            return await super().__call__(args)
+    w = World(tmp_path, helper=Boom())
+    await w.c.step()
+    assert w.http.reports[-1]["result"] == "failed" and "activating" not in w.c.data
+
+
+async def test_an_unexpected_stage_error_is_reported_once_and_backs_off(tmp_path):
+    class Boom(Helper):
+        async def __call__(self, args):
+            if args[0] == "stage":
+                raise OSError("exec")
+            return await super().__call__(args)
+    w = World(tmp_path, helper=Boom())
+    await w.c.step()
+    assert [r["stage"] for r in w.http.reports] == ["stage"]
+    w.now += RETRY_DELAYS_S[0] - 1
+    await w.c.step()
+    assert [c[0] for c in w.http.calls].count("download") == 1
+
+
+async def test_pending_ring_comes_back_after_a_rollback_while_the_retry_waits(tmp_path):
+    w = World(tmp_path)
+    await w.c.step()
+    w.helper_result(tag="v0.3.0", state="rolled_back", stage="health", at=w.now + 1)
+    w.c = _restart(w)
+    await w.c.startup()
+    w.program.st["update_pendente"] = False  # the rollback restarted the program
+    w.http.offer = {"tag": None, "reason": "retry_later", "auto_install": True, "install_requested": False}
+    await w.c.step()
+    assert w.program.commands[-1] == {"acao": "update_pending", "ligado": True}
+
+
+async def test_a_manual_install_with_nothing_to_install_does_not_arm_a_later_release(tmp_path):
+    w = World(tmp_path, program=Program({**IDLE, "timers": [{"nome": "x"}]}))
+    w.http.offer = {"tag": None, "reason": "up_to_date"}
+    assert w.c.request_install() == {"ok": True}
+    await w.c.step()
+    assert w.http.calls[-1][2]["install"] == "1"
+    w.http.offer = offer("v0.4.0")  # days later, a new release while a timer runs
+    await w.c.step()
+    offers = [c for c in w.http.calls if c[0] == "offer"]
+    assert "install" not in offers[-1][2] and "activate" not in w.verbs()
+
+
+async def test_back_mid_activation_shows_the_install(tmp_path):
+    w = World(tmp_path)
+    await w.c.step()
+    w.helper_result(tag="v0.3.0", state="activating", at=w.now + 1)
+    w.program.commands.clear()
+    w.c = _restart(w)
+    await w.c.startup()
+    assert w.c.in_progress and w.program.commands == [{"acao": "ring", "state": "updating"}]
+
+
+async def test_an_old_program_is_asked_update_pending_once(tmp_path):
+    class Old(Program):
+        async def command(self, body):
+            self.commands.append(body)
+            raise RuntimeError("400")
+    st = {k: v for k, v in IDLE.items() if k != "update_pendente"}
+    w = World(tmp_path, Http(offer(auto_install=False)), Old(st))
+    await w.c.step()
+    await w.c.step()
+    assert w.program.commands.count({"acao": "update_pending", "ligado": True}) == 1
 
 
 def test_package_manifest_contract():

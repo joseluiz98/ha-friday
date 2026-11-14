@@ -39,6 +39,8 @@ def add_routes(app: web.Application, orch, status_token: Callable[[], str]) -> N
         except ValueError:
             proto = 1
         installed = q.get("installed") or None
+        if q.get("install") == "1":  # the satellite's own Install button: same as HA's (attempts zeroed, now)
+            await asyncio.to_thread(orch.install, q["sat_id"])
         data = await asyncio.to_thread(orch.offer, q["sat_id"], q.get("channel", "stable"),
                                        installed if installed and TAG.match(installed) else None, proto,
                                        q.get("lock_sha256", ""))

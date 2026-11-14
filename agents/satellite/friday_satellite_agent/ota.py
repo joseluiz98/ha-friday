@@ -21,11 +21,14 @@ import json
 import logging
 import os
 import re
+import shutil
+import tarfile
+import tempfile
 import time
 from typing import Awaitable, Callable
 
 from friday_agent_core.ota import retry
-from friday_agent_core.ota.constants import HEAVY_IDLE_S, POLL_SATELLITE_S, UPDATE_PROTOCOL
+from friday_agent_core.ota.constants import HEALTH_TIMEOUT_S, HEAVY_IDLE_S, POLL_SATELLITE_S, UPDATE_PROTOCOL
 
 LOG = logging.getLogger("friday_satellite_agent.ota")
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
@@ -40,6 +43,8 @@ TOKEN_FILE = "/etc/friday-satelite/ota_token"
 CURRENT = "/opt/friday/current"
 HELPER = "/usr/local/sbin/friday-ota-apply"
 HELPER_CMD = ["sudo", "-n", HELPER]
+ACTIVATE_DEADLINE_S = HEALTH_TIMEOUT_S + 600  # no result by then: recover, and report it lost
+ACTIVATING_POLL_S = 15
 _REFUSED = re.compile(r"refused at (\S+): (.*)$")
 
 
@@ -167,11 +172,19 @@ class OtaClient:
         self.helper_path, self._sudo = helper_path, sudo or _sudo
         self._on_change = on_change
         self.data = _read_json(state_path)
-        self.manual = False  # `ota_install` from HA, until the next install attempt
+        if isinstance(self.data.get("activating"), str):  # written by an earlier agent
+            self.data["activating"] = {"tag": self.data["activating"], "at": 0}
+        if isinstance(self.data.get("unsent"), dict):
+            self.data["unsent"] = [self.data["unsent"]]
+        # `ota_install` from HA: asked once to the VM (`install=1`, which also zeroes its attempts), then bound to the
+        # tag the VM offers for it; never to a release that shows up later
+        self.manual_asked = False
+        self.manual_tag: str | None = None
         self.idle_since: float | None = None  # heavy updates: start of the current continuous idle stretch
         self._idle_mark = None  # the program's `ultima_abertura` when idle_since was set
-        self.latest: str | None = self.data.get("staged")
-        self.in_progress = False
+        self.latest: str | None = self.data.get("latest") or self.data.get("staged")
+        self.in_progress = bool(self.data.get("activating"))
+        self._no_pending_cmd: str | None = None  # the installed tag whose program refused `update_pending`
         self._wake = asyncio.Event()
 
     # ---------------------------------------------------------------- settings
@@ -214,7 +227,9 @@ class OtaClient:
     def request_install(self) -> dict:
         if not self.has_credentials():
             return {"ok": False, "error": "no_credentials"}
-        self.manual = True
+        if self.data.get("activating"):
+            return {"ok": False, "error": "in_progress"}
+        self.manual_asked, self.manual_tag = True, None
         self.kick()
         return {"ok": True}
 
@@ -252,60 +267,100 @@ class OtaClient:
             except Exception as err:  # noqa: BLE001 - HA being away never stops the OTA
                 LOG.warning("OTA state push failed: %s", type(err).__name__)
 
-    async def _ring(self, body: dict) -> None:
+    def _set_latest(self, tag: str | None) -> bool:
+        if self.latest == tag:
+            return False
+        self.latest = tag
+        self.data["latest"] = tag
+        self._save()
+        return True
+
+    async def _ring(self, body: dict) -> bool:
         try:
             await self.program.command(body)
+            return True
         except Exception as err:  # noqa: BLE001 - the program may be restarting
             LOG.warning("OTA ring %s failed: %s", body, type(err).__name__)
-
-    async def _pending(self, on: bool, status: dict | None) -> None:
-        """The ring's `update_pending` lives in the program's memory: re-sent whenever /status disagrees."""
-        if status is not None and bool(status.get("update_pendente")) == on:
-            return
-        await self._ring({"acao": "update_pending", "ligado": on})
-
-    # ---------------------------------------------------------------- reports
-    async def _report(self, tag: str, result: str, stage: str = "", error: str = "") -> bool:
-        s = self.settings()
-        body = {"sat_id": self.sat_id, "tag": tag, "result": result, "stage": stage, "error": error[:200],
-                "protocol": UPDATE_PROTOCOL}
-        try:
-            await self.http.post_json(s["url"] + "/v1/ota/report", body, self.token())
-            return True
-        except Exception as err:  # noqa: BLE001 - kept and re-sent on the next poll
-            LOG.warning("OTA report %s %s failed: %s", tag, result, type(err).__name__)
-            self.data["unsent"] = body
-            self._save()
             return False
 
-    async def _flush_unsent(self) -> None:
-        body = self.data.get("unsent")
-        if isinstance(body, dict) and await self._report(body["tag"], body["result"], body.get("stage", ""),
-                                                         body.get("error", "")):
+    async def _pending(self, on: bool, status: dict | None) -> None:
+        """The ring's `update_pending` lives in the program's memory: re-sent whenever /status disagrees. A program
+        older than the OTA has no such command (nor the key): asked once per installed release, then left alone."""
+        tag_now, _ = installed(self.current)
+        if self._no_pending_cmd == (tag_now or ""):
+            return
+        if status is not None and "update_pendente" in status and bool(status["update_pendente"]) == on:
+            return
+        if not await self._ring({"acao": "update_pending", "ligado": on}) and status is not None \
+                and "update_pendente" not in status:
+            self._no_pending_cmd = tag_now or ""
+
+    async def _ring_off_if_idle(self) -> None:
+        """Only when nothing else owns the ring: `off` over a live conversation would blank its light."""
+        st = await self._status(music=False)
+        if st is not None and st.get("estado") == "parada":
+            await self._ring({"acao": "ring", "state": "off"})
+
+    # ---------------------------------------------------------------- reports (a queue: none is lost or replaced)
+    def _queue(self, tag: str, result: str, stage: str = "", error: str = "") -> None:
+        self.data.setdefault("unsent", []).append(
+            {"sat_id": self.sat_id, "tag": tag, "result": result, "stage": stage[:200], "error": error[:200],
+             "protocol": UPDATE_PROTOCOL})
+
+    async def _flush(self) -> None:
+        q = self.data.get("unsent") or []
+        s = self.settings()
+        while q:
+            try:
+                await self.http.post_json(s["url"] + "/v1/ota/report", q[0], self.token())
+            except Exception as err:  # noqa: BLE001 - kept and re-sent on the next poll
+                LOG.warning("OTA report %s %s failed: %s", q[0].get("tag"), q[0].get("result"), type(err).__name__)
+                break
+            q.pop(0)
+            self._save()
+        if not q:
             self.data.pop("unsent", None)
             self._save()
 
+    def _activating(self) -> dict | None:
+        a = self.data.get("activating")
+        return a if isinstance(a, dict) and a.get("tag") else None
+
     async def report_activation(self) -> None:
-        """The agent's start: report what the helper left for the activation this agent started."""
-        tag = self.data.get("activating")
-        if not tag:
+        """Report what the helper left for the activation this agent started (only a result written after it)."""
+        a = self._activating()
+        if not a:
             return
         res = _read_json(self.result_path)
-        if res.get("tag") != tag or res.get("state") not in ("installed", "rolled_back", "failed"):
-            return  # still activating (or the helper never got to write): next poll
-        result = res["state"]
+        fresh = res.get("tag") == a["tag"] and float(res.get("at") or 0) >= float(a.get("at") or 0) - 5
+        final = fresh and res.get("state") in ("installed", "rolled_back", "failed")
+        if not final and self._clock() - float(a.get("at") or 0) > ACTIVATE_DEADLINE_S:
+            if os.path.exists(self.helper_path):
+                await self._helper(["recover"])  # a cut activation goes back; then its result is read
+                res = _read_json(self.result_path)
+                fresh = res.get("tag") == a["tag"] and float(res.get("at") or 0) >= float(a.get("at") or 0) - 5
+                final = fresh and res.get("state") in ("installed", "rolled_back", "failed")
+            if not final and not (fresh and res.get("state") == "activating"):
+                res, final = {"state": "failed", "stage": "activate", "error": "lost"}, True
+        if not final:
+            return  # still activating: next poll
+        tag, result = a["tag"], res["state"]
+        stage, error = str(res.get("stage") or ""), str(res.get("error") or "")
         self.data.pop("activating", None)
         if result == "installed":
             self.data.pop("attempts", None)
             self.data.pop("staged", None)
         else:
-            self._fail_local(tag, res.get("stage") or "activate", res.get("error") or "")
+            self._fail_local(tag, stage or "activate", error)
+            if stage == "args":  # e.g. the release folder vanished: stage it again next time
+                self.data.pop("staged", None)
+        self._queue(tag, result, stage, error)  # saved together with the pop: a crash in between loses nothing
         self._save()
         self.in_progress = False
-        await self._report(tag, result, res.get("stage") or "", res.get("error") or "")
-        await self._ring({"acao": "ring", "state": "off"})  # a failure before the switch never restarted the program
+        await self._flush()
+        await self._ring_off_if_idle()  # a failure before the switch never restarted the program
         if result == "installed":
-            self.latest = None
+            self._set_latest(None)
             await self._pending(False, None)
             rc, _ = await self._helper(["prune"])
             if rc != 0:
@@ -321,9 +376,11 @@ class OtaClient:
 
     async def _failed(self, tag: str, f: Failure) -> None:
         LOG.warning("OTA %s failed at %s: %s", tag, f.stage, f.error)
+        self.manual_tag = None
         self._fail_local(tag, f.stage, f.error)
+        self._queue(tag, "failed", f.stage, f.error)
         self._save()
-        await self._report(tag, "failed", f.stage, f.error)
+        await self._flush()
 
     # ---------------------------------------------------------------- the step
     async def _status(self, music: bool) -> dict | None:
@@ -352,7 +409,6 @@ class OtaClient:
     async def _download(self, offer: dict) -> tuple[str, str | None]:
         url, token = self.settings()["url"], self.token()
         tag = offer["tag"]
-        os.makedirs(self.downloads, exist_ok=True)
         pkg = os.path.join(self.downloads, f"{tag}-satellite.tar.gz")
         try:
             got = await self.http.download(url + offer["url"], token, pkg)
@@ -369,8 +425,10 @@ class OtaClient:
             try:
                 await self.http.download(url + offer["wheels_url"], token, wheels)
             except Failure:
+                _rm(pkg)
                 raise
             except Exception as err:  # noqa: BLE001
+                _rm(pkg)
                 raise Failure("download", type(err).__name__) from None
         return pkg, wheels
 
@@ -389,8 +447,6 @@ class OtaClient:
     async def _install_helper(self, pkg: str) -> None:
         if os.path.exists(self.helper_path):
             return
-        import tarfile
-        import tempfile
         tmp = tempfile.mkdtemp(prefix="friday-ota-helper-")
         try:
             try:
@@ -403,7 +459,6 @@ class OtaClient:
             if rc != 0:
                 raise Failure("prepare", "helper install")
         finally:
-            import shutil
             shutil.rmtree(tmp, ignore_errors=True)
 
     async def _stage(self, offer: dict) -> None:
@@ -417,49 +472,66 @@ class OtaClient:
             if wheels:
                 _rm(wheels)
         if rc != 0:
-            m = next((_REFUSED.search(line) for line in reversed(out.splitlines()) if _REFUSED.search(line)), None)
-            raise Failure(m.group(1), m.group(2)) if m else Failure("stage", f"exit {rc}")
+            raise _refusal(out, "stage", rc)
         self.data.update(staged=offer["tag"], staged_sha256=offer["sha256"])
         self._save()
+
+    async def _keep_pending(self, tag_now: str | None) -> None:
+        """Found (or downloaded) and not installed — waiting for a retry, exhausted, held by the VM: the ring says so."""
+        if self.latest and self.latest != tag_now:
+            await self._pending(True, await self._status(music=False))
 
     async def step(self) -> None:
         if not self.has_credentials():
             return
         await self.report_activation()
-        await self._flush_unsent()
-        if self.data.get("activating"):
+        await self._flush()
+        if self._activating():
             return  # an activation still running (detached helper): never two at once
         s = self.settings()
         tag_now, lock = installed(self.current)
         params = {"sat_id": self.sat_id, "channel": s["channel"], "installed": tag_now or "",
                   "protocol": str(UPDATE_PROTOCOL), "lock_sha256": lock}
+        asked = self.manual_asked
+        if asked:
+            params["install"] = "1"  # the VM zeroes its attempts and offers the target to install now
         try:
             offer = await self.http.get_json(s["url"] + "/v1/ota/offer", params, self.token())
         except Exception as err:  # noqa: BLE001 - the VM may be down: try again next poll
             LOG.info("OTA offer unavailable: %s", type(err).__name__)
             return
+        self.manual_asked = False
         tag = offer.get("tag") if isinstance(offer, dict) else None
         if not isinstance(tag, str) or not TAG.match(tag):
-            if self.latest and self.latest != tag_now and offer.get("reason") in ("up_to_date", "newer_installed"):
-                self.latest = None
-                await self._pending(False, None)
-                await self._changed()
+            self.manual_tag = None
+            if offer.get("reason") in ("up_to_date", "newer_installed") if isinstance(offer, dict) else False:
+                if self._set_latest(None):
+                    await self._pending(False, None)
+                    await self._changed()
+            else:
+                await self._keep_pending(tag_now)
             return
-        manual = self.manual or bool(offer.get("install_requested"))
+        if asked:
+            self.manual_tag = tag
+        manual = self.manual_tag == tag or bool(offer.get("install_requested"))
         now = self._clock()
-        if not manual and not retry.may_try(self._attempts(), tag, now):
-            return
-        if self.latest != tag:
-            self.latest = tag
+        if self._set_latest(tag):
             await self._changed()
+        if not manual and not retry.may_try(self._attempts(), tag, now):
+            await self._keep_pending(tag_now)
+            return
         if not (self.data.get("staged") == tag and self.data.get("staged_sha256") == offer.get("sha256")):
             if not SHA256.match(str(offer.get("sha256") or "")) or not str(offer.get("url", "")).startswith("/"):
                 return
             try:
                 await self._stage(offer)
             except Failure as f:
-                self.manual = False
                 await self._failed(tag, f)
+                await self._keep_pending(tag_now)
+                return
+            except Exception as err:  # noqa: BLE001 - recorded like any failure: never a download every poll
+                await self._failed(tag, Failure("stage", type(err).__name__))
+                await self._keep_pending(tag_now)
                 return
         st = await self._status(music=True)
         if manual:
@@ -476,22 +548,27 @@ class OtaClient:
         await self._activate(tag)
 
     async def _activate(self, tag: str) -> None:
-        self.manual = False
+        self.manual_tag = None
         self.idle_since = None
         self.in_progress = True
         await self._changed()
         await self._ring({"acao": "ring", "state": "updating"})
-        self.data["activating"] = tag
+        self.data["activating"] = {"tag": tag, "at": self._clock()}
         self._save()
-        rc, out = await self._helper(["activate", tag])
+        try:
+            rc, out = await self._helper(["activate", tag])
+        except Exception as err:  # noqa: BLE001
+            rc, out = 2, f"friday-ota-apply: refused at activate: {type(err).__name__}"
         if rc != 0:  # refused before detaching: nothing switched
             self.data.pop("activating", None)
             self.in_progress = False
-            m = next((_REFUSED.search(line) for line in reversed(out.splitlines()) if _REFUSED.search(line)), None)
-            await self._ring({"acao": "ring", "state": "off"})
-            await self._failed(tag, Failure(m.group(1), m.group(2)) if m else Failure("activate", f"exit {rc}"))
+            f = _refusal(out, "activate", rc)
+            if f.stage == "args":
+                self.data.pop("staged", None)
+            await self._ring_off_if_idle()
+            await self._failed(tag, f)
             await self._changed()
-        # rc 0: the helper runs detached and will restart this agent; the next start reports
+        # rc 0: the helper runs detached and restarts this agent on a switch; the result is read at start or soon
 
     # ---------------------------------------------------------------- start + loop
     async def startup(self) -> None:
@@ -502,6 +579,9 @@ class OtaClient:
                 LOG.warning("OTA recover failed")
         if self.has_credentials():
             await self.report_activation()
+        if self._activating():  # back mid-activation (the health check runs): HA and the ring show the install
+            await self._ring({"acao": "ring", "state": "updating"})
+            await self._changed()
 
     async def run(self) -> None:
         await self.startup()
@@ -511,10 +591,15 @@ class OtaClient:
             except Exception as err:  # noqa: BLE001 - the loop never dies
                 LOG.warning("OTA step failed: %s", type(err).__name__)
             self._wake.clear()
-            try:
-                await asyncio.wait_for(self._wake.wait(), POLL_SATELLITE_S)
+            try:  # an activation in flight is checked often: a failure before the switch shows up in seconds
+                await asyncio.wait_for(self._wake.wait(), ACTIVATING_POLL_S if self._activating() else POLL_SATELLITE_S)
             except asyncio.TimeoutError:
                 pass
+
+
+def _refusal(out: str, default_stage: str, rc: int) -> Failure:
+    m = next((m for m in (_REFUSED.search(line) for line in reversed(out.splitlines())) if m), None)
+    return Failure(m.group(1), m.group(2)) if m else Failure(default_stage, f"exit {rc}")
 
 
 async def _sudo(argv: list[str]) -> int:

@@ -104,11 +104,6 @@ class TestSemPalavrasFn(unittest.IsolatedAsyncioTestCase):
         finally:
             await cli.close()
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestStatusMusica(unittest.IsolatedAsyncioTestCase):
     """OTA (spec 2026-11-10 §6.7): `musica` só quando pedida (o sendspin-cli é um subprocesso na Pi)."""
 
@@ -129,3 +124,7 @@ class TestStatusMusica(unittest.IsolatedAsyncioTestCase):
             self.assertIs((await (await cli.get("/status?musica=1", headers=h)).json())["musica"], True)
         finally:
             await cli.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
