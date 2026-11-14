@@ -99,7 +99,7 @@ def make_handlers(orch, kick: Callable[[bool], None]):
         return {"ok": True}
 
     async def install(cmd: dict) -> dict:
-        if args(cmd).get("component") == "server":
+        if args(cmd).get("component") == "server" or args(cmd).get("key") == "ota_server":  # key: the update entity
             await asyncio.to_thread(orch.install_server)
             kick(False)
             return {"ok": True}

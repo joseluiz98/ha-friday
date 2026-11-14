@@ -458,6 +458,16 @@ class Orchestrator:
             self.store.data["auto_install"] = bool(enabled)
             self.store.save()
 
+    def server_entity(self) -> dict:
+        """State of the server's `update` entity (integration `update` platform, plan Task 17)."""
+        with self.store.lock:
+            so = self.store.data["server_ota"]
+            channel = ch.server_channel([d["channel"] for d in self.store.data["devices"].values()])
+            installed = so.get("installed_tag")
+            latest = self.target(channel) or installed
+            return {"installed": installed, "latest": latest, "in_progress": bool((so.get("run") or {}).get("stage")),
+                    "title": "F.R.I.D.A.Y. server", "release_url": None, "summary": None}
+
     def status(self) -> dict:
         with self.store.lock:
             devices = {s: {k: d.get(k) for k in ("channel", "installed", "install_requested", "last_seen",

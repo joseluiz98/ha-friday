@@ -142,3 +142,29 @@ async def test_install_flag_with_nothing_to_install_does_not_latch(tmp_path, aio
     r = await c.get(f"/v1/ota/offer?sat_id={SAT}&channel=stable&installed=v0.3.0&install=1", headers=h)
     assert (await r.json())["tag"] is None
     assert w.store.device(SAT)["install_requested"] is False
+
+
+async def test_server_update_entity_and_its_install_key(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    e = w.orch.server_entity()
+    assert e["latest"] == "v0.3.0" and e["in_progress"] is False and e["title"] == "F.R.I.D.A.Y. server"
+    h = oh.make_handlers(w.orch, kick=lambda full: None)
+    assert (await h["ota_install"]({"key": "ota_server"}))["ok"]
+    assert w.store.data["server_ota"]["install_requested"] is True
+
+
+async def test_loop_pushes_state_after_each_poll():
+    import asyncio
+    from friday_server_agent.ota import loop as ol
+    pushed = []
+    k = ol.Kick()
+
+    async def after():
+        pushed.append(1)
+        raise asyncio.CancelledError
+    try:
+        await ol.run(lambda full: None, k, 0.01, after=after)
+    except asyncio.CancelledError:
+        pass
+    assert pushed == [1]

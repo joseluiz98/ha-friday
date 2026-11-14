@@ -176,6 +176,13 @@ async def main() -> None:
                                otagh.GitHubWatcher(os.environ.get("FRIDAY_OTA_REPO", "joseluiz98/ha-friday")),
                                ota_repo, vault, notifier, installer=installer, images=otaimg.ImageBuilder())
     state["ota_auto_install"] = ota_store.auto_install
+    state["ota_server"] = orch.server_entity()
+
+    async def ota_state_push() -> None:
+        value = await asyncio.to_thread(orch.server_entity)
+        if state.get("ota_server") != value:
+            state["ota_server"] = value
+            await core.push_state({"ota_server": value}, "agent")
     ota_kick = otaloop.Kick()
     kick = ota_kick.kick
 
@@ -252,7 +259,7 @@ async def main() -> None:
 
     tasks.append(pending_loop())
 
-    tasks.append(otaloop.run(orch.poll, ota_kick, POLL_GITHUB_S))
+    tasks.append(otaloop.run(orch.poll, ota_kick, POLL_GITHUB_S, after=ota_state_push))
 
     async def idle_loop():  # continuous idle for heavy server updates (HEAVY_IDLE_S)
         while True:

@@ -191,4 +191,5 @@ def capabilities(proxmox: bool) -> list[dict]:
         reminders.DESCRIPTOR,
         s("ota_auto_install", "Automatic updates", platform="switch", category="config", icon="mdi:update"),
         s("ota_check_now", "Check for updates", platform="button", category="config", icon="mdi:cloud-refresh"),
+        s("ota_server", "Server software", platform="update"),
     ]

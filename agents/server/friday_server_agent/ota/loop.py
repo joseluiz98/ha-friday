@@ -34,7 +34,8 @@ class Kick:
             pass
 
 
-async def run(poll: Callable[[bool], object], kick: Kick, period: float) -> None:
+async def run(poll: Callable[[bool], object], kick: Kick, period: float, after=None) -> None:
+    """`after` (async, optional) runs after every poll: the agent pushes the OTA state to HA there."""
     while True:
         full = kick.take()
         try:
@@ -43,4 +44,11 @@ async def run(poll: Callable[[bool], object], kick: Kick, period: float) -> None
             raise
         except Exception as err:  # noqa: BLE001 - the loop outlives any one bad poll
             LOG.warning("OTA cycle failed: %s", type(err).__name__)
+        if after is not None:
+            try:
+                await after()
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                LOG.warning("OTA state push failed: %s", type(err).__name__)
         await kick.wait(period)
