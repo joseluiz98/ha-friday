@@ -32,3 +32,15 @@ def test_push_window():
     assert r.push_at(ts(23, 15), SP) == ts(7, 30, d=11)
     assert r.push_at(ts(3, 0), SP) == ts(7, 30)
     assert r.push_at(ts(22, 0), SP) == ts(7, 30, d=11)
+
+
+def test_rehearsal_overrides_by_environment():
+    import subprocess
+    import sys
+    code = ("from friday_agent_core.ota import constants as c; print(c.SOAK_S, c.RETRY_DELAYS_S)")
+    env = {"PYTHONPATH": "agents/common", "FRIDAY_OTA_SOAK_S": "300", "FRIDAY_OTA_RETRY_DELAYS": "60,120"}
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True).stdout.strip()
+    assert out == "300 (60, 120)"
+    env = {"PYTHONPATH": "agents/common", "FRIDAY_OTA_RETRY_DELAYS": "x,-1"}
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True).stdout.strip()
+    assert out == "172800 (900, 3600, 21600, 86400)"
