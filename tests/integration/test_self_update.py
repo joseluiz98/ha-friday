@@ -104,6 +104,11 @@ async def test_hacs_not_ready_is_tried_again(hass, installs, monkeypatch):
     ent = _hacs_entity(hass, state="unavailable")
     later = []
     monkeypatch.setattr(self_update, "async_call_later", lambda h, s, fn: later.append(fn))
+
+    async def _installed(_hass, _domain):  # the test must not depend on the version in this tree's manifest.json
+        return SimpleNamespace(version="0.2.1")
+
+    monkeypatch.setattr(self_update, "async_get_integration", _installed)
     conn = SimpleNamespace(state={"ota_integration_target": "v0.3.0"})
     assert await self_update.run(hass, conn) == "no_hacs_entity" and len(later) == 1
     hass.states.async_set(ent.entity_id, "off", {"installed_version": "v0.2.1"})

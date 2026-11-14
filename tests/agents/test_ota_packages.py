@@ -174,6 +174,7 @@ def test_vm_repo_manifest_absent_is_none(tmp_path):
 
 
 def test_bundle_update_serves_the_built_package(src, tmp_path, monkeypatch):
+    monkeypatch.setenv("FRIDAY_BUNDLES_DIR", str(tmp_path / "bundles"))
     archive, asked, tmp = src
     info = pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(tmp / "pkg"))
     n = len(asked)
@@ -212,6 +213,7 @@ def test_manifest_git_error_is_not_an_old_release(tmp_path):
 def test_fallback_bundle_writes_version_line_verbatim(tmp_path, monkeypatch):
     cfg = tmp_path / "haos"
     archive, _ = _make_sources(cfg, monkeypatch)  # FRIDAY_RELEASE_REF=v9.9.9 (a bare ref)
+    monkeypatch.setenv("FRIDAY_BUNDLES_DIR", str(tmp_path / "bundles"))
     store = pv.BundleStore(archive=archive)
     token = store.prepare("update", "sat-abc123")["url"].rsplit("/", 1)[1]
     with tarfile.open(fileobj=io.BytesIO(store.take(token))) as t:
