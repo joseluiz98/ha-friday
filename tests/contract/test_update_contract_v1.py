@@ -109,3 +109,23 @@ async def test_offer_request_query_keys(tmp_path):
     for key in list(frozen["query"]) + list(frozen["optional_query"]):
         assert key in pressed, broken(key)
     assert pressed["install"] == frozen["optional_query"]["install"]
+
+
+def test_the_real_package_carries_the_frozen_manifest(tmp_path, monkeypatch):
+    """The producer, not just the reader: the manifest.json the server packs has every frozen key, of the same type,
+    and the satellite's reader accepts it."""
+    import tarfile
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agents" / "server"))
+    from friday_server_agent import provisioning as pv
+    from friday_server_agent.ota import packages as pk
+    from tests.agents.test_ota_packages import _extra_tree
+    from tests.agents.test_server_provisioning import _make_sources
+    archive, _ = _make_sources(tmp_path / "haos", monkeypatch)
+    _extra_tree(tmp_path / "haos")
+    info = pk.build_satellite(archive, "v9.9.9", "0" * 40, pv._vault(), str(tmp_path / "pkg"))
+    with tarfile.open(info["path"]) as t:
+        produced = json.load(t.extractfile("manifest.json"))
+    for key, value in load("package_manifest.json").items():
+        assert key in produced, broken(key)
+        assert type(produced[key]) is type(value), f"{broken(key)} (type {type(produced[key]).__name__})"
+    parse_package_manifest(produced)
