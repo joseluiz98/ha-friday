@@ -13,7 +13,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import slugify
 
 from .connection import FridayConnection
-from . import provisioning
+from . import image_view, provisioning, self_update
 from .recordings import RecordingView
 from .services import async_register_services
 from .const import (
@@ -43,6 +43,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Register the integration's services (once, whatever the entries)."""
     async_register_services(hass)
     hass.http.register_view(RecordingView())
+    hass.http.register_view(image_view.FridayImageView())
+    hass.http.register_view(image_view.FridayImageListView())
     await _async_register_card(hass)
     return True
 
@@ -63,7 +65,8 @@ async def _async_register_card(hass: HomeAssistant) -> None:
         [StaticPathConfig(CARD_URL, str(Path(__file__).parent / "frontend"), False)])
     if "frontend_extra_module_url" not in hass.data:
         return  # frontend not loaded (e.g. headless): the card is simply unavailable
-    add_extra_js_url(hass, f"{CARD_URL}/friday-activations-card.js?v={version}")
+    for card in ("friday-activations-card", "friday-ota-card"):
+        add_extra_js_url(hass, f"{CARD_URL}/{card}.js?v={version}")
 
 
 LEGACY_TITLE_PREFIX = "F.R.I.D.A.Y. "
@@ -127,6 +130,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
         entry.async_on_unload(connection.add_availability_listener(_late_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_server_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_ota_credentials_listener(hass, entry, connection)))
+        for unsub in self_update.watch(hass, connection):
+            entry.async_on_unload(unsub)
         entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
         sub = entry.subentries[subentry_id]
         if sub.data.get("provisioned") is False:

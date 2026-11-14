@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.util import dt as dt_util
 
-from . import reminders, room_climate
+from . import image_view, reminders, room_climate
 from .entity import FridayEntity, setup_platform
 
 
@@ -38,3 +38,12 @@ class FridaySensor(FridayEntity, SensorEntity):
         if parsed is None:
             return None
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt_util.UTC)
+
+    @property
+    def extra_state_attributes(self):
+        """The server's provisioning image gets the link of its download (the file list comes from the agent)."""
+        attrs = super().extra_state_attributes
+        if self.descriptor.key != "image_latest":
+            return attrs
+        files = (attrs or {}).get("files")
+        return {**(attrs or {}), "download_url": image_view.download_url(files) if isinstance(files, list) else None}

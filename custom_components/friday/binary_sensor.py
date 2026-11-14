@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 
+from . import self_update
 from .entity import FridayEntity, setup_platform
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    setup_platform(hass, entry, async_add_entities, "binary_sensor", FridayBinarySensor)
+    setup_platform(hass, entry, async_add_entities, "binary_sensor", FridayBinarySensor,
+                   extra=self_update.server_entities)
 
 
 class FridayBinarySensor(FridayEntity, BinarySensorEntity):
