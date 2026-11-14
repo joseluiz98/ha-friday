@@ -943,7 +943,7 @@ async def principal():
     threading.Thread(target=s.teclas, daemon=True).start()
     threading.Thread(target=s.duck_laco, daemon=True).start()
     await porta_local.iniciar(CFG, s.estado_publico, s.ao_mudar_config, s.cfg["porta_local"], s.campainha,
-                             palavras_fn=s.palavras_carregadas, comando_fn=s.comando_porta)
+                             palavras_fn=s.palavras_carregadas, comando_fn=s.comando_porta, musica_fn=s._musica_agora)
     print(json.dumps({"iniciado": s.sid}), flush=True)
     s.carregar_timers()
     while not morreu.is_set():

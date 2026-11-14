@@ -469,3 +469,12 @@ def test_agent_apply_helper_installs_and_refuses_outside_staging(tmp_path):
     bad = bundles / "stage-bad" / "agent"
     bad.mkdir(parents=True)
     assert _run_helper(bad, dest, bundles).returncode == 3
+
+
+async def test_provision_info_reports_release_and_ota_credentials(env):
+    p, *_ = make(env)
+    d = (await p.info())["data"]
+    assert d["versions"]["release"] is None and d["ota_credentials"] is False  # old layout, no credential yet
+    p._release, p._ota_credentials = (lambda: "v0.3.0"), (lambda: True)
+    d = (await p.info())["data"]
+    assert d["versions"]["release"] == "v0.3.0" and d["ota_credentials"] is True

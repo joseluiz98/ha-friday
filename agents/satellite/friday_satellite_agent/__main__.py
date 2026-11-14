@@ -17,7 +17,7 @@ from . import capabilities as cap
 from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
-from . import local, pairing, provision, recordings, server_watch
+from . import local, ota, pairing, provision, recordings, server_watch
 from . import room_sensors
 from . import wifi
 from .announce import Keeper, lan_ip as _lan_ip
@@ -111,11 +111,20 @@ async def main() -> None:
     async def apply_agent(stage: str) -> int:
         return await power_mod.run_command(APPLY_AGENT + [stage])
 
+    async def ota_changed() -> None:
+        changes = updater.entity_state()
+        memo["state"].update(changes)
+        await core.push_state(changes, "agent")
+
+    updater = ota.OtaClient(sat_id, program, on_change=ota_changed)
+    memo["state"].update(updater.entity_state())
+
     prov = provision.Provisioner(
         etc_dir=ETC_DIR, config_path=CONFIG, ssh_dir=os.path.expanduser("~/.ssh"), program_dir=PROGRAM_DIR,
         bundles_dir=BUNDLES, voices_dir=os.path.expanduser("~/vozes"), models_dir=os.path.expanduser("~/modelos"),
         program=program, restart_program=power.restart_program, apply_agent=apply_agent,
-        exit_fn=lambda code: _exit(code), ip_fn=lambda: _lan_ip())
+        exit_fn=lambda code: _exit(code), ip_fn=lambda: _lan_ip(), ota_credentials=updater.has_credentials,
+        release=lambda: ota.installed()[0])
 
     def _args(cmd: dict) -> dict:
         return cmd["args"] if isinstance(cmd.get("args"), dict) else cmd
@@ -132,6 +141,15 @@ async def main() -> None:
 
     async def do_factory_reset(cmd: dict) -> dict:
         return await prov.factory_reset(_args(cmd).get("level"))
+
+    async def do_ota_install(cmd: dict) -> dict:
+        return updater.request_install()
+
+    async def do_ota_set_credentials(cmd: dict) -> dict:
+        a = _args(cmd)
+        res = await asyncio.to_thread(updater.set_credentials, a.get("token"), a.get("url"))
+        await ota_changed()
+        return res
 
     async def do_say(cmd: dict) -> dict:
         keys = _args(cmd).get("keys")
@@ -156,7 +174,8 @@ async def main() -> None:
     equalizer = eqmod.Equalizer()
 
     def capabilities() -> list[dict]:
-        return cap.controls_from_config(memo["cfg"] or {}, memo["ww"]) + cap.room_descriptors(room.keys) + equalizer.descriptors()
+        return (cap.controls_from_config(memo["cfg"] or {}, memo["ww"]) + cap.room_descriptors(room.keys)
+                + equalizer.descriptors() + ota.OtaClient.descriptors())
 
     async def room_state(values: dict) -> None:
         memo["state"].update(values)
@@ -188,6 +207,10 @@ async def main() -> None:
     async def do_set(cmd: dict) -> dict:
         if cmd.get("key") == "voice_enabled":
             return await set_voice(bool(cmd.get("value")))
+        if cmd.get("key") == "ota_channel":
+            res = await asyncio.to_thread(updater.set_channel, cmd.get("value"))
+            await ota_changed()
+            return res
         if cmd.get("key") in eqmod.BANDS:
             res = await equalizer.apply({cmd["key"]: cmd.get("value")})
             memo["state"].update(equalizer.state())
@@ -271,7 +294,8 @@ async def main() -> None:
     core = AgentCore(ha_token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi,
                       "provision_info": do_provision_info, "apply_bundle": do_apply_bundle,
                       "start_onboarding": do_start_onboarding, "say": do_say, "factory_reset": do_factory_reset,
-                      "diagnostics": diagmod.make_handler(CONFIG, lambda: dict(memo["state"]))})
+                      "diagnostics": diagmod.make_handler(CONFIG, lambda: dict(memo["state"])),
+                      "ota_install": do_ota_install, "ota_set_credentials": do_ota_set_credentials})
 
     async def timers_watch() -> None:
         """Timers file changed (created/cancelled/finished): refresh at once instead of waiting the poll."""
@@ -373,7 +397,7 @@ async def main() -> None:
     keeper = Keeper(sat_id, PORT, "pairable" if pairable else "paired", zc_box)
     try:
         tasks = [poll(), midnight(), hardware_loop(), room_loop(), timers_watch(),
-                 server_watch.ServerWatch(CONFIG, program).run(), keeper.run()]
+                 server_watch.ServerWatch(CONFIG, program).run(), keeper.run(), updater.run()]
         if pairable:
             tasks.append(speak_code())
         await asyncio.gather(*tasks)

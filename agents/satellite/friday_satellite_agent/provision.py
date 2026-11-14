@@ -157,8 +157,10 @@ class Provisioner:
                  apply_agent: Callable[[str], Awaitable[int]] | None = None,
                  fetch=fetch_to_file, exit_fn=os._exit, ip_fn=lambda: "", loop_sleep=asyncio.sleep,
                  now=time.time, run=run_capture, wipe_paths: list[str] | None = None,
-                 monotonic=time.monotonic) -> None:
+                 monotonic=time.monotonic, ota_credentials: Callable[[], bool] = lambda: False,
+                 release: Callable[[], str | None] = lambda: None) -> None:
         self.etc_dir, self.config_path, self.ssh_dir = etc_dir, config_path, ssh_dir
+        self._ota_credentials, self._release = ota_credentials, release
         self.program_dir, self.bundles_dir = program_dir, bundles_dir
         self.voices_dir, self.models_dir = voices_dir, models_dir
         self.program = program
@@ -194,7 +196,9 @@ class Provisioner:
             "program_password": password,
             "sync_pubkey": _read(os.path.join(self.ssh_dir, "id_satsync.pub")),
             "mic": _read(os.path.join(self.etc_dir, "mic"), "jabra-speak-410"),
-            "versions": {"program": program_version(self.program_dir), "agent": cap.VERSION},
+            "versions": {"program": program_version(self.program_dir), "agent": cap.VERSION,
+                         "release": self._release()},  # the OTA release tag (None on the old layout)
+            "ota_credentials": bool(self._ota_credentials()),
             "ip": ip}}
 
     # ---- apply_bundle
