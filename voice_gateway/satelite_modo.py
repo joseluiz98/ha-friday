@@ -13,9 +13,32 @@ MSG_ENCERRAR = {"evento": "encerrar"}
 # 07/10: informação, não ordem nem frase pronta (regra de autonomia da Friday).
 DESCRICAO_ENCERRAR = (
     "Encerra a conversa no satélite na hora: a sua fala é cortada, o microfone fecha e a conexão termina, "
-    "sem esperar a continuação. Uma resposta do cérebro que ainda viria é descartada. Serve para quando "
+    "sem esperar a continuação. Com um pedido ao cérebro em andamento a conversa não fecha: o satélite espera "
+    "em silêncio, com luz e som, e a resposta é falada quando chegar; um pedido cuja resposta vai pelo Telegram "
+    "(mandar_resposta_pelo_telegram) não segura a conversa. Serve para quando "
     "quem fala pede para parar ou encerrar, e para quando você percebe que o que o microfone capta não é "
     "com você, por exemplo uma conversa entre pessoas na sala.")
+
+# 14/11 (árvore de Natal): o "me manda pelo Telegram" chegou depois da chamada ao cérebro; a voz prometeu o Telegram
+# sem ter como mandar e fechou a conversa, e a resposta ficou só no registro.
+DESCRICAO_RESPOSTA_PELO_TELEGRAM = (
+    "Faz a resposta dos pedidos ao cérebro ainda em andamento nesta conversa ir só pelo Telegram do " + DONO + ", "
+    "inteira, quando chegar, em vez de ser falada aqui; esses pedidos deixam de segurar a conversa no satélite. "
+    "Serve para quando o pedido de receber pelo Telegram vem depois do pedido ao cérebro. Sem pedido em andamento, "
+    "nada muda. Fora desta ferramenta a voz não manda mensagens pelo Telegram.")
+
+
+def resultado_encerrar_com_pendente(n: int) -> dict:
+    return {"fechada": False, "pedidos_em_andamento": int(n),
+            "situacao": ("A conversa continua aberta porque há pedido ao cérebro em andamento: o satélite espera em "
+                         "silêncio, com luz e som, e a resposta será falada quando chegar.")}
+
+
+def resultado_resposta_pelo_telegram(n: int) -> dict:
+    if n <= 0:
+        return {"pedidos_marcados": 0, "erro": "nenhum pedido ao cérebro em andamento nesta conversa"}
+    return {"pedidos_marcados": int(n),
+            "situacao": "a resposta vai pelo Telegram quando chegar; ela ainda não foi enviada"}
 
 
 def origem(body):

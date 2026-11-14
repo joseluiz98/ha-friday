@@ -79,6 +79,16 @@ def linha_avulsa(chave, sessao, alvo, pedido, resposta, erro, agora, whisper=Fal
                   agora, whisper)
 
 
+def linha_telegram(chave, sessao, alvo, pedido, resposta, via, agora, whisper=False):
+    """14/11: resposta do cérebro mandada pelo Telegram a pedido de quem falou (via = retorno de mandar_telegram)."""
+    ok = via != "falhou"
+    r = _linha(chave, sessao, alvo, f"[resposta do cérebro a: {pedido}]", resposta, ok,
+               None if ok else "o Telegram falhou", None, [], None, agora, whisper)
+    if ok:
+        r["deliveredVia"] = "telegram"
+    return r
+
+
 def gravar(registro: dict, pasta: str):
     os.makedirs(pasta, mode=0o700, exist_ok=True)
     caminho = os.path.join(pasta, registro["ts"][:10] + ".ndjson")

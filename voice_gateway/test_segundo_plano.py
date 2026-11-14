@@ -119,5 +119,55 @@ class TestTextos(unittest.TestCase):
         self.assertTrue(t.endswith("(resposta completa no app da Sexta-feira)"))
 
 
+class TestRespostasPeloTelegram(unittest.TestCase):
+    """14/11 (árvore de Natal): "me manda pelo Telegram" veio depois da chamada ao cérebro."""
+
+    def _tarefas(self):
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        aberta, pronta = loop.create_future(), loop.create_future()
+        pronta.set_result("r")
+        return aberta, pronta
+
+    def test_marca_so_as_abertas(self):
+        aberta, pronta = self._tarefas()
+        r = sp.RespostasPeloTelegram()
+        r.acompanhar(aberta)
+        r.acompanhar(pronta)
+        self.assertEqual(r.marcar(), 1)
+        self.assertTrue(r.vai_pelo_telegram(aberta))
+        self.assertFalse(r.vai_pelo_telegram(pronta))
+
+    def test_sem_marca_nada_vai_pelo_telegram(self):
+        aberta, _ = self._tarefas()
+        r = sp.RespostasPeloTelegram()
+        r.acompanhar(aberta)
+        self.assertFalse(r.vai_pelo_telegram(aberta))
+        self.assertEqual(r.segurando(1), 1)
+
+    def test_marcada_nao_segura_a_conversa(self):
+        aberta, _ = self._tarefas()
+        r = sp.RespostasPeloTelegram()
+        r.acompanhar(aberta)
+        r.marcar()
+        self.assertEqual(r.segurando(1), 0)
+        self.assertEqual(r.segurando(2), 1)
+        self.assertEqual(r.segurando(0), 0)
+
+    def test_sem_pedido_marcar_devolve_zero(self):
+        self.assertEqual(sp.RespostasPeloTelegram().marcar(), 0)
+
+
+class TestTextoTelegram(unittest.TestCase):
+    def test_resposta_inteira_sem_markdown(self):
+        t = sp.texto_telegram("pedido x", "**Um:** a `rotina`\n\n2. dois")
+        self.assertEqual(t, "Sobre “pedido x”:\n\nUm: a rotina\n\n2. dois")
+
+    def test_corta_no_limite_do_telegram(self):
+        t = sp.texto_telegram("p", "a" * 5000)
+        self.assertLessEqual(len(t), 3500)
+        self.assertTrue(t.endswith("(resposta completa no app da Sexta-feira)"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -296,6 +296,15 @@ ENCERRAR_FUNCTION = FunctionSchema(
 )
 
 
+# 14/11: só no satélite. O canal pedido depois da chamada ao cérebro (caso da árvore de Natal).
+RESPOSTA_TELEGRAM_FUNCTION = FunctionSchema(
+    name="mandar_resposta_pelo_telegram",
+    description=sm.DESCRICAO_RESPOSTA_PELO_TELEGRAM,
+    properties={},
+    required=[],
+)
+
+
 # 08/10 (Task 12, D11): só no satélite. O estado fica gravado na Pi; a Friday só o informa.
 NAO_PERTURBE_FUNCTION = FunctionSchema(
     name="nao_perturbe",
@@ -671,7 +680,7 @@ async def build_tools(eh_satelite: bool = False, brain_desc: str | None = None, 
     """(ToolsSchema, cliente do MCP ou None, nomes das ferramentas vindas do MCP)."""
     brain = BRAIN_FUNCTION if brain_desc is None else _brain_function(brain_desc)
     standard = [brain] + (
-        [ENCERRAR_FUNCTION, NAO_PERTURBE_FUNCTION, VOLUME_FUNCTION, *TIMER_FUNCTIONS, APRENDIZAGEM_FUNCTION,
+        [ENCERRAR_FUNCTION, RESPOSTA_TELEGRAM_FUNCTION, NAO_PERTURBE_FUNCTION, VOLUME_FUNCTION, *TIMER_FUNCTIONS, APRENDIZAGEM_FUNCTION,
          COMECAR_APRENDIZAGEM_FUNCTION] if eh_satelite else [])
     if apresentacao:
         standard += [DEFINIR_COMODO_FUNCTION]
@@ -1179,12 +1188,23 @@ async def bot(runner_args: RunnerArguments):
         if eh_satelite:
             await worker.queue_frames([RTVIServerMessageFrame(data=dados)])
 
+    pelo_telegram = sp.RespostasPeloTelegram()  # 14/11: respostas que vão só pelo Telegram
+
+    async def responder_pelo_telegram(pedido, resposta):
+        via = await cc.mandar_telegram(sp.texto_telegram(pedido, resposta), telegram_direto, telegram_via_cerebro)
+        logger.info(f"cérebro [{sessao}] resposta pelo Telegram: {via}")
+        GRAVADOR.enviar(rc.linha_telegram(turnos.chave, sessao, satelite_id, pedido, resposta, via,
+                                          datetime.now().timestamp(), whisper=turnos.whisper))
+
     cancelamento = cx.SessionCancel()  # botão vermelho (spec 2026-11-04): cancela o cérebro e as entregas da sessão
 
     async def entregar(tarefa, pedido):
         """Espera a resposta do cérebro e a entrega no primeiro silêncio, ou por push se a conversa acabou."""
         try:
             resposta = await tarefa
+            if pelo_telegram.vai_pelo_telegram(tarefa):  # 14/11: pedido pelo Telegram vale também com não perturbe
+                await responder_pelo_telegram(pedido, resposta)
+                return
             if eh_satelite and nao_perturbe[0]:  # D11: resposta atrasada é fala espontânea — só no registro
                 logger.info(f"cérebro [{sessao}] resposta calada pelo não perturbe")
                 GRAVADOR.enviar(rc.linha_avulsa(turnos.chave, sessao, satelite_id, pedido, resposta,
@@ -1232,7 +1252,7 @@ async def bot(runner_args: RunnerArguments):
     na_janela = [0]
 
     async def avisar_pendentes():
-        await avisar_pi(sm.msg_pendentes(na_janela[0] + estado.pendentes))
+        await avisar_pi(sm.msg_pendentes(pelo_telegram.segurando(na_janela[0] + estado.pendentes)))
 
     def seguir_em_segundo_plano(tarefa, pedido):
         if cancelamento.cancelled:  # cancelado na janela: nada de "segue em segundo plano" nem push depois
@@ -1245,6 +1265,7 @@ async def bot(runner_args: RunnerArguments):
         logger.info(f"cérebro [{sessao}] <- {pedido!r}")
         enviado = pedido + vs.demonstration_block(chamadas)
         tarefa = cancelamento.track(_manter(asyncio.create_task(chamar_cerebro(sm.pedido_com_origem(enviado, satelite_id) if eh_satelite else enviado, sessao))))
+        pelo_telegram.acompanhar(tarefa)
         na_janela[0] += 1
         await avisar_pendentes()
         try:
@@ -1258,6 +1279,13 @@ async def bot(runner_args: RunnerArguments):
                 _manter(asyncio.create_task(avisar_pendentes()))
             raise
         na_janela[0] -= 1
+        if pronta and pelo_telegram.vai_pelo_telegram(tarefa):
+            await responder_pelo_telegram(pedido, resposta)
+            await params.result_callback(
+                {"status": "resposta enviada pelo Telegram", "falada_aqui": False},
+                properties=FunctionCallResultProperties(run_llm=False))
+            await avisar_pendentes()
+            return
         if pronta:
             vigiar_entrega()
             await params.result_callback({"resposta": resposta})
@@ -1346,9 +1374,22 @@ async def bot(runner_args: RunnerArguments):
             llm.register_function("search_skills", search_skills)
 
     async def encerrar_conversa(params: FunctionCallParams):
+        segurando = pelo_telegram.segurando(na_janela[0] + estado.pendentes)
+        if segurando > 0:  # 14/11: a resposta pendente seria perdida; a Pi espera em silêncio e ela é falada
+            logger.info(f"[{sessao}] encerrar_conversa com {segurando} pedido(s) ao cérebro: a conversa espera")
+            await avisar_pendentes()
+            await params.result_callback(sm.resultado_encerrar_com_pendente(segurando),
+                                         properties=FunctionCallResultProperties(run_llm=False))
+            return
         logger.info(f"[{sessao}] encerrar_conversa: a Pi fecha na hora")
         await avisar_pi(sm.MSG_ENCERRAR)
         await params.result_callback({"ok": True}, properties=FunctionCallResultProperties(run_llm=False))
+
+    async def mandar_resposta_pelo_telegram(params: FunctionCallParams):
+        n = pelo_telegram.marcar()
+        logger.info(f"[{sessao}] mandar_resposta_pelo_telegram: {n} pedido(s) marcado(s)")
+        await avisar_pendentes()
+        await params.result_callback(sm.resultado_resposta_pelo_telegram(n))
 
     async def alternar_nao_perturbe(params: FunctionCallParams):
         ligado = bool(params.arguments.get("ligado"))
@@ -1439,6 +1480,8 @@ async def bot(runner_args: RunnerArguments):
 
     if eh_satelite:
         llm.register_function("encerrar_conversa", encerrar_conversa)
+        llm.register_function("mandar_resposta_pelo_telegram", mandar_resposta_pelo_telegram,
+                              cancel_on_interruption=False)
         llm.register_function("nao_perturbe", alternar_nao_perturbe)
         llm.register_function("volume_do_satelite", volume_do_satelite, cancel_on_interruption=False)
         for nome_da_ferramenta in sm.ACAO_DA_FERRAMENTA:
