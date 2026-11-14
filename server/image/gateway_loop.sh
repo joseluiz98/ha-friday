@@ -17,7 +17,7 @@ GW_MARCA_REINICIO="${GW_MARCA_REINICIO:-/srv/friday/state/restarted-in-process}"
 
 # Remendo do pool de threads (spec 2026-10-11-friday-latencia-voz §4.1): antes de cada partida do gateway, a chave
 # input_boolean.friday_cerebro_sempre_quente no HA decide se o pool fica sem fechar threads ociosas.
-GW_DIST="${GW_DIST:-/usr/local/lib/node_modules/openclaw/dist}"
+GW_DIST="${GW_DIST:-/opt/oc/node_modules/openclaw/dist}"
 GW_REMENDO="${GW_REMENDO:-/remendo_pool.sh}"
 GW_CHAVE_URL="${GW_CHAVE_URL:-${FRIDAY_HA_URL:?FRIDAY_HA_URL missing}/api/states/input_boolean.friday_cerebro_sempre_quente}"
 # Estado da última decisão (chave, remendo aplicado ou não, quando): a porta de status lê este arquivo.
