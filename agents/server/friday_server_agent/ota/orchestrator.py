@@ -86,8 +86,19 @@ class Orchestrator:
 
     # ---- reads under the state lock
     def _eligible(self) -> list[ch.Release]:
+        """CI-green releases that know the OTA (have `ota/release.json`). A release older than the OTA is history: it
+        is never a channel target — a satellite sent there could never update itself again, and the frozen bootstrap
+        path would hand a new satellite an agent without the OTA client."""
         with self.store.lock:
-            return ch.eligible([i.release for i in self.store.release_infos().values()])
+            return [r for r in ch.eligible([i.release for i in self.store.release_infos().values()])
+                    if self._ota_aware(r.sha)]
+
+    def _ota_aware(self, sha: str) -> bool:
+        try:
+            return self._manifest(sha) is not None
+        except Exception as err:  # noqa: BLE001 - the VM repo unreadable now: not a target until it reads again
+            LOG.warning("OTA: manifest of %s unreadable: %s", sha[:7], type(err).__name__)
+            return False
 
     def target(self, channel: str) -> str | None:
         with self.store.lock:

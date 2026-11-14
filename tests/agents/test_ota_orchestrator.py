@@ -26,7 +26,8 @@ def man(server_proto=1, requires=1):
 class World:
     def __init__(self, tmp, releases, manifests=None):
         self.releases = {r.release.tag: r for r in releases}
-        self.manifests = manifests or {}
+        # releases of the OTA era unless a test says otherwise ({} = every release is pre-OTA)
+        self.manifests = {r.release.sha: man() for r in releases} if manifests is None else manifests
         self.built, self.pushed, self.now = [], [], 1000.0
         self.repo_calls, self.repo_down, self.build_fails, self.gate = [], False, False, None
         self.store = st.OtaStore(str(tmp / "state.json"), str(tmp / "events.ndjson"))
@@ -337,3 +338,14 @@ def test_token_book_refuses_to_issue_over_a_corrupt_file(tmp_path):
         b.issue(SAT)
     assert (tmp_path / "t.json").read_text() == "{broken"
     assert b.check(SAT, "anything") is False
+
+
+
+def test_a_pre_ota_release_is_never_a_channel_target(tmp_path):
+    old, new = rel("v0.2.1"), rel("v0.3.0", pre=True)
+    w = World(tmp_path, [old, new], {new.release.sha: man()})  # v0.2.1 has no ota/release.json
+    w.orch.poll()
+    assert w.orch.target("stable") is None and w.orch.target("alpha") == "v0.3.0"
+    assert w.orch.offer(SAT, "stable", None, 1, "")["tag"] is None
+    assert w.orch.package_for_update() is None  # the bootstrap packs the agent's own version instead
+    assert w.orch.server_entity()["latest"] is None
