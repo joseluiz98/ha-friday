@@ -88,7 +88,8 @@ def add_routes(app: web.Application, orch, status_token: Callable[[], str]) -> N
     app.router.add_post("/v1/ota/request_install", request_install)
 
 
-def make_handlers(orch, kick: Callable[[bool], None]):
+def make_handlers(orch, kick: Callable[[bool], None], tls: Callable[[], tuple[int, str] | None] = lambda: None):
+    """`tls()` -> (port, certificate fingerprint) of the OTA's HTTPS listener, or None when it is not up."""
     def args(cmd: dict) -> dict:
         return cmd["args"] if isinstance(cmd.get("args"), dict) else cmd
 
@@ -121,11 +122,18 @@ def make_handlers(orch, kick: Callable[[bool], None]):
         sat = args(cmd).get("sat_id")
         if not isinstance(sat, str) or not SAT_ID.match(sat):
             return {"ok": False, "error": "sat_id"}
+        if tls() is None:
+            return {"ok": False, "error": "tls_unavailable"}
         try:
             token = await asyncio.to_thread(orch.tokens.issue, sat)
         except RuntimeError:  # TokenBookError: the file is unreadable and issuing would wipe the others
             return {"ok": False, "error": "token_book"}
-        return {"ok": True, "data": {"token": token, "url": f"http://{pv.bundle_host()}"}}
+        t = tls()
+        if t is None:  # never hand out a plain-HTTP channel: the package runs as root on the satellite
+            return {"ok": False, "error": "tls_unavailable"}
+        port, fp = t
+        host = pv.bundle_host().rsplit(":", 1)[0]
+        return {"ok": True, "data": {"token": token, "url": f"https://{host}:{port}", "fingerprint": fp}}
 
     async def image_build(cmd: dict) -> dict:
         tag = args(cmd).get("tag")

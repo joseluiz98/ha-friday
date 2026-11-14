@@ -26,6 +26,7 @@ from . import reminders as remmod
 from . import voice_switch as vsw
 from .ota import github as otagh
 from .ota import http as otahttp
+from .ota import tls as otatls
 from .ota import image as otaimg
 from .ota import loop as otaloop
 from .ota import notify as otanotify
@@ -192,6 +193,12 @@ async def main() -> None:
         if changes:
             state.update(changes)
             await core.push_state(changes, "agent")
+    try:
+        otatls.ensure()
+        ota_tls = (otatls.PORT, otatls.fingerprint())
+    except (OSError, ValueError) as err:
+        LOG.error("OTA: no TLS certificate (%s); satellites get no credentials until it exists", type(err).__name__)
+        ota_tls = None
     ota_kick = otaloop.Kick()
     kick = ota_kick.kick
 
@@ -236,7 +243,7 @@ async def main() -> None:
                       **modelsmod.make_handlers(store),
                       **provmod.make_handlers(bundles),
                       **cmd_handlers, "press": press_dispatch,
-                      **otahttp.make_handlers(orch, kick)})
+                      **otahttp.make_handlers(orch, kick, lambda: ota_tls)})
 
     async def loop(fn, arg, period, label, src):
         while True:
@@ -289,6 +296,8 @@ async def main() -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
+    if ota_tls is not None:  # the satellites' OTA channel (the same routes, over TLS with a pinned certificate)
+        await web.TCPSite(runner, "0.0.0.0", ota_tls[0], ssl_context=otatls.context()).start()
     await asyncio.gather(*tasks)
 
 

@@ -77,7 +77,7 @@ def make(hass, sat, server, provisioned=False):
     return entry, orch, delays
 
 
-OTA_TOKEN = {"token": "ota-secret", "url": "http://vm:8801"}
+OTA_TOKEN = {"token": "ota-secret", "url": "https://vm:8802", "fingerprint": "ab" * 32}
 
 
 def ota_status(installed="v0.3.0", target="v0.3.0", report=None, channel="stable"):
@@ -110,7 +110,7 @@ async def test_steps_run_in_order_and_register_the_satellite(hass, reg, notes):
     assert server.calls[0][1] == {"sat_id": SAT, "pubkey": INFO["sync_pubkey"]}
     assert [c[1]["kind"] for c in server.calls if c[0] == "prepare_bundle"] == ["update", "voices"]
     assert sat.calls[1][1] == {"kind": "update", "url": BUNDLE["url"], "sha256": BUNDLE["sha256"]}
-    assert sat.calls[2][1] == {"token": "ota-secret", "url": "http://vm:8801"}
+    assert sat.calls[2][1] == {"token": "ota-secret", "url": "https://vm:8802", "fingerprint": "ab" * 32}
     facts = sat.calls[4][1]["facts"]
     assert facts == {"areas": [{"id": area.id, "name": "Sala"}], "known_voices": ["Ana"], "failed_steps": []}
     data = json.loads(reg.read_text())

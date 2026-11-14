@@ -79,10 +79,12 @@ async def test_request_install_uses_the_status_token(tmp_path, aiohttp_client):
 async def test_ws_handlers(tmp_path):
     w = World(tmp_path, [rel("v0.3.0")])
     kicked = []
-    h = oh.make_handlers(w.orch, kick=lambda full: kicked.append(full))
+    h = oh.make_handlers(w.orch, kick=lambda full: kicked.append(full), tls=lambda: (8802, "ab" * 32))
     assert (await h["ota_set_auto"]({"enabled": False}))["ok"] and w.store.auto_install is False
     issued = await h["ota_issue_token"]({"sat_id": SAT})
-    assert issued["ok"] and w.tokens.check(SAT, issued["data"]["token"]) and issued["data"]["url"].endswith(":8801")
+    assert issued["ok"] and w.tokens.check(SAT, issued["data"]["token"])
+    assert issued["data"]["url"].startswith("https://") and issued["data"]["url"].endswith(":8802")
+    assert issued["data"]["fingerprint"] == "ab" * 32
     assert (await h["ota_issue_token"]({"sat_id": "bad"}))["ok"] is False
     assert (await h["ota_install"]({"sat_id": SAT}))["ok"] and w.store.device(SAT)["install_requested"]
     assert (await h["ota_check_now"]({}))["ok"] and kicked == [True]
@@ -183,3 +185,25 @@ async def test_request_install_tells_the_installed_version(tmp_path, aiohttp_cli
     c = await _client(aiohttp_client, w, status_token="st")
     r = await c.post("/v1/ota/request_install", json={"sat_id": SAT}, headers={"Authorization": "Bearer st"})
     assert await r.json() == {"ok": True, "target": "v0.3.0", "installed": "v0.3.0"}
+
+
+
+async def test_no_tls_no_token(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    h = oh.make_handlers(w.orch, kick=lambda full: None)  # the certificate could not be made
+    assert await h["ota_issue_token"]({"sat_id": SAT}) == {"ok": False, "error": "tls_unavailable"}
+    assert not w.tokens.check(SAT, "anything")
+
+
+def test_tls_pair_is_made_once_and_pinned(tmp_path):
+    import shutil
+    import pytest
+    from friday_server_agent.ota import tls
+    if not shutil.which("openssl"):
+        pytest.skip("no openssl here")
+    c, k = str(tmp_path / "s" / "c.crt"), str(tmp_path / "s" / "k.key")
+    tls.ensure(c, k)
+    fp = tls.fingerprint(c)
+    assert len(fp) == 64 and (tmp_path / "s" / "k.key").stat().st_mode & 0o777 == 0o600
+    tls.ensure(c, k)  # never regenerated: the satellites pinned it
+    assert tls.fingerprint(c) == fp and tls.context(c, k)

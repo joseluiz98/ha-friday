@@ -147,7 +147,8 @@ async def main() -> None:
 
     async def do_ota_set_credentials(cmd: dict) -> dict:
         a = _args(cmd)
-        res = await asyncio.to_thread(updater.set_credentials, a.get("token"), a.get("url"))
+        res = await asyncio.to_thread(updater.set_credentials, a.get("token"), a.get("url"),
+                                      a.get("fingerprint"))
         await ota_changed()
         return res
 

@@ -227,10 +227,11 @@ class Orchestrator:
         if server is None:
             raise StepError("server_offline")
         cred = await server.send("ota_issue_token", timeout=20, sat_id=self.sat_id)
-        if not isinstance(cred, dict) or not cred.get("token") or not cred.get("url"):
+        if not isinstance(cred, dict) or not cred.get("token") or not cred.get("url") or not cred.get("fingerprint"):
             raise StepError("no_token")
         c = await self._wait_connected()
-        await c.send("ota_set_credentials", timeout=20, token=cred["token"], url=cred["url"])
+        await c.send("ota_set_credentials", timeout=20, token=cred["token"], url=cred["url"],
+                     fingerprint=cred["fingerprint"])
 
     async def _step_ota_credentials(self) -> None:
         await self.issue_ota_credentials()

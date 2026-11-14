@@ -33,6 +33,7 @@ from friday_agent_core.ota.constants import HEALTH_TIMEOUT_S, HEAVY_IDLE_S, POLL
 LOG = logging.getLogger("friday_satellite_agent.ota")
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+FINGERPRINT = SHA256  # of the VM's TLS certificate (DER)
 CHANNELS = ("stable", "alpha")
 KEY = "ota"  # the `update` entity of this satellite
 STATE = os.path.expanduser("~/.local/state/friday-ota.json")
@@ -120,29 +121,35 @@ class HttpClient:
     def _h(token: str) -> dict:
         return {"Authorization": f"Bearer {token}"}
 
-    async def get_json(self, url: str, params: dict, token: str) -> dict:
+    @staticmethod
+    def _ssl(fingerprint: str):
+        """The VM's self-signed certificate, pinned by its SHA-256 (no CA): anything else is refused."""
+        import aiohttp
+        return aiohttp.Fingerprint(bytes.fromhex(fingerprint))
+
+    async def get_json(self, url: str, params: dict, token: str, fingerprint: str) -> dict:
         import aiohttp
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self._t)) as s:
-            async with s.get(url, params=params, headers=self._h(token)) as r:
+            async with s.get(url, params=params, headers=self._h(token), ssl=self._ssl(fingerprint)) as r:
                 if r.status != 200:
                     raise Failure("offer", f"http {r.status}")
                 return await r.json()
 
-    async def post_json(self, url: str, body: dict, token: str) -> dict:
+    async def post_json(self, url: str, body: dict, token: str, fingerprint: str) -> dict:
         import aiohttp
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self._t)) as s:
-            async with s.post(url, json=body, headers=self._h(token)) as r:
+            async with s.post(url, json=body, headers=self._h(token), ssl=self._ssl(fingerprint)) as r:
                 if r.status != 200:
                     raise Failure("report", f"http {r.status}")
                 return await r.json()
 
-    async def download(self, url: str, token: str, dest: str) -> str:
+    async def download(self, url: str, token: str, dest: str, fingerprint: str) -> str:
         """Streams to `dest` (via .part); returns the sha256 of what arrived."""
         import aiohttp
         h = hashlib.sha256()
         part = dest + ".part"
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self._dt)) as s:
-            async with s.get(url, headers=self._h(token)) as r:
+            async with s.get(url, headers=self._h(token), ssl=self._ssl(fingerprint)) as r:
                 if r.status != 200:
                     raise Failure("download", f"http {r.status}")
                 with open(part, "wb") as f:
@@ -193,7 +200,8 @@ class OtaClient:
         d = _read_json(self.channel_file)
         ch = d.get("channel") if d.get("channel") in CHANNELS else "stable"
         url = d.get("url") if isinstance(d.get("url"), str) else ""
-        return {"channel": ch, "url": url.rstrip("/")}
+        fp = d.get("fingerprint") if isinstance(d.get("fingerprint"), str) and FINGERPRINT.match(d["fingerprint"]) else ""
+        return {"channel": ch, "url": url.rstrip("/") if url.startswith("https://") else "", "fingerprint": fp}
 
     def token(self) -> str:
         try:
@@ -203,7 +211,8 @@ class OtaClient:
             return ""
 
     def has_credentials(self) -> bool:
-        return bool(self.token() and self.settings()["url"])
+        s = self.settings()
+        return bool(self.token() and s["url"] and s["fingerprint"])
 
     def set_channel(self, channel: str) -> dict:
         if channel not in CHANNELS:
@@ -212,16 +221,19 @@ class OtaClient:
         self.kick()
         return {"ok": True}
 
-    def set_credentials(self, token, url) -> dict:
+    def set_credentials(self, token, url, fingerprint=None) -> dict:
+        """HTTPS only, with the VM certificate's SHA-256 (it came with the token over HA's authenticated channel)."""
         if not isinstance(token, str) or not token.strip() or len(token) > 512 or not isinstance(url, str) \
-                or not re.match(r"^https?://[^/\s]+$", url.rstrip("/")):
+                or not re.match(r"^https://[^/\s]+$", url.rstrip("/")) or not isinstance(fingerprint, str) \
+                or not FINGERPRINT.match(fingerprint.lower()):
             return {"ok": False, "error": "invalid"}
         tmp = self.token_file + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(token.strip())
         os.replace(tmp, self.token_file)
-        _write_json(self.channel_file, {**_read_json(self.channel_file), "url": url.rstrip("/")})
+        _write_json(self.channel_file, {**_read_json(self.channel_file), "url": url.rstrip("/"),
+                                        "fingerprint": fingerprint.lower()})
         self.kick()
         return {"ok": True}
 
@@ -315,7 +327,7 @@ class OtaClient:
         s = self.settings()
         while q:
             try:
-                await self.http.post_json(s["url"] + "/v1/ota/report", q[0], self.token())
+                await self.http.post_json(s["url"] + "/v1/ota/report", q[0], self.token(), s["fingerprint"])
             except Exception as err:  # noqa: BLE001 - kept and re-sent on the next poll
                 LOG.warning("OTA report %s %s failed: %s", q[0].get("tag"), q[0].get("result"), type(err).__name__)
                 break
@@ -410,11 +422,12 @@ class OtaClient:
         return now - self.idle_since >= HEAVY_IDLE_S
 
     async def _download(self, offer: dict) -> tuple[str, str | None]:
-        url, token = self.settings()["url"], self.token()
+        st = self.settings()
+        url, token, fp = st["url"], self.token(), st["fingerprint"]
         tag = offer["tag"]
         pkg = os.path.join(self.downloads, f"{tag}-satellite.tar.gz")
         try:
-            got = await self.http.download(url + offer["url"], token, pkg)
+            got = await self.http.download(url + offer["url"], token, pkg, fp)
         except Failure:
             raise
         except Exception as err:  # noqa: BLE001
@@ -426,7 +439,7 @@ class OtaClient:
         if offer.get("wheels_url"):
             wheels = os.path.join(self.downloads, f"{tag}-wheels.tar.gz")
             try:
-                await self.http.download(url + offer["wheels_url"], token, wheels)
+                await self.http.download(url + offer["wheels_url"], token, wheels, fp)
             except Failure:
                 _rm(pkg)
                 raise
@@ -499,7 +512,7 @@ class OtaClient:
         if asked:
             params["install"] = "1"  # the VM zeroes its attempts and offers the target to install now
         try:
-            offer = await self.http.get_json(s["url"] + "/v1/ota/offer", params, self.token())
+            offer = await self.http.get_json(s["url"] + "/v1/ota/offer", params, self.token(), s["fingerprint"])
         except Exception as err:  # noqa: BLE001 - the VM may be down: try again next poll
             LOG.info("OTA offer unavailable: %s", type(err).__name__)
             self.manual_asked = self.manual_asked or asked

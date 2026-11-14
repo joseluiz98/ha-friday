@@ -15,6 +15,7 @@ from friday_satellite_agent import ota  # noqa: E402
 from friday_agent_core.ota.constants import HEAVY_IDLE_S, RETRY_DELAYS_S  # noqa: E402
 
 SAT = "sat-abc123"
+FP = "ab" * 32
 PKG = b"package bytes"
 PKG_SHA = hashlib.sha256(PKG).hexdigest()
 IDLE = {"estado": "parada", "timers": [], "alarme": None, "musica": False, "pendentes": 0, "fila_entregas": 0,
@@ -33,19 +34,22 @@ class Http:
         self.offer, self.body, self.calls, self.reports = offer_ or offer(), body, [], []
         self.down = False
 
-    async def get_json(self, url, params, token):
+    async def get_json(self, url, params, token, fingerprint=None):
+        assert fingerprint == FP
         self.calls.append(("offer", url, dict(params), token))
         if self.down:
             raise OSError("down")
         return self.offer
 
-    async def post_json(self, url, body, token):
+    async def post_json(self, url, body, token, fingerprint=None):
+        assert fingerprint == FP
         if self.down:
             raise OSError("down")
         self.reports.append(body)
         return {"ok": True}
 
-    async def download(self, url, token, dest):
+    async def download(self, url, token, dest, fingerprint=None):
+        assert fingerprint == FP
         self.calls.append(("download", url))
         Path(dest).write_bytes(self.body)
         return hashlib.sha256(self.body).hexdigest()
@@ -86,7 +90,7 @@ class World:
         etc.mkdir()
         if creds:
             (etc / "ota_token").write_text("tok\n")
-            (etc / "ota.json").write_text(json.dumps({"channel": "alpha", "url": "http://vm:8801/"}))
+            (etc / "ota.json").write_text(json.dumps({"channel": "alpha", "url": "https://vm:8802/", "fingerprint": FP}))
         rel = tmp / "opt" / "releases"
         if current:
             (rel / current).mkdir(parents=True)
@@ -114,7 +118,7 @@ class World:
 async def test_new_offer_downloads_stages_and_installs_when_idle(tmp_path):
     w = World(tmp_path)
     await w.c.step()
-    assert w.http.calls[1] == ("download", f"http://vm:8801/v1/ota/package/v0.3.0/satellite.tar.gz?sat_id={SAT}")
+    assert w.http.calls[1] == ("download", f"https://vm:8802/v1/ota/package/v0.3.0/satellite.tar.gz?sat_id={SAT}")
     stage = w.helper.calls[0]
     assert stage[0] == "stage" and stage[2] == "v0.3.0" and "--wheels" not in stage
     assert w.helper.calls[1] == ["activate", "v0.3.0"]
@@ -128,7 +132,7 @@ async def test_channel_installed_and_lock_go_in_the_offer(tmp_path):
     w.http.offer = {"tag": None, "reason": "up_to_date"}
     await w.c.step()
     _, url, params, token = w.http.calls[0]
-    assert url == "http://vm:8801/v1/ota/offer" and token == "tok"
+    assert url == "https://vm:8802/v1/ota/offer" and token == "tok"
     assert params == {"sat_id": SAT, "channel": "alpha", "installed": "v0.2.1", "protocol": "1",
                       "lock_sha256": "b" * 64}
 
@@ -295,11 +299,11 @@ async def test_a_report_the_vm_missed_is_sent_again(tmp_path):
     class Flaky(Http):
         fail_posts = 1
 
-        async def post_json(self, url, body, token):
+        async def post_json(self, url, body, token, fingerprint=None):
             if self.fail_posts:
                 self.fail_posts -= 1
                 raise OSError("down")
-            return await super().post_json(url, body, token)
+            return await super().post_json(url, body, token, fingerprint)
     w = World(tmp_path, Flaky(body=b"tampered"))
     await w.c.step()
     assert w.http.reports == []
@@ -319,13 +323,20 @@ async def test_without_credentials_the_vm_is_never_called(tmp_path):
 
 async def test_set_credentials_and_channel(tmp_path):
     w = World(tmp_path, creds=False)
-    assert w.c.set_credentials("", "http://vm:8801")["ok"] is False
-    assert w.c.set_credentials("t" * 20, "ftp://x")["ok"] is False
-    assert w.c.set_credentials("t" * 20, "http://vm:8801/") == {"ok": True}
+    assert w.c.set_credentials("", "https://vm:8802", FP)["ok"] is False
+    assert w.c.set_credentials("t" * 20, "http://vm:8801", FP)["ok"] is False  # never plain HTTP
+    assert w.c.set_credentials("t" * 20, "https://vm:8802", None)["ok"] is False  # never without the pin
+    assert w.c.set_credentials("t" * 20, "https://vm:8802/", FP) == {"ok": True}
     assert (tmp_path / "etc" / "ota_token").stat().st_mode & 0o777 == 0o600
     assert w.c.set_channel("beta")["ok"] is False and w.c.set_channel("alpha") == {"ok": True}
-    assert w.c.settings() == {"channel": "alpha", "url": "http://vm:8801"}
+    assert w.c.settings() == {"channel": "alpha", "url": "https://vm:8802", "fingerprint": FP}
     assert w.c.entity_state()["ota_channel"] == "alpha" and w.c.entity_state()["ota_credentials"] is True
+
+
+def test_an_old_http_credential_is_not_used(tmp_path):
+    w = World(tmp_path)
+    (tmp_path / "etc" / "ota.json").write_text(json.dumps({"channel": "stable", "url": "http://vm:8801"}))
+    assert w.c.has_credentials() is False
 
 
 async def test_old_image_gets_the_helper_from_the_package(tmp_path):
@@ -462,7 +473,7 @@ def test_package_manifest_contract():
 async def test_install_pressed_while_the_offer_is_in_flight_is_kept(tmp_path):
     w = World(tmp_path)
 
-    async def offer_with_press(url, params, token):
+    async def offer_with_press(url, params, token, fingerprint=None):
         w.c.request_install()  # the button, during the request
         return {"tag": None, "reason": "up_to_date"}
     w.http.get_json = offer_with_press
@@ -476,3 +487,30 @@ def test_the_report_queue_is_capped(tmp_path):
         w.c._queue("v0.3.0", "failed", "s", str(i))
     q = w.c.data["unsent"]
     assert len(q) == ota.MAX_UNSENT and q[-1]["error"] == "29"
+
+
+async def test_the_real_client_pins_the_vm_certificate(tmp_path):
+    """End to end over TLS: the right fingerprint talks, any other certificate is refused."""
+    import shutil
+    if not shutil.which("openssl"):
+        pytest.skip("no openssl here")
+    from aiohttp import web
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agents" / "server"))
+    from friday_server_agent.ota import tls
+    c, k = str(tmp_path / "c.crt"), str(tmp_path / "k.key")
+    tls.ensure(c, k)
+    app = web.Application()
+    app.router.add_get("/v1/ota/offer", lambda r: web.json_response({"tag": None, "reason": "up_to_date"}))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=tls.context(c, k))
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    try:
+        h = ota.HttpClient(timeout_s=5)
+        url = f"https://127.0.0.1:{port}/v1/ota/offer"
+        assert (await h.get_json(url, {}, "t", tls.fingerprint(c)))["reason"] == "up_to_date"
+        with pytest.raises(Exception):
+            await h.get_json(url, {}, "t", "00" * 32)
+    finally:
+        await runner.cleanup()
