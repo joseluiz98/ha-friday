@@ -131,3 +131,14 @@ async def test_offer_with_install_flag_asks_for_the_install(tmp_path, aiohttp_cl
     body = await r.json()
     assert body["tag"] == "v0.3.0" and body["install_requested"] is True
     assert w.store.device(SAT)["attempts"] is None
+
+
+async def test_install_flag_with_nothing_to_install_does_not_latch(tmp_path, aiohttp_client):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    tok = w.tokens.issue(SAT)
+    c = await _client(aiohttp_client, w)
+    h = {"Authorization": f"Bearer {tok}"}
+    r = await c.get(f"/v1/ota/offer?sat_id={SAT}&channel=stable&installed=v0.3.0&install=1", headers=h)
+    assert (await r.json())["tag"] is None
+    assert w.store.device(SAT)["install_requested"] is False

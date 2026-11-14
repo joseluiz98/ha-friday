@@ -457,3 +457,22 @@ def test_package_manifest_contract():
     for key, bad in (("tag", "x"), ("sha", "z"), ("schema", 2), ("protocol", {"s": True}), ("migrations", "x")):
         with pytest.raises(ValueError, match=key):
             ota.parse_package_manifest({**good, key: bad})
+
+
+async def test_install_pressed_while_the_offer_is_in_flight_is_kept(tmp_path):
+    w = World(tmp_path)
+
+    async def offer_with_press(url, params, token):
+        w.c.request_install()  # the button, during the request
+        return {"tag": None, "reason": "up_to_date"}
+    w.http.get_json = offer_with_press
+    await w.c.step()
+    assert w.c.manual_asked is True
+
+
+def test_the_report_queue_is_capped(tmp_path):
+    w = World(tmp_path)
+    for i in range(30):
+        w.c._queue("v0.3.0", "failed", "s", str(i))
+    q = w.c.data["unsent"]
+    assert len(q) == ota.MAX_UNSENT and q[-1]["error"] == "29"

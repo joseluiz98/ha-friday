@@ -45,6 +45,7 @@ HELPER = "/usr/local/sbin/friday-ota-apply"
 HELPER_CMD = ["sudo", "-n", HELPER]
 ACTIVATE_DEADLINE_S = HEALTH_TIMEOUT_S + 600  # no result by then: recover, and report it lost
 ACTIVATING_POLL_S = 15
+MAX_UNSENT = 20
 _REFUSED = re.compile(r"refused at (\S+): (.*)$")
 
 
@@ -303,7 +304,9 @@ class OtaClient:
 
     # ---------------------------------------------------------------- reports (a queue: none is lost or replaced)
     def _queue(self, tag: str, result: str, stage: str = "", error: str = "") -> None:
-        self.data.setdefault("unsent", []).append(
+        q = self.data.setdefault("unsent", [])
+        del q[:-(MAX_UNSENT - 1)]  # the VM away for days: the newest reports are the ones that matter
+        q.append(
             {"sat_id": self.sat_id, "tag": tag, "result": result, "stage": stage[:200], "error": error[:200],
              "protocol": UPDATE_PROTOCOL})
 
@@ -492,15 +495,15 @@ class OtaClient:
         tag_now, lock = installed(self.current)
         params = {"sat_id": self.sat_id, "channel": s["channel"], "installed": tag_now or "",
                   "protocol": str(UPDATE_PROTOCOL), "lock_sha256": lock}
-        asked = self.manual_asked
+        asked, self.manual_asked = self.manual_asked, False  # a press during the request below counts again
         if asked:
             params["install"] = "1"  # the VM zeroes its attempts and offers the target to install now
         try:
             offer = await self.http.get_json(s["url"] + "/v1/ota/offer", params, self.token())
         except Exception as err:  # noqa: BLE001 - the VM may be down: try again next poll
             LOG.info("OTA offer unavailable: %s", type(err).__name__)
+            self.manual_asked = self.manual_asked or asked
             return
-        self.manual_asked = False
         tag = offer.get("tag") if isinstance(offer, dict) else None
         if not isinstance(tag, str) or not TAG.match(tag):
             self.manual_tag = None

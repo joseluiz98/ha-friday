@@ -378,10 +378,12 @@ class Orchestrator:
                 LOG.warning("OTA: state save failed: %s", type(err).__name__)
             auto, requested, current = self.store.auto_install, bool(d["install_requested"]), d["installed"]
             tag = self.target(d["channel"])
-            if not tag or tag == current:
-                return offer_payload(None, auto_install=auto, reason="up_to_date")
-            if not _newer(tag, current):
-                return offer_payload(None, auto_install=auto, reason="newer_installed")
+            if not tag or tag == current or not _newer(tag, current):
+                if requested:  # a press with nothing to install must not latch for a later release
+                    d["install_requested"] = False
+                    self._save_quiet()
+                return offer_payload(None, auto_install=auto,
+                                     reason="up_to_date" if not tag or tag == current else "newer_installed")
             sha = self.store.release_infos()[tag].release.sha
             server_proto = int(self.store.data["server_protocol"])
             a = self.store.attempts(sat_id)
@@ -397,6 +399,12 @@ class Orchestrator:
         return offer_payload(tag, sat_id, sha, sat["sha256"], sat["size"],
                              wheels=sat.get("lock_sha256") != lock_sha256 and bool(sat.get("wheels")),
                              heavy=bool(sat.get("heavy")), install_requested=requested, auto_install=auto)
+
+    def _save_quiet(self) -> None:
+        try:
+            self.store.save()
+        except OSError as err:
+            LOG.warning("OTA: state save failed: %s", type(err).__name__)
 
     def report(self, data: dict) -> dict:
         r = parse_report(data)
