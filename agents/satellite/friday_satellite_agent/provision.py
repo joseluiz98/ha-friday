@@ -158,9 +158,10 @@ class Provisioner:
                  fetch=fetch_to_file, exit_fn=os._exit, ip_fn=lambda: "", loop_sleep=asyncio.sleep,
                  now=time.time, run=run_capture, wipe_paths: list[str] | None = None,
                  monotonic=time.monotonic, ota_credentials: Callable[[], bool] = lambda: False,
-                 release: Callable[[], str | None] = lambda: None) -> None:
+                 release: Callable[[], str | None] = lambda: None,
+                 versioned: Callable[[], bool] = lambda: False) -> None:
         self.etc_dir, self.config_path, self.ssh_dir = etc_dir, config_path, ssh_dir
-        self._ota_credentials, self._release = ota_credentials, release
+        self._ota_credentials, self._release, self._versioned = ota_credentials, release, versioned
         self.program_dir, self.bundles_dir = program_dir, bundles_dir
         self.voices_dir, self.models_dir = voices_dir, models_dir
         self.program = program
@@ -294,6 +295,8 @@ class Provisioner:
                     pass
 
     async def _apply_update(self, parts: dict, stamp: str) -> dict:
+        if self._versioned():  # releases live in /opt/friday/releases (root's): the OTA (`ota_converge`) installs them
+            return {"ok": True, "data": {"program_restart": "skipped", "versioned": True}}
         def program_copy() -> int:
             n = 0
             src = parts["program"]

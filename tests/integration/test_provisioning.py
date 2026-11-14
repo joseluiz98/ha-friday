@@ -77,12 +77,22 @@ def make(hass, sat, server, provisioned=False):
     return entry, orch, delays
 
 
+OTA_TOKEN = {"token": "ota-secret", "url": "http://vm:8801"}
+
+
+def ota_status(installed="v0.3.0", target="v0.3.0", report=None, channel="stable"):
+    return {"targets": {"stable": target, "alpha": target},
+            "devices": {SAT: {"channel": channel, "installed": installed, "last_report": report}}}
+
+
 def good_server():
-    return Conn("server", {"register_sync_key": {}, "prepare_bundle": BUNDLE})
+    return Conn("server", {"register_sync_key": {}, "prepare_bundle": BUNDLE, "ota_issue_token": OTA_TOKEN,
+                           "ota_status": ota_status()})
 
 
 def good_sat():
-    return Conn("satellite", {"provision_info": INFO, "apply_bundle": {}, "start_onboarding": {}, "say": {}})
+    return Conn("satellite", {"provision_info": INFO, "apply_bundle": {}, "start_onboarding": {}, "say": {},
+                              "ota_set_credentials": {}, "ota_install": {}})
 
 
 def said(conn):
@@ -95,12 +105,13 @@ async def test_steps_run_in_order_and_register_the_satellite(hass, reg, notes):
     hass.config_entries  # noqa: B018
     area = ar.async_get(hass).async_create("Sala")
     await orch.run()
-    assert sat.names() == ["provision_info", "apply_bundle", "apply_bundle", "start_onboarding"]
-    assert server.names() == ["register_sync_key", "prepare_bundle", "prepare_bundle"]
+    assert sat.names() == ["provision_info", "apply_bundle", "ota_set_credentials", "apply_bundle", "start_onboarding"]
+    assert server.names() == ["register_sync_key", "prepare_bundle", "ota_issue_token", "ota_status", "prepare_bundle"]
     assert server.calls[0][1] == {"sat_id": SAT, "pubkey": INFO["sync_pubkey"]}
-    assert [c[1]["kind"] for c in server.calls[1:]] == ["update", "voices"]
+    assert [c[1]["kind"] for c in server.calls if c[0] == "prepare_bundle"] == ["update", "voices"]
     assert sat.calls[1][1] == {"kind": "update", "url": BUNDLE["url"], "sha256": BUNDLE["sha256"]}
-    facts = sat.calls[3][1]["facts"]
+    assert sat.calls[2][1] == {"token": "ota-secret", "url": "http://vm:8801"}
+    facts = sat.calls[4][1]["facts"]
     assert facts == {"areas": [{"id": area.id, "name": "Sala"}], "known_voices": ["Ana"], "failed_steps": []}
     data = json.loads(reg.read_text())
     assert data[SAT] == {"comodo": "", "ip": "192.0.2.60", "senha": "pw-from-pi"}
@@ -165,7 +176,7 @@ async def test_server_offline_fails_the_steps_that_need_it(hass, reg, notes):
     state = await orch.steps_state()
     assert state["sync_key"] == state["update"] == state["voices"] == "failed"
     assert state["registry"] == "done" and state["onboarding"] == "done"
-    assert sat.calls[-1][1]["facts"]["failed_steps"] == ["sync_key", "update", "voices"]
+    assert sat.calls[-1][1]["facts"]["failed_steps"] == ["sync_key", "update", "ota_credentials", "ota_converge", "voices"]
 
 
 async def test_retry_redoes_only_the_failed_steps(hass, reg, notes):
@@ -365,11 +376,12 @@ async def test_new_satellite_is_provisioned_on_first_connect_and_area_event_appl
     sat_got, srv_got = [], []
     area = ar.async_get(hass).async_create("Sala")
     sat = FakeAgent(_hello("satellite", SAT), answering(sat_got, {"provision_info": INFO}))
-    server = FakeAgent(_hello("server", "server"), answering(srv_got, {"prepare_bundle": BUNDLE}))
+    server = FakeAgent(_hello("server", "server"), answering(srv_got, {"prepare_bundle": BUNDLE,
+                                                                             "ota_issue_token": OTA_TOKEN}))
     entry = await _setup(hass, [("satellite", sat, {"provisioned": False}), ("server", server, {})], [SAT, None])
     await wait_for(lambda: "start_onboarding" in sat_got, timeout=8)
-    assert sat_got == ["provision_info", "apply_bundle", "apply_bundle", "start_onboarding"]
-    assert srv_got == ["register_sync_key", "prepare_bundle", "prepare_bundle"]
+    assert sat_got == ["provision_info", "apply_bundle", "ota_set_credentials", "apply_bundle", "start_onboarding"]
+    assert srv_got == ["register_sync_key", "prepare_bundle", "ota_issue_token", "ota_status", "prepare_bundle"]
     # the satellite reports the area picked in the presentation
     await sat.sockets[-1].send_json({"type": "event", "key": "onboarding", "event_type": "area_selected",
                                      "data": {"area_id": area.id}})
@@ -390,7 +402,8 @@ async def test_new_satellite_is_provisioned_on_first_connect_and_area_event_appl
 async def test_retry_service_redoes_failed_steps(hass, reg, notes):
     sat_got, srv_got = [], []
     sat = FakeAgent(_hello("satellite", SAT), answering(sat_got, {"provision_info": INFO}))
-    server = FakeAgent(_hello("server", "server"), answering(srv_got, {"prepare_bundle": BUNDLE}))
+    server = FakeAgent(_hello("server", "server"), answering(srv_got, {"prepare_bundle": BUNDLE,
+                                                                             "ota_issue_token": OTA_TOKEN}))
     entry = await _setup(hass, [("satellite", sat, {"provisioned": False}), ("server", server, {})], [SAT, None])
     await wait_for(lambda: "start_onboarding" in sat_got, timeout=8)
     orch = hass.data[DOMAIN]["orchestrators"][SAT]
@@ -404,3 +417,68 @@ async def test_retry_service_redoes_failed_steps(hass, reg, notes):
     await hass.config_entries.async_unload(entry.entry_id)
     await sat.stop()
     await server.stop()
+
+
+async def test_converge_installs_the_channel_release_and_waits_for_it(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    server.responses["ota_status"] = [ota_status(installed="v0.2.1")] * 3 + [ota_status(installed="v0.3.0")]
+    _, orch, delays = make(hass, sat, server)
+    await orch.run()
+    assert "ota_install" in sat.names() and ["updating"] in said(sat)
+    assert (await orch.steps_state())["ota_converge"] == "done" and not notes.create.called
+    assert ["update_slow"] not in said(sat)
+
+
+async def test_converge_says_slow_and_fails_on_a_rollback_then_goes_on(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    bad = {"at": 5, "tag": "v0.3.0", "result": "rolled_back", "stage": "health", "error": ""}
+    n = pv.OTA_SLOW_S // pv.OTA_POLL_S + 1
+    server.responses["ota_status"] = [ota_status(installed="v0.2.1")] * n + [ota_status(installed="v0.2.1", report=bad)]
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    state = await orch.steps_state()
+    assert state["ota_converge"] == "failed" and state["voices"] == "done" and state["onboarding"] == "done"
+    assert sat.names().count("ota_install") == 1  # one attempt: the satellite and the VM retry on their own
+    assert ["update_slow"] in said(sat) and ["step_failed"] in said(sat)
+    assert "ota_rolled_back" in notes.create.call_args[0][1]
+
+
+async def test_converge_times_out(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    server.responses["ota_status"] = [ota_status(installed="v0.2.1")]
+    _, orch, delays = make(hass, sat, server)
+    await orch.run()
+    assert (await orch.steps_state())["ota_converge"] == "failed"
+    assert sum(d for d in delays if d == pv.OTA_POLL_S) >= pv.OTA_CONVERGE_TIMEOUT_S
+
+
+async def test_converge_with_nothing_to_install_is_done_at_once(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    server.responses["ota_status"] = [ota_status(installed="v0.3.0", target="v0.3.0")]
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    assert "ota_install" not in sat.names() and ["updating"] not in said(sat)
+
+
+async def test_provisioned_satellite_without_credential_gets_one_silently_once(hass):
+    from custom_components.friday import _issue_missing_ota_credentials
+    sat, server = good_sat(), good_server()
+    sat.state = {"ota_credentials": False}
+    server.state = {}
+    entry, _, _ = make(hass, sat, server, provisioned=True)
+    _issue_missing_ota_credentials(hass, entry, sat)
+    await hass.async_block_till_done()
+    _issue_missing_ota_credentials(hass, entry, sat)  # once per start
+    await hass.async_block_till_done()
+    assert sat.names() == ["ota_set_credentials"] and server.names() == ["ota_issue_token"]
+    assert said(sat) == []
+
+
+async def test_new_satellite_does_not_get_the_silent_credential(hass):
+    from custom_components.friday import _issue_missing_ota_credentials
+    sat, server = good_sat(), good_server()
+    sat.state, server.state = {"ota_credentials": False}, {}
+    entry, _, _ = make(hass, sat, server, provisioned=False)
+    _issue_missing_ota_credentials(hass, entry, sat)
+    await hass.async_block_till_done()
+    assert sat.names() == [] and server.names() == []

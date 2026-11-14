@@ -2,8 +2,10 @@
 
 After the spoken-code adoption the integration does, in order: `info` (ask the satellite who it is), `registry`
 (satellites.json, what used to be hand-written), `sync_key` (the nightly-upload key on the server VM), `update`
-and `voices` (one-time bundles from the server agent, applied by the satellite) and `onboarding` (the satellite
-tests the wake word and opens the presentation conversation). Each step has up to 3 attempts; the state of every
+(the frozen bootstrap contract: an old image gets the current agent), `ota_credentials` (the satellite's own OTA token,
+issued by the VM), `ota_converge` (the satellite installs the release of its channel through the OTA and the step waits
+for it; plan 2026-11-10 Task 16, spec §7), `voices` and `onboarding` (the satellite tests the wake word and opens the
+presentation conversation). Each step has up to 3 attempts; the state of every
 step is persisted so a reload or a Home Assistant restart never repeats a finished step.
 
 The legacy satellite (no `provisioned` key in its subentry) never enters here.
@@ -33,8 +35,12 @@ _LOGGER = logging.getLogger(__name__)
 
 SATELLITES_JSON = "/share/friday/satellites.json"  # constant so tests can point it elsewhere
 STORE_KEY = "friday.provisioning"
-STEPS = ("info", "registry", "sync_key", "update", "voices", "onboarding")
+STEPS = ("info", "registry", "sync_key", "update", "ota_credentials", "ota_converge", "voices", "onboarding")
 ATTEMPTS = 3
+STEP_ATTEMPTS = {"ota_converge": 1}  # the satellite and the VM retry an OTA on their own schedule (15 min, 1 h…)
+OTA_CONVERGE_TIMEOUT_S = 1800
+OTA_POLL_S = 10
+OTA_SLOW_S = 300
 RETRY_DELAYS = (5, 30, 120)  # wait before attempt 2, attempt 3 (the third value is spare)
 BUNDLE_TIMEOUT_S = 480  # download (300) + restart wait (120) + margin
 CONNECT_WAIT_S = 90
@@ -214,6 +220,55 @@ class Orchestrator:
         await self._bundle("update")
         await self._wait_connected()  # the agent restarts itself after an update
 
+    async def issue_ota_credentials(self) -> None:
+        """The VM issues the satellite's OTA token (shown once) and the satellite keeps it with the VM url."""
+        server = self.server_connection()
+        if server is None:
+            raise StepError("server_offline")
+        cred = await server.send("ota_issue_token", timeout=20, sat_id=self.sat_id)
+        if not isinstance(cred, dict) or not cred.get("token") or not cred.get("url"):
+            raise StepError("no_token")
+        c = await self._wait_connected()
+        await c.send("ota_set_credentials", timeout=20, token=cred["token"], url=cred["url"])
+
+    async def _step_ota_credentials(self) -> None:
+        await self.issue_ota_credentials()
+
+    async def _ota_device(self, server) -> tuple[dict, str | None]:
+        st = await server.send("ota_status", timeout=20)
+        dev = (st.get("devices") or {}).get(self.sat_id) or {}
+        return dev, (st.get("targets") or {}).get(dev.get("channel") or "stable")
+
+    async def _step_ota_converge(self) -> None:
+        """Until the release of the satellite's channel is installed (the satellite reports `installed` to the VM)."""
+        server = self.server_connection()
+        if server is None:
+            raise StepError("server_offline")
+        dev, target = await self._ota_device(server)
+        if not target or dev.get("installed") == target:
+            return
+        before = dev.get("last_report")
+        await self.say(["updating"])
+        c = await self._wait_connected()
+        await c.send("ota_install", timeout=20)
+        waited, slow = 0, False
+        while waited < OTA_CONVERGE_TIMEOUT_S:
+            await self._sleep(OTA_POLL_S)
+            waited += OTA_POLL_S
+            if waited >= OTA_SLOW_S and not slow:
+                slow = True
+                await self.say(["update_slow"])
+            try:
+                dev, _ = await self._ota_device(server)
+            except HomeAssistantError:
+                continue  # the VM busy or restarting: keep waiting
+            if dev.get("installed") == target:
+                return
+            rep = dev.get("last_report") or {}
+            if rep != before and rep.get("tag") == target and rep.get("result") in ("rolled_back", "failed"):
+                raise StepError(f"ota_{rep['result']}: {rep.get('stage') or '?'}")
+        raise StepError("ota_timeout")
+
     async def _step_voices(self) -> None:
         try:
             bundle = await self._bundle("voices")
@@ -236,7 +291,7 @@ class Orchestrator:
     async def _attempt(self, step: str) -> None:
         fn = getattr(self, f"_step_{step}")
         last: Exception | None = None
-        for n in range(ATTEMPTS):
+        for n in range(STEP_ATTEMPTS.get(step, ATTEMPTS)):
             if n:
                 await self._sleep(RETRY_DELAYS[n - 1])
             try:

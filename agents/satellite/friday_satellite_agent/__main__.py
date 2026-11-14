@@ -124,7 +124,7 @@ async def main() -> None:
         bundles_dir=BUNDLES, voices_dir=os.path.expanduser("~/vozes"), models_dir=os.path.expanduser("~/modelos"),
         program=program, restart_program=power.restart_program, apply_agent=apply_agent,
         exit_fn=lambda code: _exit(code), ip_fn=lambda: _lan_ip(), ota_credentials=updater.has_credentials,
-        release=lambda: ota.installed()[0])
+        release=lambda: ota.installed()[0], versioned=lambda: os.path.islink(ota.CURRENT))
 
     def _args(cmd: dict) -> dict:
         return cmd["args"] if isinstance(cmd.get("args"), dict) else cmd

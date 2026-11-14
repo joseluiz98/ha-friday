@@ -125,6 +125,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
         entry.async_on_unload(connection.add_listener(_voice_propagation_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_late_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_server_join_listener(hass, entry, connection)))
+        entry.async_on_unload(connection.add_availability_listener(_ota_credentials_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
         sub = entry.subentries[subentry_id]
         if sub.data.get("provisioned") is False:
@@ -244,6 +245,49 @@ def _late_join_listener(hass, entry, connection):
                                 hello.device.get("id"), err)
 
         hass.async_create_background_task(_push(), "friday voice late join")
+
+    return _on_up
+
+
+def _issue_missing_ota_credentials(hass, entry, sat_conn) -> None:
+    """A satellite already provisioned (or legacy) whose agent reports no OTA credential gets one, silently: once per
+    Home Assistant start (plan 2026-11-10 Task 16). Needs the server connected; tried again when the server joins."""
+    hello = sat_conn.hello
+    if (hello is None or hello.device.get("kind") != DEVICE_KIND_SATELLITE or not sat_conn.connected
+            or sat_conn.state.get("ota_credentials") is not False):
+        return
+    sat_id = hello.device.get("id")
+    subentry_id = next((sid for sid, c in entry.runtime_data.items() if c is sat_conn), None)
+    sub = entry.subentries.get(subentry_id) if subentry_id else None
+    if not sat_id or sub is None or sub.data.get("provisioned") is False:
+        return  # a new satellite gets it from its own provisioning run
+    if not any(c.connected and c.hello is not None and c.hello.device.get("kind") == DEVICE_KIND_SERVER
+               for c in entry.runtime_data.values()):
+        return
+    tried = hass.data.setdefault(DOMAIN, {}).setdefault("ota_credentials_tried", set())
+    if sat_id in tried:
+        return
+    tried.add(sat_id)
+
+    async def _issue() -> None:
+        try:
+            await orchestrator_for(hass, subentry_id, sat_id).issue_ota_credentials()
+            _LOGGER.info("Satellite %s got its OTA credential", sat_id)
+        except (HomeAssistantError, provisioning.StepError) as err:
+            _LOGGER.warning("OTA credential not delivered to satellite %s: %s", sat_id, err)
+
+    hass.async_create_background_task(_issue(), f"friday ota credential {sat_id}")
+
+
+def _ota_credentials_listener(hass, entry, connection):
+    def _on_up(up: bool) -> None:
+        if not up or connection.hello is None:
+            return
+        if connection.hello.device.get("kind") == DEVICE_KIND_SERVER:
+            for other in list(entry.runtime_data.values()):
+                _issue_missing_ota_credentials(hass, entry, other)
+        else:
+            _issue_missing_ota_credentials(hass, entry, connection)
 
     return _on_up
 
