@@ -112,7 +112,7 @@ async def test_reconfigure_change_wifi_does_not_store_password(hass):
     entry = await _setup(hass, [("satellite", sat)])
     r = await hass.config_entries.subentries.async_init(
         (entry.entry_id, "satellite"), context={"source": "reconfigure", "subentry_id": "s0"})
-    assert r["type"] == FlowResultType.MENU and r["menu_options"] == ["connection", "wifi", "room_sensors"]
+    assert r["type"] == FlowResultType.MENU and r["menu_options"] == ["connection", "wifi", "room_sensors", "advanced"]
     r = await hass.config_entries.subentries.async_configure(r["flow_id"], {"next_step_id": "wifi"})
     assert r["type"] == FlowResultType.FORM and r["step_id"] == "wifi"
     r = await hass.config_entries.subentries.async_configure(r["flow_id"], {"ssid": "Casa", "password": PASSWORD})

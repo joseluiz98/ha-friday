@@ -109,3 +109,25 @@ def test_staged_mode_checks_the_index_not_the_working_tree(tmp_path):
     (tmp_path / "a.py").write_text('OWNER = "x"\n')          # fixed only in the working tree
     assert sweep.sweep([str(tmp_path)], ["Zelda"], []) == []
     assert sweep.sweep_staged(str(tmp_path), ["Zelda"], [])
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git missing in the python:slim test image; runs in GitHub CI and on HAOS")
+def test_pre_push_scans_only_the_pushed_refs(tmp_path):
+    """A finding on a branch that is not being pushed must not block the push of a clean branch (11/11)."""
+    g = ["git", "-C", str(tmp_path), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)], check=True)
+    (tmp_path / "a.py").write_text('X = 1\n')
+    subprocess.run(g + ["add", "."], check=True); subprocess.run(g + ["commit", "-qm", "1"], check=True)
+    subprocess.run(g + ["checkout", "-qb", "other"], check=True)
+    (tmp_path / "b.py").write_text('OWNER = "Zelda"\n')
+    subprocess.run(g + ["add", "."], check=True); subprocess.run(g + ["commit", "-qm", "2"], check=True)
+    rev = lambda r: subprocess.run(g + ["rev-parse", r], check=True, capture_output=True, text=True).stdout.strip()
+    zero = "0" * 40
+    main_line = f"refs/heads/main {rev('main')} refs/heads/main {zero}\n"
+    other_line = f"refs/heads/other {rev('other')} refs/heads/other {zero}\n"
+    assert sweep.pushed_revs(main_line) == [rev("main")]
+    assert sweep.sweep_history(str(tmp_path), ["Zelda"], [], revs=sweep.pushed_revs(main_line)) == []
+    assert sweep.sweep_history(str(tmp_path), ["Zelda"], [], revs=sweep.pushed_revs(other_line))
+    # a deletion pushes nothing; the full history of a pushed ref is still scanned, not only the new commits
+    assert sweep.pushed_revs(f"(delete) {zero} refs/heads/other {rev('other')}\n") == []
+    assert sweep.sweep_history(str(tmp_path), ["Zelda"], []), "--history with no revs keeps scanning every ref"

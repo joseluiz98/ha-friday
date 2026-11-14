@@ -10,6 +10,8 @@ PADROES = {
     "janela_voz_palavra": 6,
     # volume = posição do Jabra (0–11; None = usar o que o aparelho tem); volume_alertas = escala falada 1–10
     # (spec 2026-10-12 §1 e §2)
+    # volume_sons: previsto na spec de 05/10 (sons de turno −12 dB abaixo da voz), NUNCA aplicado: os sons tocam no
+    # volume geral. Fora da página do HA desde 10/11; a chave segue aceita só para não quebrar config antiga.
     "volume": None, "volume_alertas": 6, "volume_sons": -12, "nao_perturbe": False,
     "sons": {"inicio": "inicio_a.wav", "fim": "fim_a.wav", "erro": "erro_a.wav",
              "volume": "volume_a.wav", "alarme": "alarme_a.wav", "lembrete": "lembrete_a.wav",
@@ -39,6 +41,8 @@ PADROES = {
     "eco_portao_db": None,
     # 04/11 (teste do dono): fecha o microfone quando a pessoa para de falar e só reabre quando ela responde
     "close_mic_awaiting_reply": False,
+    # 10/11: com o cérebro pendente, não fecha o microfone com a pessoa falando (espera a próxima pausa)
+    "keep_listening_while_speaking": True,
     # 04/11: continuação no estilo Alexa. Sem continuação com música tocando nem depois de comando da casa; pausa de fim
     # de fala (s) que o DetectorFala e o VAD do Gemini esperam (0,8 = o de sempre)
     "no_follow_up_while_music": True, "no_follow_up_after_home_commands": True, "end_of_speech_pause_s": 0.8,
@@ -71,7 +75,7 @@ _REGRAS = {
     "mudo": ((bool,), None, None), "sons_turno": ((bool,), None, None),
     "speech_max_s": ((int, float), 5, 120), "alarm_ramp_s": ((int, float), 0, 120),
     "eco_portao_db": ((int, float, type(None)), -90, 0),
-    "close_mic_awaiting_reply": ((bool,), None, None),
+    "close_mic_awaiting_reply": ((bool,), None, None), "keep_listening_while_speaking": ((bool,), None, None),
     "no_follow_up_while_music": ((bool,), None, None), "no_follow_up_after_home_commands": ((bool,), None, None),
     "end_of_speech_pause_s": ((int, float), 0.5, 2.0),
 }
@@ -231,6 +235,9 @@ def validar_mudancas(atual: dict, mudancas: dict) -> dict:
             if v not in MODOS_PALAVRA or not isinstance(v, str):
                 raise ValueError(f"modo_friday: um de {MODOS_PALAVRA}")
             novo[k] = v
+            continue
+        if k == "speech_max_s" and v == 0 and not isinstance(v, bool):  # 10/11: 0 desliga o teto (R13)
+            novo[k] = 0
             continue
         if k not in _REGRAS:
             raise ValueError(f"chave não alterável: {k}")

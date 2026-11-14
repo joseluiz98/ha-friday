@@ -21,3 +21,18 @@ retry_provisioning:
       selector:
         device:
           integration: friday
+set_setting:
+  fields:
+    device_id:
+      required: false
+      selector:
+        device:
+          integration: friday
+    key:
+      required: true
+      selector:
+        text:
+    value:
+      required: true
+      selector:
+        object:

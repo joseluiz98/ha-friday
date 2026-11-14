@@ -111,7 +111,8 @@
           "menu_options": {
             "connection": "Connection",
             "wifi": "Change Wi-Fi",
-            "room_sensors": "Room sensors"
+            "room_sensors": "Room sensors",
+            "advanced": "Advanced"
           }
         },
         "connection": {
@@ -143,15 +144,38 @@
             "room_humidity_source": "Humidity source",
             "room_humidity_entity": "Humidity entity"
           }
+        },
+        "advanced": {
+          "title": "Advanced",
+          "description": "Engineering settings of this satellite. Only the values you change are sent.",
+          "data": {
+            "wakeword_friday_mode": "Wake word friday mode",
+            "wakeword_friday_sensitivity": "Wake word friday threshold",
+            "wakeword_sexta_feira_mode": "Wake word sexta_feira mode",
+            "wakeword_sexta_feira_sensitivity": "Wake word sexta_feira threshold",
+            "ducking_restore": "Ducking restore delay",
+            "continuous_speech_limit": "Continuous sound cutoff"
+          },
+          "data_description": {
+            "continuous_speech_limit": "0 = off",
+            "ducking_restore": "How long until the music volume comes back"
+          }
         }
       },
       "abort": {
         "reconfigure_successful": "Satellite updated.",
-        "wifi_changed": "Wi-Fi change started; the result appears in the logbook and in the Wi-Fi change sensor."
+        "wifi_changed": "Wi-Fi change started; the result appears in the logbook and in the Wi-Fi change sensor.",
+        "satellite_unavailable": "The satellite is not connected.",
+        "advanced_saved": "Advanced settings sent to the satellite.",
+        "satellite_values_unknown": "The satellite is not reporting its settings now (voice program off). Turn it on and try again."
       },
       "error": {
         "wifi_failed": "The new network did not work (or the satellite is offline); the previous one was kept.",
-        "entity_required": "Choose the entity to mirror."
+        "entity_required": "Choose the entity to mirror.",
+        "one_active_word": "At least one wake word must be active.",
+        "out_of_range": "A value is outside the allowed range.",
+        "bad_type": "A value has the wrong type.",
+        "apply_failed": "The satellite refused the change."
       }
     }
   },
@@ -183,6 +207,24 @@
           "description": "The satellite."
         }
       }
+    },
+    "set_setting": {
+      "name": "Set setting",
+      "description": "Changes a setting from the integration's or a satellite's settings forms. Leave the device empty for general settings.",
+      "fields": {
+        "device_id": {
+          "name": "Satellite",
+          "description": "The satellite for an advanced setting; empty for a general setting."
+        },
+        "key": {
+          "name": "Setting",
+          "description": "For example reply_wait, or wakeword_friday_mode for a satellite."
+        },
+        "value": {
+          "name": "Value",
+          "description": "The new value (number, on/off or text)."
+        }
+      }
     }
   },
   "selector": {
@@ -198,17 +240,22 @@
         "normal": "Normal",
         "fast": "Fast"
       }
+    },
+    "wakeword_mode": {
+      "options": {
+        "active": "Active",
+        "shadow": "Shadow (collect only)",
+        "off": "Off"
+      }
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Models",
-        "description": "Model used by each role. Voice and Lucid apply from the next conversation or run; the brain restarts F.R.I.D.A.Y. only when no conversation is open. Embeddings model (read-only): {embeddings}.",
-        "data": {
-          "voice": "Voice model",
-          "brain": "Brain model",
-          "lucid": "Lucid Dreaming model"
+        "title": "F.R.I.D.A.Y.",
+        "menu_options": {
+          "models": "Models, voice and budget",
+          "conversation": "Conversation"
         }
       },
       "voice": {
@@ -224,12 +271,37 @@
         "data": {
           "budget_brl": "Monthly budget (BRL)"
         }
+      },
+      "models": {
+        "title": "Models",
+        "description": "Model used by each role. Voice and Lucid apply from the next conversation or run; the brain restarts F.R.I.D.A.Y. only when no conversation is open. Embeddings model (read-only): {embeddings}.",
+        "data": {
+          "voice": "Voice model",
+          "brain": "Brain model",
+          "lucid": "Lucid Dreaming model"
+        }
+      },
+      "conversation": {
+        "title": "Conversation",
+        "description": "Applies to every satellite. Follow-up mode stays a per-satellite switch on each device page.",
+        "data": {
+          "end_of_speech_pause": "End-of-speech pause",
+          "reply_wait": "Close if no reply starts within",
+          "follow_up_window": "Follow-up window",
+          "no_follow_up_while_music": "No follow-up while music plays",
+          "no_follow_up_after_home_commands": "No follow-up after home commands"
+        }
       }
     },
     "abort": {
       "server_unavailable": "The F.R.I.D.A.Y. server is not connected.",
       "embeddings_unavailable": "The server cannot change the embeddings model yet.",
-      "apply_failed": "The server refused the change."
+      "apply_failed": "The server refused the change.",
+      "satellite_values_unknown": "No satellite is reporting its settings now (voice program off or disconnected). Turn one on and try again, so its current values are shown instead of factory defaults."
+    },
+    "error": {
+      "out_of_range": "The value is outside the allowed range.",
+      "bad_type": "The value has the wrong type."
     }
   }
 }
