@@ -164,3 +164,11 @@ async def test_state_changes_are_not_logged_as_changes(hass):
     await hass.async_block_till_done()
     assert events == []
     await _stop(hass, entry, agent)
+
+
+async def test_update_entities_live_in_diagnostic(hass):
+    """15/11: the OTA update entities sit under Diagnostic, also for agents that send no category."""
+    from homeassistant.helpers import entity_registry as er
+    agent, entry = await _setup(hass, {"ota": _state()})
+    assert er.async_get(hass).async_get(EID).entity_category == "diagnostic"
+    await _stop(hass, entry, agent)
