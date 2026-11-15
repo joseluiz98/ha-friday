@@ -23,7 +23,7 @@ o `stage.sh` da própria release (`--repo /srv/friday/ota/repo --ref <sha> --loc
 `build.sh`. A imagem **nasce no layout versionado** (`/opt/friday/releases/<tag>`, link `/opt/friday/current`, venv da
 release; `~/satelite` só guarda dados: `sons/`, `estado/`) e com as migrações daquela release já marcadas como feitas, de
 modo que um cartão gravado com qualquer imagem recente se atualiza pelo OTA logo no primeiro boot. Saída na pasta
-`friday/imagens` do compartilhamento do HAOS (`\\<HA>\share\friday\imagens` no PC):
+`friday/imagens` do compartilhamento `media` do HAOS (`\\<HA>\media\friday\imagens` no PC; fora do backup do HA):
 `friday-satellite-<tag>.img.xz`, `.img.xz.sha256`, `.json` (manifesto do Imager); ficam as 2 tags mais novas. Estado em
 `/srv/friday/state/ota/image.json` (`ok|building|error`); falha numa tag espera o botão "Gerar imagem" da integração
 (não repete sozinha). O caminho manual abaixo continua valendo (sem `--package`, gera o layout antigo, que a migração
