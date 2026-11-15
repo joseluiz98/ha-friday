@@ -26,3 +26,13 @@ def test_there_are_chroot_calls_to_check():
 def test_every_chroot_call_resets_tmpdir():
     bad = [f"{name}:{n}" for name, n, line in _calls() if "env TMPDIR=/tmp" not in line]
     assert not bad, f"chroot without env TMPDIR=/tmp: {bad}"
+
+
+def test_owner_names_are_resolved_inside_the_image():
+    """15/11: `stat -c %U $MNT/...` on the VM names the HOST user of that uid (1000 = friday there, jose in the image)."""
+    bad = []
+    for script in sorted(IMAGE.glob("*.sh")):
+        for n, line in enumerate(script.read_text().splitlines(), 1):
+            if re.search(r'stat -c %[UG]\b[^|]*"\$MNT', line) and "chroot" not in line:
+                bad.append(f"{script.name}:{n}")
+    assert not bad, f"owner name looked up on the host: {bad}"

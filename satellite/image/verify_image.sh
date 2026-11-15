@@ -14,7 +14,7 @@ if $SUDO test -L "$MNT/opt/friday/current"; then  # versioned layout (OTA, plan 
   C=/opt/friday/current; PROG=$C/program; PY=$C/venv/bin/python; AGENT=$C/agent
   for f in $C/.complete $C/manifest.json $C/venv/bin/python /usr/local/sbin/friday-ota-apply /var/lib/friday/migrations.json; do
     has "$f"; done
-  [ "$($SUDO stat -c %U "$MNT/var/lib/friday/ota/downloads" 2>/dev/null)" = jose ] || bad "downloads folder must be jose's"
+  [ "$($SUDO env TMPDIR=/tmp chroot "$MNT" stat -c %U /var/lib/friday/ota/downloads 2>/dev/null)" = jose ] || bad "downloads folder must be jose's"
   $SUDO grep -q "/opt/friday/current/venv/bin/python" "$MNT/etc/systemd/system/friday-satelite.service" || bad "program unit not on current"
   $SUDO grep -q "friday-ota-apply" "$MNT/etc/sudoers.d/friday-satellite-agent" || bad "sudoers lacks friday-ota-apply"
   $SUDO test -e "$MNT/home/jose/satelite/friday_satelite.py" && bad "code in ~/satelite (data only on the versioned layout)"
