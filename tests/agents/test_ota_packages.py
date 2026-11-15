@@ -139,7 +139,7 @@ def test_wheels_cached_by_lock_sha(tmp_path):
     p2 = wh.build([str(lock)], "f" * 64, out_root=str(tmp_path / "wheels"), run=run)
     assert p1 == p2 and len(calls) == 1 and "--platform" in calls[0] and "linux/arm64" in calls[0]
     with tarfile.open(p1, "r:gz") as t:
-        assert t.getnames() == ["wheels/x-1-py3-none-any.whl"]
+        assert t.getnames() == ["x-1-py3-none-any.whl"]  # flat: see tests/contract/test_wheels_layout.py
 
 
 def test_wheels_failure_leaves_no_cache(tmp_path):
@@ -148,7 +148,7 @@ def test_wheels_failure_leaves_no_cache(tmp_path):
     run = lambda cmd, **kw: type("R", (), {"returncode": 1, "stdout": b"", "stderr": b"boom"})()
     with pytest.raises(wh.WheelsError):
         wh.build([str(lock)], "e" * 64, out_root=str(tmp_path / "wheels"), run=run)
-    assert not (tmp_path / "wheels" / ("e" * 64) / "wheels.tar.gz").exists()
+    assert not list((tmp_path / "wheels" / ("e" * 64)).glob("wheels*.tar.gz"))
 
 
 def test_vm_repo_archive_keeps_only_existing_paths(tmp_path):
@@ -232,3 +232,21 @@ def test_wheels_use_no_deps(tmp_path):
         return type("R", (), {"returncode": 0, "stdout": b"", "stderr": b""})()
     wh.build([str(lock)], "d" * 64, out_root=str(tmp_path / "w"), run=run)
     assert "--no-deps" in calls[0]
+
+
+def test_a_bundle_of_the_old_layout_is_never_reused(tmp_path):
+    """14/11: the cache is keyed by the lock; a bundle built with the old layout (wheels/ prefix) must be rebuilt."""
+    old = tmp_path / ("f" * 64) / "wheels.tar.gz"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"old layout")
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        Path(cmd[cmd.index("-v") + 1].split(":", 1)[0], "x-1-py3-none-any.whl").write_bytes(b"w")
+        return type("R", (), {"returncode": 0})()
+
+    lock = tmp_path / "a.lock"
+    lock.write_text("x==1\n")
+    path = wh.build([str(lock)], "f" * 64, out_root=str(tmp_path), run=run)
+    assert calls and path != str(old) and Path(path).read_bytes() != b"old layout"

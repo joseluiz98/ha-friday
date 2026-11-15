@@ -20,11 +20,15 @@ class WheelsError(RuntimeError):
     pass
 
 
+LAYOUT = 2  # 1 = members under wheels/ (14/11: pip --find-links never saw them); 2 = flat
+
+
 def build(locks: list[str], lock_sha256: str, out_root: str = "/srv/friday/ota/wheels",
           run: Callable = subprocess.run) -> str:
-    """Returns `<out_root>/<lock_sha256>/wheels.tar.gz` (members `wheels/<file>.whl`), building it once."""
+    """Returns `<out_root>/<lock_sha256>/wheels-<LAYOUT>.tar.gz` (members `<file>.whl` at the top: the helper hands the
+    extraction folder to `pip --find-links`, which does not look into subfolders), building it once."""
     folder = os.path.join(out_root, lock_sha256)
-    final = os.path.join(folder, "wheels.tar.gz")
+    final = os.path.join(folder, f"wheels-{LAYOUT}.tar.gz")  # a layout change never reuses an old bundle
     if os.path.exists(final):
         return final
     os.makedirs(folder, exist_ok=True)
@@ -47,7 +51,7 @@ def build(locks: list[str], lock_sha256: str, out_root: str = "/srv/friday/ota/w
         tmp = os.path.join(work, "wheels.tar.gz")
         with tarfile.open(tmp, "w:gz") as tar:
             for name in sorted(os.listdir(out)):
-                tar.add(os.path.join(out, name), arcname=f"wheels/{name}", recursive=False)
+                tar.add(os.path.join(out, name), arcname=name, recursive=False)
         os.chmod(tmp, 0o644)
         os.replace(tmp, final)
         return final
