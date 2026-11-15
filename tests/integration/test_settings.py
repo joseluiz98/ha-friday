@@ -61,6 +61,14 @@ def test_advanced_keys_in_descriptor_order():
     assert st.advanced_keys([Descriptor("volume", "number", "V")]) == []
 
 
+def test_update_channel_is_an_advanced_setting():
+    """14/11: the update channel lives in the satellite's Advanced step, not on the device page."""
+    caps = _caps() + [Descriptor("ota_channel", "select", "Update channel", options=["stable", "alpha"], hidden=True)]
+    assert st.advanced_keys(caps)[-1] == "ota_channel"
+    assert st.validate_advanced(caps, "ota_channel", "alpha") == "alpha"
+    assert code(st.validate_advanced, caps, "ota_channel", "beta") == "out_of_range"
+
+
 def test_check_wakewords():
     assert code(st.check_wakewords, {"friday": "off", "sexta_feira": "shadow"}) == "one_active_word"
     st.check_wakewords({"friday": "active", "sexta_feira": "shadow"})

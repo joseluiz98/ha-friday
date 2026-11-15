@@ -514,3 +514,11 @@ async def test_the_real_client_pins_the_vm_certificate(tmp_path):
             await h.get_json(url, {}, "t", "00" * 32)
     finally:
         await runner.cleanup()
+
+
+def test_update_channel_is_not_on_the_device_page():
+    """14/11: the channel select is hidden (set from the satellite's Advanced step); the update entity stays."""
+    from friday_satellite_agent.ota import OtaClient
+    by_key = {d["key"]: d for d in OtaClient.descriptors()}
+    assert by_key["ota_channel"]["hidden"] is True and by_key["ota_channel"]["options"] == ["stable", "alpha"]
+    assert not by_key["ota"].get("hidden") and by_key["ota"]["name"] == "Software"

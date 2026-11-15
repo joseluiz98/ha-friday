@@ -26,7 +26,8 @@ GENERAL_SPECS: dict[str, dict[str, Any]] = {
     "no_follow_up_after_home_commands": {"type": "bool"},
 }
 
-ADVANCED_FIXED: tuple[str, ...] = ("ducking_restore", "continuous_speech_limit")  # ducking + level: device page
+ADVANCED_FIXED: tuple[str, ...] = ("ducking_restore", "continuous_speech_limit",  # ducking + level: device page
+                                   "ota_channel")  # 14/11: the update channel left the device page
 _WAKEWORD_KEYS = ("_mode", "_sensitivity")
 _EPS = 1e-6
 

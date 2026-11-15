@@ -260,7 +260,7 @@ class OtaClient:
     def descriptors() -> list[dict]:
         return [{"key": KEY, "platform": "update", "name": "Software"},
                 {"key": "ota_channel", "platform": "select", "name": "Update channel", "category": "config",
-                 "options": list(CHANNELS), "icon": "mdi:source-branch"}]
+                 "options": list(CHANNELS), "icon": "mdi:source-branch", "hidden": True}]  # Advanced step (14/11)
 
     # ---------------------------------------------------------------- state
     def _save(self) -> None:

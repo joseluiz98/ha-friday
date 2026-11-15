@@ -22,11 +22,14 @@ CAPS = [
      "hidden": True},
     {"key": "wakeword_sexta_feira_sensitivity", "platform": "number", "name": "T", "min": 0.05, "max": 0.99,
      "step": 0.01, "hidden": True},
+    {"key": "ota_channel", "platform": "select", "name": "Update channel", "options": ["stable", "alpha"],
+     "category": "config", "hidden": True},
     {"key": "vol", "platform": "number", "name": "Volume", "min": 0, "max": 10, "step": 1},
 ]
 STATE = {"ducking_restore": 1.0, "continuous_speech_limit": 0,
          "wakeword_friday_mode": "off", "wakeword_friday_sensitivity": 0.5,
-         "wakeword_sexta_feira_mode": "active", "wakeword_sexta_feira_sensitivity": 0.35}
+         "wakeword_sexta_feira_mode": "active", "wakeword_sexta_feira_sensitivity": 0.35,
+         "ota_channel": "stable"}
 
 
 def make_sat(got, state=None, answer=None):
@@ -181,5 +184,21 @@ async def test_advanced_refuses_when_program_values_unknown(hass):
     r = await open_advanced(hass, entry)
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "satellite_values_unknown"
     assert got == []
+    await hass.config_entries.async_unload(entry.entry_id)
+    await sat.stop()
+
+
+async def test_advanced_has_the_update_channel(hass):
+    """14/11: the update channel is a dropdown in the Advanced step with its own option labels, and is sent as set."""
+    got = []
+    sat = make_sat(got)
+    entry = await setup(hass, sat)
+    r = await open_advanced(hass, entry)
+    fields = {str(k): v for k, v in r["data_schema"].schema.items()}
+    assert fields["ota_channel"].config["mode"] == "dropdown"
+    assert fields["ota_channel"].config["translation_key"] == "ota_channel"
+    assert fields["wakeword_friday_mode"].config["translation_key"] == "wakeword_mode"
+    r = await hass.config_entries.subentries.async_configure(r["flow_id"], form_values(ota_channel="alpha"))
+    assert r["type"] == FlowResultType.ABORT and got == [("ota_channel", "alpha")]
     await hass.config_entries.async_unload(entry.entry_id)
     await sat.stop()

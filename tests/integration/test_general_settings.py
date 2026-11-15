@@ -147,14 +147,15 @@ async def test_retired_entities_removed(hass):
     reg = er.async_get(hass)
     for domain, uid in (("number", "sat1_reply_wait"), ("select", "sat1_wakeword_friday_mode"),
                         ("number", "sat1_wakeword_sexta_feira_sensitivity"), ("switch", "sat1_ducking"),
-                        ("number", "sat1_vol")):
+                        ("number", "sat1_vol"), ("select", "sat1_ota_channel"), ("sensor", "sat1_sw_version")):
         reg.async_get_or_create(domain, DOMAIN, uid, config_entry=entry)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await connected(entry, 1)
     await hass.async_block_till_done()
     left = {e.unique_id for e in er.async_entries_for_config_entry(reg, entry.entry_id)}
     assert "sat1_vol" in left and "sat1_ducking" in left  # 11/11: ducking is back on the device page
-    assert not left & {"sat1_reply_wait", "sat1_wakeword_friday_mode", "sat1_wakeword_sexta_feira_sensitivity"}
+    assert not left & {"sat1_reply_wait", "sat1_wakeword_friday_mode", "sat1_wakeword_sexta_feira_sensitivity",
+                       "sat1_ota_channel", "sat1_sw_version"}  # 14/11: Advanced step / the update entity
     await stop(hass, entry, [sat])
 
 

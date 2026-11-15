@@ -40,6 +40,7 @@ def test_controls_cover_existing_settings():
     assert keys["reply_wait"]["category"] == "config" and keys["reply_wait"]["hidden"] is True
     assert "sounds_volume" not in keys  # 10/11: the program never applied volume_sons; the control left the page
     assert keys["activation"]["event_types"] == ["conversation", "rejected", "shadow"]
+    assert keys["sw_version"]["hidden"] is True  # 14/11: the update entity "Software" shows the version
     assert keys["wakeword_friday_mode"]["options"] == ["active", "shadow", "off"]
 
 
