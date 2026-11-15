@@ -9,6 +9,7 @@ from homeassistant.components.update import (
     UpdateEntity,
     UpdateEntityFeature,
 )
+from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 
 from .entity import FridayEntity, setup_platform
@@ -27,6 +28,11 @@ class FridayUpdate(FridayEntity, UpdateEntity):
     _attr_supported_features = (
         UpdateEntityFeature.INSTALL | UpdateEntityFeature.PROGRESS | UpdateEntityFeature.RELEASE_NOTES
     )
+
+    def __init__(self, connection, descriptor) -> None:
+        super().__init__(connection, descriptor)
+        # 15/11: the OTA entities belong under Diagnostic; agents from before this release send no category
+        self._attr_entity_category = self._attr_entity_category or EntityCategory.DIAGNOSTIC
 
     def _field(self, name: str) -> Any:
         value = self._value

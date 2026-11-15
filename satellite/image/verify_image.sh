@@ -14,7 +14,7 @@ if $SUDO test -L "$MNT/opt/friday/current"; then  # versioned layout (OTA, plan 
   C=/opt/friday/current; PROG=$C/program; PY=$C/venv/bin/python; AGENT=$C/agent
   for f in $C/.complete $C/manifest.json $C/venv/bin/python /usr/local/sbin/friday-ota-apply /var/lib/friday/migrations.json; do
     has "$f"; done
-  [ "$($SUDO stat -c %U "$MNT/var/lib/friday/ota/downloads" 2>/dev/null)" = jose ] || bad "downloads folder must be jose's"
+  [ "$($SUDO env TMPDIR=/tmp chroot "$MNT" stat -c %U /var/lib/friday/ota/downloads 2>/dev/null)" = jose ] || bad "downloads folder must be jose's"
   $SUDO grep -q "/opt/friday/current/venv/bin/python" "$MNT/etc/systemd/system/friday-satelite.service" || bad "program unit not on current"
   $SUDO grep -q "friday-ota-apply" "$MNT/etc/sudoers.d/friday-satellite-agent" || bad "sudoers lacks friday-ota-apply"
   $SUDO test -e "$MNT/home/jose/satelite/friday_satelite.py" && bad "code in ~/satelite (data only on the versioned layout)"
@@ -65,10 +65,10 @@ n=$($SUDO find "$MNT/etc/ssh" -name 'ssh_host_*' 2>/dev/null | wc -l)
 [ "$($SUDO cat "$MNT/etc/machine-id" 2>/dev/null)" = uninitialized ] || bad "machine-id must be 'uninitialized' (empty is not a first boot)"
 
 echo "-- python (arm64 venv, run under qemu)"
-$SUDO chroot "$MNT" $PY -c \
+$SUDO env TMPDIR=/tmp chroot "$MNT" $PY -c \
   "import spake2, usb, libusb_package, openwakeword, zeroconf, cryptography, aiohttp, numpy, onnxruntime" 2>/dev/null \
   || bad "venv imports failed"
-$SUDO chroot "$MNT" $PY -c "import sys; sys.path.insert(0,'$PROG'); import ring, firstboot, comandos, maestro" \
+$SUDO env TMPDIR=/tmp chroot "$MNT" $PY -c "import sys; sys.path.insert(0,'$PROG'); import ring, firstboot, comandos, maestro" \
   2>/dev/null || bad "program modules do not import"
 
 [ "$fail" = 0 ] && echo "static checks: OK" || { echo "static checks: FAILED" >&2; exit 1; }

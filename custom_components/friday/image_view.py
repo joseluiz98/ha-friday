@@ -12,7 +12,7 @@ from homeassistant.components.http import HomeAssistantView
 
 from .const import DOMAIN
 
-IMAGE_DIR = "/share/friday/imagens"  # the server VM writes here (a test overrides it in hass.data[DOMAIN]["image_dir"])
+IMAGE_DIR = "/media/friday/imagens"  # the server VM writes here (/media: out of the HA backup) (a test overrides it in hass.data[DOMAIN]["image_dir"])
 NAME_RE = re.compile(r"friday-satellite-v\d+\.\d+\.\d+\.img\.xz(\.sha256)?")
 IMAGE_RE = re.compile(r"friday-satellite-(v(\d+)\.(\d+)\.(\d+))\.img\.xz")
 IMAGE_URL = "/api/friday/image"

@@ -2,7 +2,8 @@
 
 A stable release (or the `image_build` command) builds the satellite image of that tag: `stage.sh` from the release
 tree assembles the payload with the release's OTA package (the image is born on the versioned layout), `build.sh`
-builds it; the result goes to the HAOS share (`/mnt/haos/share/friday/imagens`, the PC sees it over Samba), keeping
+builds it; the result goes to the HAOS media share (`/mnt/haos/media/friday/imagens`, the PC sees it over Samba;
+`/media` stays out of the HA backup, `/share` does not: a 900 MB image broke the Drive backup on 15/11/2026), keeping
 `KEEP_IMAGES`. One build at a time (a file lock), detached from the agent (`systemd-run --unit friday-image-build`,
 Nice=19, idle I/O), state in `/srv/friday/state/ota/image.json`:
 {"tag", "built_at", "status": "ok|building|error", "error", "files": [...]}.
@@ -34,7 +35,7 @@ LOG_FILE = "/srv/friday/state/ota/image-build.log"  # full output of the last bu
 # the build needs ~8 GB for an hour: not under /srv/friday (backed up) and /srv/nobackup is too small; cleaned after
 # every build except the downloaded base image
 WORK = os.environ.get("FRIDAY_IMG_WORKDIR", "/var/lib/friday-image")
-SHARE = "/mnt/haos/share/friday/imagens"
+SHARE = "/mnt/haos/media/friday/imagens"
 OTA_ROOT = "/srv/friday/ota"
 UNIT = "friday-image-build"
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
