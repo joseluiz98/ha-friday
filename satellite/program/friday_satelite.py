@@ -126,8 +126,9 @@ class Satelite:
 
     def estado_publico(self):
         agora = time.time()
-        return dict(self.maestro.publico(), volume=self.volume.atual,
+        return dict(self.maestro.publico(), volume=self.volume.atual, update_pendente=bool(self.anel.pendente),
                     palavras=self._modos_palavras(),  # spec 2026-10-24: {nome: modo}, para o futuro sensor do HA
+                    palavras_carregadas=sorted(self.palavras_carregadas()),  # saúde do OTA (spec 2026-11-10 §6.9)
                     timers=[{"nome": t["nome"], "duracao_s": t["duracao_s"], "falta_s": t["falta_s"]}
                             for t in self.timers.consultar(agora)])
 
@@ -300,6 +301,8 @@ class Satelite:
                 self._tocar_frases(arg)
             elif nome == "anel":
                 self.anel.show(arg)
+            elif nome == "update_pendente":
+                self.anel.set_pending(arg)
             elif nome == "contagem":
                 self._contagem(*arg)
             elif nome == "teste_palavra":
@@ -941,7 +944,7 @@ async def principal():
     threading.Thread(target=s.teclas, daemon=True).start()
     threading.Thread(target=s.duck_laco, daemon=True).start()
     await porta_local.iniciar(CFG, s.estado_publico, s.ao_mudar_config, s.cfg["porta_local"], s.campainha,
-                             palavras_fn=s.palavras_carregadas, comando_fn=s.comando_porta)
+                             palavras_fn=s.palavras_carregadas, comando_fn=s.comando_porta, musica_fn=s._musica_agora)
     print(json.dumps({"iniciado": s.sid}), flush=True)
     s.carregar_timers()
     while not morreu.is_set():

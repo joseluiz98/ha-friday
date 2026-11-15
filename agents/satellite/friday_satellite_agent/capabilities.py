@@ -94,7 +94,7 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("rejected_today", "sensor", "Rejected today", category="diagnostic"),
         _d("last_activation", "sensor", "Last activation", device_class="timestamp", category="diagnostic"),
         _d("last_wake_word", "sensor", "Last wake word", category="diagnostic", icon="mdi:account-voice"),
-        _d("sw_version", "sensor", "Software version", category="diagnostic"),
+        _d("sw_version", "sensor", "Software version", category="diagnostic", hidden=True),  # the update entity shows it
         _d("activation", "event", "Activation", event_types=["conversation", "rejected", "shadow"]),
         _d("next_timer", "sensor", "Next timer", device_class="timestamp", icon="mdi:timer-outline"),
         _d("timer", "event", "Timer", event_types=["finished"], icon="mdi:timer-check-outline"),

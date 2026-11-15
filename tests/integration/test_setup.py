@@ -52,13 +52,13 @@ async def entities(hass, n):
 async def test_entities_created_from_hello(hass):
     agent = FakeAgent(hello(CAPS, STATE))
     entry = await setup(hass, agent)
-    reg = await entities(hass, 3)
+    reg = await entities(hass, 4)  # the 3 descriptors + the server device's own restart_pending
     ents = er.async_entries_for_config_entry(reg, entry.entry_id)
-    assert len(ents) == 3
+    assert len(ents) == 4
     dev = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, "dev1"), entry.entry_id)
     assert dev.name == "Friday" and dev.manufacturer == "F.R.I.D.A.Y."
     assert all(e.device_id == dev.id and e.config_subentry_id == "sub1" for e in ents)
-    assert {e.unique_id for e in ents} == {"dev1_temp", "dev1_vol", "dev1_dnd"}
+    assert {e.unique_id for e in ents} == {"dev1_temp", "dev1_vol", "dev1_dnd", "dev1_restart_pending"}
     assert hass.states.get("sensor.friday_dev1_temp").state == "20.5"
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
@@ -113,9 +113,9 @@ async def test_unknown_platform_descriptor_is_skipped(hass):
     caps = CAPS + [{"key": "x", "platform": "lawnmower", "name": "X"}]
     agent = FakeAgent(hello(caps, STATE))
     entry = await setup(hass, agent)
-    reg = await entities(hass, 3)
+    reg = await entities(hass, 4)  # + restart_pending of the server device
     await hass.async_block_till_done()
-    assert len(er.async_entries_for_config_entry(reg, entry.entry_id)) == 3
+    assert len(er.async_entries_for_config_entry(reg, entry.entry_id)) == 4
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
 
@@ -124,10 +124,10 @@ async def test_hidden_descriptor_is_not_an_entity(hass):
     caps = CAPS + [{"key": "restart", "platform": "button", "name": "Restart", "hidden": True}]
     agent = FakeAgent(hello(caps, STATE))
     entry = await setup(hass, agent)
-    reg = await entities(hass, 3)
+    reg = await entities(hass, 4)  # + restart_pending of the server device
     await hass.async_block_till_done()
     ents = er.async_entries_for_config_entry(reg, entry.entry_id)
-    assert len(ents) == 3 and not any(e.domain == "button" for e in ents)
+    assert len(ents) == 4 and not any(e.domain == "button" for e in ents)
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
 

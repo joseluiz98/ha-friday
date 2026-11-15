@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 User=jose
-WorkingDirectory=/opt/friday-satellite-agent
-Environment=PYTHONPATH=/opt/friday-satellite-agent
-ExecStart=/home/jose/oww/bin/python -m friday_satellite_agent
+WorkingDirectory=/opt/friday/current/agent
+Environment=PYTHONPATH=/opt/friday/current/agent
+ExecStart=/opt/friday/current/venv/bin/python -m friday_satellite_agent
 CPUQuota=20%
 Nice=10
 Restart=always

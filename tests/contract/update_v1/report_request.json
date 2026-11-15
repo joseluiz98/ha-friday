@@ -1,0 +1,8 @@
+{
+  "sat_id": "sat-000000",
+  "tag": "v9.9.9",
+  "result": "rolled_back",
+  "stage": "health",
+  "error": "program",
+  "protocol": 1
+}

@@ -154,11 +154,13 @@
             "wakeword_sexta_feira_mode": "Wake word sexta_feira mode",
             "wakeword_sexta_feira_sensitivity": "Wake word sexta_feira threshold",
             "ducking_restore": "Ducking restore delay",
-            "continuous_speech_limit": "Continuous sound cutoff"
+            "continuous_speech_limit": "Continuous sound cutoff",
+            "ota_channel": "Update channel"
           },
           "data_description": {
             "continuous_speech_limit": "0 = off",
-            "ducking_restore": "How long until the music volume comes back"
+            "ducking_restore": "How long until the music volume comes back",
+            "ota_channel": "alpha gets pre-releases first; stable gets them after the alpha soak"
           }
         }
       },
@@ -246,6 +248,12 @@
         "active": "Active",
         "shadow": "Shadow (collect only)",
         "off": "Off"
+      }
+    },
+    "ota_channel": {
+      "options": {
+        "stable": "Stable",
+        "alpha": "Alpha (pre-releases)"
       }
     }
   },

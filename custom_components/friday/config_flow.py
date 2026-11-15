@@ -518,7 +518,8 @@ class SatelliteSubentryFlow(ConfigSubentryFlow):
                 {"suggested_value": suggested[key]} if suggested.get(key) is not None else {}))
             if desc.platform == "select":
                 fields[marker] = SelectSelector(SelectSelectorConfig(
-                    options=list(desc.options or []), translation_key="wakeword_mode",
+                    options=list(desc.options or []),
+                    translation_key="ota_channel" if key == "ota_channel" else "wakeword_mode",
                     mode=SelectSelectorMode.DROPDOWN))
             elif desc.platform == "switch":
                 fields[marker] = BooleanSelector()

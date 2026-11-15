@@ -5,5 +5,5 @@ Description=F.R.I.D.A.Y. satellite network recovery
 Type=oneshot
 User=jose
 StateDirectory=friday-netwatch
-WorkingDirectory=/home/jose/satelite
-ExecStart=/home/jose/oww/bin/python -u /home/jose/satelite/netwatch.py
+WorkingDirectory=/opt/friday/current/program
+ExecStart=/opt/friday/current/venv/bin/python -u /opt/friday/current/program/netwatch.py

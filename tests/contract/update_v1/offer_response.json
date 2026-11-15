@@ -1,0 +1,12 @@
+{
+  "tag": "v9.9.9",
+  "sha": "0000000000000000000000000000000000000000",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "size": 1234,
+  "url": "/v1/ota/package/v9.9.9/satellite.tar.gz?sat_id=sat-000000",
+  "wheels_url": "/v1/ota/package/v9.9.9/wheels.tar.gz?sat_id=sat-000000",
+  "heavy": false,
+  "install_requested": false,
+  "auto_install": true,
+  "reason": ""
+}

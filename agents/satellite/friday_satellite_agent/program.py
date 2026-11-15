@@ -28,9 +28,10 @@ class ProgramClient:
                     raise ProgramError(r.status, msg)
                 return await r.json()
 
-    async def status(self) -> dict | None:
+    async def status(self, music: bool = False) -> dict | None:
+        """`music=True` also asks whether Sendspin is playing (`musica`): a subprocess on the Pi, only when needed."""
         try:
-            return await self._call("GET", "/status")
+            return await self._call("GET", "/status?musica=1" if music else "/status")
         except (aiohttp.ClientError, OSError, ProgramError, TimeoutError):
             return None
 

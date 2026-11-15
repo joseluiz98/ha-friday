@@ -88,14 +88,16 @@ def _vm() -> str:
 # (repo prefix, install dir, options, check extras)
 PLANS = {
     "vm": [("voice_gateway/", "/srv/friday/app", dict(skip=("install.sh",)), False),
-           *[(f"server/{d}/", f"/opt/friday/{d}", {}, False) for d in ("status", "essentials", "cataloger", "cost", "aec", "asr", "image")],
+           *[(f"server/{d}/", f"/opt/friday/{d}", {}, False) for d in ("status", "essentials", "cataloger", "cost", "aec", "asr")],
+           ("server/image/", "/opt/friday/image", dict(skip=("install.sh",)), False),
            ("agents/server/friday_server_agent/", "/opt/friday/agent/friday_server_agent", {}, True),
            ("agents/common/friday_agent_core/", "/opt/friday/agent/friday_agent_core", {}, True),
            ("tools/wakeword/training/", "/opt/friday/wwt/training", dict(skip_tests=True), False)],
     "ha": [("custom_components/friday/", "/config/custom_components/friday", {}, True)],
-    "satellite": [("satellite/program/", "/home/jose/satelite", dict(skip_tests=True, only_ext=".py", flat=True), False),
-                  ("agents/satellite/friday_satellite_agent/", "/opt/friday-satellite-agent/friday_satellite_agent", {}, True),
-                  ("agents/common/friday_agent_core/", "/opt/friday-satellite-agent/friday_agent_core", {}, True)],
+    # versioned layout (OTA, spec 2026-11-10): the release `current` points to
+    "satellite": [("satellite/program/", "/opt/friday/current/program", dict(skip_tests=True, only_ext=".py", flat=True), False),
+                  ("agents/satellite/friday_satellite_agent/", "/opt/friday/current/agent/friday_satellite_agent", {}, True),
+                  ("agents/common/friday_agent_core/", "/opt/friday/current/agent/friday_agent_core", {}, True)],
 }
 
 

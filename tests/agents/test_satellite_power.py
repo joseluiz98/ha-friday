@@ -112,7 +112,7 @@ def test_sudoers_file_is_exact():
     cmds = [c.strip() for c in rules[0].split("NOPASSWD:")[1].split(",")]
     assert cmds == ["/usr/bin/systemctl start friday-satelite", "/usr/bin/systemctl stop friday-satelite",
                     "/usr/bin/systemctl restart friday-satelite", "/usr/sbin/reboot", "/usr/local/sbin/friday-wifi-apply",
-                    "/usr/local/sbin/friday-agent-apply"]
+                    "/usr/local/sbin/friday-agent-apply", "/usr/local/sbin/friday-ota-apply"]
 
 
 async def test_startup_stop_failure_does_not_raise(tmp_path):

@@ -33,3 +33,5 @@ private:*/LICENSE:^Copyright
 *:02(\\*:)00(\\*:)00(\\*:)00(\\*:)00(\\*:)00|02:00:00:00:00:00
 # The PVE auth header is built from config in the server agent (format string, no token).
 */agents/server/friday_server_agent/__main__.py:PVEAPIToken=
+# Proxmox API header template: the format only, the token value is read at runtime from a 0600 file.
+*/agents/server/friday_server_agent/ota/proxmox.py:PVEAPIToken=\{token\}

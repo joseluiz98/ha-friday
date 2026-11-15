@@ -223,6 +223,20 @@ class TestProvisionamento(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertEqual(ef, [])
 
+    def test_update_pending_command_toggles_ring(self):
+        for ligado in (True, False):
+            r, ef = self.run_(acao="update_pending", ligado=ligado)
+            self.assertEqual((r["ok"], r["ligado"]), (True, ligado))
+            self.assertEqual(ef, [("update_pendente", ligado)])
+
+    def test_update_pending_rejects_non_bool(self):
+        for bad in (None, "true", 1, 0, [], "sim"):
+            r, ef = self.run_(acao="update_pending", ligado=bad)
+            self.assertEqual((r["ok"], r["erro"]), (False, "parametro_invalido"), bad)
+            self.assertEqual(ef, [])
+        r, ef = self.run_(acao="update_pending")
+        self.assertEqual((r["ok"], r["erro"], ef), (False, "parametro_invalido", []))
+
     def test_wake_word_test(self):
         r, ef = self.run_(acao="wake_word_test", timeout_s=30)
         self.assertTrue(r["ok"])

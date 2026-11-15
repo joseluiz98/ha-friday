@@ -98,6 +98,12 @@ def executar(cmd: dict, ctl, timers, agora: float, vozes=None, sons_dir=None, es
                     raise ValueError("seconds e delay_s entre 0 e 60")
             r = {}
             efeitos.append(("contagem", (atraso, seg)))
+        elif acao == "update_pending":  # spec OTA §6 passo 12: fundo do anel enquanto há update não instalado
+            ligado = cmd.get("ligado")
+            if not isinstance(ligado, bool):
+                raise ValueError("parametro_invalido")
+            r = {"ligado": ligado}
+            efeitos.append(("update_pendente", ligado))
         elif acao == "wake_word_test":
             t = cmd.get("timeout_s", 30)
             if isinstance(t, bool) or not isinstance(t, (int, float)) or not 5 <= t <= 120:

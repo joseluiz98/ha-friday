@@ -104,6 +104,27 @@ class TestSemPalavrasFn(unittest.IsolatedAsyncioTestCase):
         finally:
             await cli.close()
 
+class TestStatusMusica(unittest.IsolatedAsyncioTestCase):
+    """OTA (spec 2026-11-10 §6.7): `musica` só quando pedida (o sendspin-cli é um subprocesso na Pi)."""
+
+    async def test_musica_so_com_o_parametro(self):
+        d = tempfile.mkdtemp(); p = os.path.join(d, "config.json"); cfg = c.carregar(p); c.gravar(p, cfg)
+        chamadas = []
+
+        async def musica():
+            chamadas.append(1)
+            return True
+        cli = TestClient(TestServer(porta_local.criar_app(p, lambda: {"estado": "parada"}, lambda n: None,
+                                                          musica_fn=musica)))
+        await cli.start_server()
+        try:
+            h = {"Authorization": f"Bearer {c.carregar(p)['senha_porta_local']}"}
+            self.assertNotIn("musica", await (await cli.get("/status", headers=h)).json())
+            self.assertEqual(chamadas, [])
+            self.assertIs((await (await cli.get("/status?musica=1", headers=h)).json())["musica"], True)
+        finally:
+            await cli.close()
+
 
 if __name__ == "__main__":
     unittest.main()

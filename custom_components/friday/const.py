@@ -36,7 +36,7 @@ OPTIONS_GENERAL = "general"  # key in entry.options: settings shared by every sa
 
 EVENT_CHANGE = "friday_change"
 # Entities that only mirror a reading are not logged as changes.
-READ_ONLY_PLATFORMS = ("sensor", "binary_sensor")
+READ_ONLY_PLATFORMS = ("sensor", "binary_sensor", "update")
 
 SOURCE_SATELLITE = "satellite"
 SOURCE_HA_ENTITY = "ha_entity"

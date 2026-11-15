@@ -33,30 +33,71 @@ install -m 0644 $P/asound.conf /etc/asound.conf
 mkdir -p /var/log/journal
 
 echo "== program, models, sounds"
-install -d -o jose -g jose $H/satelite $H/modelos $H/satelite-sync
-cp -a $P/programa/. $H/satelite/
-install -d -o jose -g jose $H/satelite/sons/onboarding   # the pre-recorded phrases land here (task 15)
+install -d -o jose -g jose $H/satelite $H/satelite/sons $H/satelite/estado $H/modelos $H/satelite-sync
 cp -a $P/modelos/. $H/modelos/
-install -m 0755 $P/sync/sync_recordings.sh $H/satelite-sync/sync_recordings.sh
 install -d -o jose -g jose -m 0755 /etc/friday-satelite   # firstboot fills it
 install -m 0644 $P/house.json /etc/friday-satelite/house.json   # VM address (from the VM local config at build time)
-install -m 0644 $P/FRIDAY_VERSION $H/satelite/FRIDAY_VERSION
 
-echo "== agent"
-install -d /opt/friday-satellite-agent
-cp -a $P/agent/friday_satellite_agent $P/agent/friday_agent_core /opt/friday-satellite-agent/
-install -m 0755 $P/agent/friday-wifi-apply /usr/local/sbin/friday-wifi-apply
-install -m 0755 $P/agent/friday-agent-apply /usr/local/sbin/friday-agent-apply
-install -m 0440 $P/agent/sudoers.friday-satellite-agent /etc/sudoers.d/friday-satellite-agent
-visudo -cf /etc/sudoers.d/friday-satellite-agent >/dev/null
+if [ -f $P/release.tar.gz ]; then
+  # versioned layout (OTA, spec 2026-11-10 §6.8): the release's own package is the program, the agent and the system
+  # files; ~/satelite keeps only data (sons/, estado/), exactly as on a satellite migrated by 0001
+  echo "== release (versioned layout)"
+  cp -a $P/programa/sons/. $H/satelite/sons/ 2>/dev/null || true   # all the sounds (vault); onboarding comes below too
+  TAG=$(python3 -c 'import json,sys,tarfile; print(json.load(tarfile.open(sys.argv[1]).extractfile("manifest.json"))["tag"])' $P/release.tar.gz)
+  R=/opt/friday/releases/$TAG
+  install -d $R
+  tar -xzf $P/release.tar.gz -C $R
+  cp -a $R/program/sons/. $H/satelite/sons/ 2>/dev/null || true
+  python3 -m venv $R/venv
+  # the locks are complete pinned sets; --no-deps as in production (openWakeWord without tflite-runtime)
+  $R/venv/bin/pip install --no-cache-dir -q --no-deps -r $R/program/requirements.lock -r $R/agent/requirements.lock
+  $R/venv/bin/python -c "import openwakeword.utils as u; u.download_models(['alexa'])" || \
+    $R/venv/bin/python -c "import openwakeword.utils as u; u.download_models()"
+  touch $R/.complete
+  chown -R root:root $R; chmod -R u=rwX,go=rX $R
+  ln -sfn releases/$TAG /opt/friday/current
+  install -d -m 0755 /var/lib/friday
+  install -d -o jose -g jose -m 0755 /var/lib/friday/ota /var/lib/friday/ota/downloads
+  # the migrations shipped with this release describe changes this image already has: recorded as done.
+  # RULE: a migration that changes system state must also be done here (or in files/) in the same commit,
+  # or an image built after it silently skips it (spec §9; the README says so too)
+  python3 - $R/migrations $TAG > /var/lib/friday/migrations.json <<'PY'
+import json, os, re, sys, time
+folder, tag = sys.argv[1], sys.argv[2]
+names = sorted(n for n in (os.listdir(folder) if os.path.isdir(folder) else []) if re.match(r"^\d{4}_[a-z0-9_]+\.(sh|py)$", n))
+print(json.dumps({n: {"at": time.time(), "tag": tag, "baked": True} for n in names}, indent=1, sort_keys=True))
+PY
+  echo "== system files of the release"
+  U=$R/system
+  visudo -cf $U/sudoers.friday-satellite-agent >/dev/null
+  install -m 0440 $U/sudoers.friday-satellite-agent /etc/sudoers.d/friday-satellite-agent
+  for h in friday-wifi-apply friday-agent-apply friday-ota-apply; do install -m 0755 $U/$h /usr/local/sbin/$h; done
+  install -m 0644 $U/asound.conf /etc/asound.conf
+  install -m 0755 $U/sync_recordings.sh $H/satelite-sync/sync_recordings.sh
+else
+  # old layout (a manual stage without --package): program in ~/satelite, agent in /opt/friday-satellite-agent
+  cp -a $P/programa/. $H/satelite/
+  install -d -o jose -g jose $H/satelite/sons/onboarding   # the pre-recorded phrases land here (task 15)
+  install -m 0755 $P/sync/sync_recordings.sh $H/satelite-sync/sync_recordings.sh
+  install -m 0644 $P/FRIDAY_VERSION $H/satelite/FRIDAY_VERSION
 
-echo "== python venv (the versions of the satellite in production)"
-runuser -u jose -- python3 -m venv $H/oww
-runuser -u jose -- $H/oww/bin/pip install --no-cache-dir -q --upgrade pip
-runuser -u jose -- $H/oww/bin/pip install --no-cache-dir -q --no-deps -r $P/requirements.lock  # lock = pip freeze completo da Pi; o openwakeword de produção foi instalado sem o tflite-runtime (não existe para o Python 3.13)
-# openWakeWord keeps its feature models (melspectrogram, embedding, VAD) outside the wheel
-runuser -u jose -- $H/oww/bin/python -c "import openwakeword.utils as u; u.download_models(['alexa'])" || \
-  runuser -u jose -- $H/oww/bin/python -c "import openwakeword.utils as u; u.download_models()"
+  echo "== agent"
+  install -d /opt/friday-satellite-agent
+  cp -a $P/agent/friday_satellite_agent $P/agent/friday_agent_core /opt/friday-satellite-agent/
+  install -m 0755 $P/agent/friday-wifi-apply /usr/local/sbin/friday-wifi-apply
+  install -m 0755 $P/agent/friday-agent-apply /usr/local/sbin/friday-agent-apply
+  install -m 0440 $P/agent/sudoers.friday-satellite-agent /etc/sudoers.d/friday-satellite-agent
+  visudo -cf /etc/sudoers.d/friday-satellite-agent >/dev/null
+
+  echo "== python venv (the versions of the satellite in production)"
+  runuser -u jose -- python3 -m venv $H/oww
+  runuser -u jose -- $H/oww/bin/pip install --no-cache-dir -q --upgrade pip
+  runuser -u jose -- $H/oww/bin/pip install --no-cache-dir -q --no-deps -r $P/requirements.lock  # lock = pip freeze completo da Pi; o openwakeword de produção foi instalado sem o tflite-runtime (não existe para o Python 3.13)
+  # openWakeWord keeps its feature models (melspectrogram, embedding, VAD) outside the wheel
+  runuser -u jose -- $H/oww/bin/python -c "import openwakeword.utils as u; u.download_models(['alexa'])" || \
+    runuser -u jose -- $H/oww/bin/python -c "import openwakeword.utils as u; u.download_models()"
+  U=$P/units
+fi
 
 echo "== Sendspin player (optional: only when the tarball was provided)"
 if [ -f $P/sendspin/sendspin-cli.tar.gz ]; then
@@ -72,9 +113,9 @@ echo "== units"
 for u in friday-firstboot.service friday-satelite.service friday-satellite-agent.service \
          friday-sync-recordings.service friday-sync-recordings.timer friday-netwatch.service friday-netwatch.timer \
          satelite-status.service satelite-status.timer; do
-  install -m 0644 $P/units/$u /etc/systemd/system/$u
+  install -m 0644 $U/$u /etc/systemd/system/$u
 done
-install -m 0755 $P/units/satelite-status.sh /usr/local/bin/satelite-status.sh
+install -m 0755 $U/satelite-status.sh /usr/local/bin/satelite-status.sh
 systemctl enable ssh.service friday-firstboot.service friday-satelite.service friday-satellite-agent.service \
   friday-sync-recordings.timer friday-netwatch.timer
 # satelite-status needs /etc/satelite/webhook_id (a secret of the house): installed, NOT enabled

@@ -16,7 +16,24 @@ diz que o Imager só customiza uma imagem que traga a integração com a semente
 oficial já traz. Partir da oficial mantém Wi-Fi/hostname do Imager funcionando sem reimplementar isso. Trocar de
 ferramenta depois muda só `build.sh`/`customize-chroot.sh`.
 
-## Gerar
+## Gerada sozinha pela VM (OTA, desde 11/11/2026)
+Quando uma release vira **stable** (CI verde; pre-release depois da prova no alfa), o agente da VM gera a imagem
+daquela tag sozinho, uma vez, numa unidade separada (`friday-image-build`, `Nice=19`, I/O ocioso, um build por vez):
+o `stage.sh` da própria release (`--repo /srv/friday/ota/repo --ref <sha> --local --package <pacote OTA>`) e o
+`build.sh`. A imagem **nasce no layout versionado** (`/opt/friday/releases/<tag>`, link `/opt/friday/current`, venv da
+release; `~/satelite` só guarda dados: `sons/`, `estado/`) e com as migrações daquela release já marcadas como feitas, de
+modo que um cartão gravado com qualquer imagem recente se atualiza pelo OTA logo no primeiro boot. Saída na pasta
+`friday/imagens` do compartilhamento do HAOS (`\\<HA>\share\friday\imagens` no PC):
+`friday-satellite-<tag>.img.xz`, `.img.xz.sha256`, `.json` (manifesto do Imager); ficam as 2 tags mais novas. Estado em
+`/srv/friday/state/ota/image.json` (`ok|building|error`); falha numa tag espera o botão "Gerar imagem" da integração
+(não repete sozinha). O caminho manual abaixo continua valendo (sem `--package`, gera o layout antigo, que a migração
+0001 converte no primeiro OTA). **Regra das migrações:** a imagem marca como feitas as migrações da própria release;
+uma migração nova que muda o sistema precisa ser feita também no `customize-chroot.sh` (ou em `files/`) no mesmo
+commit, senão a imagem gerada depois dela a pula. O build trabalha em `/var/lib/friday-image` (~8 GB durante ~1 h,
+fora de `/srv/friday`, que entra no backup) e apaga tudo no fim, menos a imagem base baixada; a saída completa do
+último build fica em `/srv/friday/state/ota/image-build.log` (0600).
+
+## Gerar à mão
 1. No HA: `cd /config/tools/satelite/imagem && ./stage.sh [--sendspin-tarball sendspin-cli-0.3.0-linux-arm64.tar.gz]`
    (monta `/tmp/friday-image-payload`, **recusa** se achar dado da casa — `payload_check.py` — e copia para
    `friday@<VM>:~/imgbuild/src/`).

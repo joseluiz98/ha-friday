@@ -789,3 +789,34 @@ class TestTurnoDeCasaNoBot(unittest.TestCase):
         texto = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")).read()
         self.assertNotIn("self._casa.usuario()", texto)
         self.assertIn("self._casa.ela_parou()", texto)
+
+
+class TestInstalarAtualizacao(unittest.TestCase):
+    """Plano OTA 2026-11-10 Task 20: o resultado é fato, nomeia a fonte (o servidor) e diz o que ainda não aconteceu."""
+
+    def test_pedida(self):
+        r = sm.resultado_instalar_atualizacao({"ok": True, "target": "v0.3.0", "installed": "v0.2.1"})
+        self.assertTrue(r["ok"])
+        self.assertIn("v0.3.0", r["fato"])
+        self.assertIn("quando esta conversa terminar", r["fato"])
+        self.assertIn("ainda não foi instalada", r["fato"])
+
+    def test_ja_esta_na_versao(self):
+        r = sm.resultado_instalar_atualizacao({"ok": True, "target": "v0.3.0", "installed": "v0.3.0"})
+        self.assertEqual(r["fato"], "Este satélite já está na versão v0.3.0; não há atualização para instalar.")
+
+    def test_sem_atualizacao(self):
+        r = sm.resultado_instalar_atualizacao({"ok": True, "target": None, "installed": "v0.3.0"})
+        self.assertEqual(r["fato"], "O servidor não tem atualização disponível para este satélite.")
+
+    def test_servidor_fora(self):
+        for resposta in (None, {"ok": False}, "x"):
+            r = sm.resultado_instalar_atualizacao(resposta)
+            self.assertFalse(r["ok"])
+            self.assertIn("nada foi pedido", r["erro"])
+
+    def test_descricao_e_fato_sem_ordem(self):
+        d = sm.DESCRICAO_INSTALAR_ATUALIZACAO
+        self.assertIn("conversa terminar", d)
+        for proibido in ("diga", "responda", "fale", "canal"):
+            self.assertNotIn(proibido, d.lower())

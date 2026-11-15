@@ -469,3 +469,38 @@ def test_agent_apply_helper_installs_and_refuses_outside_staging(tmp_path):
     bad = bundles / "stage-bad" / "agent"
     bad.mkdir(parents=True)
     assert _run_helper(bad, dest, bundles).returncode == 3
+
+
+async def test_provision_info_reports_release_and_ota_credentials(env):
+    p, *_ = make(env)
+    d = (await p.info())["data"]
+    assert d["versions"]["release"] is None and d["ota_credentials"] is False  # old layout, no credential yet
+    p._release, p._ota_credentials = (lambda: "v0.3.0"), (lambda: True)
+    d = (await p.info())["data"]
+    assert d["versions"]["release"] == "v0.3.0" and d["ota_credentials"] is True
+
+
+async def test_update_on_the_versioned_layout_changes_nothing(env):
+    """/opt/friday/releases is root's and the OTA installs releases there: the provisioning `update` step only
+    proves the bundle and leaves the install to `ota_converge`."""
+    blob = tar_bytes(UPDATE)
+    p, program, exits, applied = make(env, {"http://vm/b": blob})
+    p._versioned = lambda: True
+    before = sorted(os.listdir(env / "program"))
+    r = await p.apply_bundle("update", "http://vm/b", sha(blob))
+    assert r == {"ok": True, "data": {"program_restart": "skipped", "versioned": True}}
+    assert sorted(os.listdir(env / "program")) == before and applied == [] and exits == []
+
+
+async def test_update_on_the_versioned_layout_says_nothing(env):
+    blob = tar_bytes(UPDATE)
+    p, program, *_ = make(env, {"http://vm/b": blob})
+    p._versioned = lambda: True
+    said = []
+
+    async def say(keys):
+        said.append(keys)
+        return True
+    p.say = say
+    await p.apply_bundle("update", "http://vm/b", sha(blob))
+    assert said == []

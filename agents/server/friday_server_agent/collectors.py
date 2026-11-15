@@ -232,4 +232,9 @@ def capabilities(proxmox: bool) -> list[dict]:
         {**VOICE_DESCRIPTOR, "available": True},
         {**RESTART_DESCRIPTOR, "available": True},
         reminders.DESCRIPTOR,
+        s("ota_auto_install", "Automatic updates", platform="switch", category="config", icon="mdi:update"),
+        s("ota_check_now", "Check for updates", platform="button", category="config", icon="mdi:cloud-refresh"),
+        s("ota_server", "Server software", platform="update"),
+        s("image_build", "Build provisioning image", platform="button", category="config", icon="mdi:sd"),
+        s("image_latest", "Provisioning image", icon="mdi:sd"),
     ]

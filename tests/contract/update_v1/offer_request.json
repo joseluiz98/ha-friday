@@ -1,0 +1,12 @@
+{
+  "query": {
+    "sat_id": "sat-000000",
+    "channel": "stable",
+    "installed": "v9.9.8",
+    "protocol": "1",
+    "lock_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "optional_query": {
+    "install": "1"
+  }
+}

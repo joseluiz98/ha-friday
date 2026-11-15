@@ -7,7 +7,9 @@
 set -uo pipefail
 IMG=${1:?image}; SUDO=${SUDO-sudo}
 export PATH="$PATH:/usr/sbin:/sbin"
-D=$(mktemp -d "${TMPDIR:-$HOME/imgbuild}/smoke.XXXXXX"); R=$D/root; M=friday-smoke; LOOP=""; fail=0
+D=$(mktemp -d "${TMPDIR:-/tmp}/smoke.XXXXXX") || { echo "smoke: no temp dir" >&2; exit 1; }
+[ -n "$D" ] && [ -d "$D" ] || { echo "smoke: no temp dir" >&2; exit 1; }   # never mount over $R=/root
+R=$D/root; M=friday-smoke; LOOP=""; fail=0
 bad() { echo "FAIL: $*" >&2; fail=1; }
 cleanup() {
   set +e

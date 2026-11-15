@@ -364,6 +364,31 @@ COMECAR_APRENDIZAGEM_FUNCTION = FunctionSchema(
     required=["nome"],
 )
 
+# Plano OTA 2026-11-10 Task 20: só no satélite; o agente da VM recebe o pedido com o sat_id da sessão
+INSTALAR_ATUALIZACAO_FUNCTION = FunctionSchema(
+    name="instalar_atualizacao",
+    description=sm.DESCRICAO_INSTALAR_ATUALIZACAO,
+    properties={},
+    required=[],
+)
+OTA_AGENT_URL = "http://127.0.0.1:8801/v1/ota/request_install"  # o agente da VM; o container usa a rede do host
+STATUS_TOKEN_FILE = os.environ.get("FRIDAY_STATUS_TOKEN_FILE", "/srv/friday/secrets/status_token")
+
+
+async def pedir_instalacao(satelite_id: str) -> dict | None:
+    """POST ao agente da VM; None se não respondeu (nunca registra o token)."""
+    try:
+        with open(STATUS_TOKEN_FILE, encoding="utf-8") as f:
+            token = f.read().strip()
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.post(OTA_AGENT_URL, json={"sat_id": satelite_id},
+                                    headers={"Authorization": f"Bearer {token}"}) as r:
+                return await r.json() if r.status == 200 else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"pedido de instalação falhou: {type(e).__name__}")
+        return None
+
+
 # 05/11 (spec 2026-11-05 §6.4): só na conversa de apresentação de um satélite recém-instalado
 DEFINIR_COMODO_FUNCTION = FunctionSchema(
     name="definir_comodo",
@@ -672,7 +697,7 @@ async def build_tools(eh_satelite: bool = False, brain_desc: str | None = None, 
     brain = BRAIN_FUNCTION if brain_desc is None else _brain_function(brain_desc)
     standard = [brain] + (
         [ENCERRAR_FUNCTION, NAO_PERTURBE_FUNCTION, VOLUME_FUNCTION, *TIMER_FUNCTIONS, APRENDIZAGEM_FUNCTION,
-         COMECAR_APRENDIZAGEM_FUNCTION] if eh_satelite else [])
+         COMECAR_APRENDIZAGEM_FUNCTION, INSTALAR_ATUALIZACAO_FUNCTION] if eh_satelite else [])
     if apresentacao:
         standard += [DEFINIR_COMODO_FUNCTION]
     if skill_tools:
@@ -1437,8 +1462,14 @@ async def bot(runner_args: RunnerArguments):
     if apresentacao:  # só a conversa de apresentação tem a ferramenta
         llm.register_function("definir_comodo", definir_comodo)
 
+    async def instalar_atualizacao(params: FunctionCallParams):
+        r = sm.resultado_instalar_atualizacao(await pedir_instalacao(satelite_id))
+        logger.info(f"[{sessao}] instalar_atualizacao -> {r.get('ok')}")
+        await params.result_callback(r)
+
     if eh_satelite:
         llm.register_function("encerrar_conversa", encerrar_conversa)
+        llm.register_function("instalar_atualizacao", instalar_atualizacao)
         llm.register_function("nao_perturbe", alternar_nao_perturbe)
         llm.register_function("volume_do_satelite", volume_do_satelite, cancel_on_interruption=False)
         for nome_da_ferramenta in sm.ACAO_DA_FERRAMENTA:

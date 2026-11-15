@@ -8,7 +8,8 @@ import configuracao as c
 _ID_MENSAGEM = re.compile(r"^[a-z0-9]{8,32}$")
 
 
-def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavras_fn=None, comando_fn=None):
+def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavras_fn=None, comando_fn=None,
+              musica_fn=None):
     async def autorizado(req):
         senha = c.carregar(cfg_caminho)["senha_porta_local"]
         dada = req.headers.get("Authorization", "").removeprefix("Bearer ")
@@ -17,7 +18,10 @@ def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavr
     async def estado(req):
         if not await autorizado(req):
             return web.Response(status=401)
-        return web.json_response(estado_fn())
+        dados = estado_fn()
+        if musica_fn is not None and req.query.get("musica") == "1":  # OTA (spec 2026-11-10 §6.7): música tocando?
+            dados = dict(dados, musica=bool(await musica_fn()))
+        return web.json_response(dados)
 
     async def ler_config(req):
         if not await autorizado(req):
@@ -122,8 +126,10 @@ def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavr
     return app
 
 
-async def iniciar(cfg_caminho, estado_fn, ao_mudar_config, porta, campainha_fn=None, palavras_fn=None, comando_fn=None):
-    runner = web.AppRunner(criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn, palavras_fn, comando_fn))
+async def iniciar(cfg_caminho, estado_fn, ao_mudar_config, porta, campainha_fn=None, palavras_fn=None, comando_fn=None,
+                  musica_fn=None):
+    runner = web.AppRunner(criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn, palavras_fn, comando_fn,
+                                     musica_fn))
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", porta).start()
     return runner

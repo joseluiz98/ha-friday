@@ -11,8 +11,12 @@ RUN apt-get update \
       python3 python3-venv ca-certificates curl git jq openssl socat tini \
  && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g --no-audit --no-fund openclaw@2026.9.9 mcporter@0.14.1 \
- && npm cache clean --force
+# OpenClaw e mcporter: versões exatas em package.json + package-lock.json (o Dependabot lê esses dois; ele não enxerga
+# versão dentro de um RUN). Instalados em /opt/oc, com links em /usr/local/bin.
+COPY package.json package-lock.json /opt/oc/
+RUN cd /opt/oc && npm ci --omit=dev --no-audit --no-fund && npm cache clean --force \
+ && ln -s /opt/oc/node_modules/.bin/openclaw /usr/local/bin/openclaw \
+ && ln -s /opt/oc/node_modules/.bin/mcporter /usr/local/bin/mcporter
 
 RUN python3 -m venv /opt/pc \
  && /opt/pc/bin/pip install --upgrade pip \

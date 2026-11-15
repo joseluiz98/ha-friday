@@ -1,16 +1,34 @@
 #!/bin/bash
-# HA side. Assembles the image payload from a VERSION OF THE REPO (program, agent, units, sync, status, files),
-# refuses it if anything from the house slipped in, and copies the project to the VM. The files that cannot be public
-# (vendor file, sounds, models, HA public key, Sendspin) are NOT here: build.sh fetches them from the vault on the VM.
-#   satellite/image/stage.sh [GIT-REF]      (default HEAD)   then:  ssh <vm> 'cd ~/imgbuild/src && ./build.sh'
-# Reads only; writes a temp payload and ~/imgbuild/src on the VM. Never prints a secret.
+# Assembles the image payload from a VERSION OF THE REPO (program, agent, units, sync, status, files), refuses it if
+# anything from the house slipped in, and puts the project where build.sh runs. The files that cannot be public (vendor
+# file, sounds, models, HA public key, Sendspin) are NOT here: build.sh fetches them from the vault on the VM.
+#   HA side:  satellite/image/stage.sh [GIT-REF]      (default HEAD)   then:  ssh <vm> 'cd ~/imgbuild/src && ./build.sh'
+#   VM side (the OTA, plan 2026-11-10 Task 12):
+#     stage.sh --repo /srv/friday/ota/repo --ref <sha> --local --package <packages/<tag>/satellite.tar.gz>
+#   --package puts the release's OTA package in the payload: the image is born on the versioned layout
+#   (/opt/friday/releases/<tag>, /opt/friday/current). --local copies to $FRIDAY_IMG_SRC (default ~/imgbuild/src).
+# Reads only; writes a temp payload and the build folder. Never prints a secret.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-REF=${1:-HEAD}
-VM=${FRIDAY_IMG_VM:-$(cat /config/.friday/vm 2>/dev/null)}
-[ -n "$VM" ] || { echo "set FRIDAY_IMG_VM=user@host (or /config/.friday/vm)" >&2; exit 2; }
-REGISTRY=${FRIDAY_REGISTRY:-/share/friday/satellites.json}
+REF=HEAD; LOCAL=0; PACKAGE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo) REPO=$2; shift 2 ;;
+    --ref) REF=$2; shift 2 ;;
+    --local) LOCAL=1; shift ;;
+    --package) PACKAGE=$2; shift 2 ;;
+    *) REF=$1; shift ;;
+  esac
+done
+if [ "$LOCAL" = 1 ]; then
+  REGISTRY=${FRIDAY_REGISTRY:-/mnt/haos/share/friday/satellites.json}
+  [ -r "$REGISTRY" ] || { echo "registry $REGISTRY unreadable: the house-data check cannot run" >&2; exit 2; }
+else
+  VM=${FRIDAY_IMG_VM:-$(cat /config/.friday/vm 2>/dev/null)}
+  [ -n "$VM" ] || { echo "set FRIDAY_IMG_VM=user@host (or /config/.friday/vm)" >&2; exit 2; }
+  REGISTRY=${FRIDAY_REGISTRY:-/share/friday/satellites.json}
+fi
 SHA=$(git -C "$REPO" rev-parse --verify "$REF^{commit}")
 VERSION="$(git -C "$REPO" describe --tags --always "$SHA") $SHA"
 SRC=$(mktemp -d); OUT=$(mktemp -d)
@@ -34,13 +52,22 @@ cp "$S/image/requirements.lock" "$OUT/"
 cp -a "$S/image/files" "$OUT/"
 cp "$S/sendspin/sendspin-cli.conf" "$OUT/sendspin/"
 echo "$VERSION" > "$OUT/FRIDAY_VERSION"
+if [ -n "$PACKAGE" ]; then cp "$PACKAGE" "$OUT/release.tar.gz"; fi
 
 # nothing from the house
 python3 -I "$HERE/payload_check.py" "$OUT" --secrets-json "$REGISTRY"
 
-# the project (from the same ref), the vault tool + manifest, and the payload go to the VM
-ssh -o BatchMode=yes "$VM" 'mkdir -p ~/imgbuild/src'
+# the project (from the same ref), the vault tool + manifest, and the payload go where build.sh runs
 cp "$SRC/scripts/vault.py" "$S/image/vault.py"; cp "$SRC/vault/manifest.json" "$S/image/vault-manifest.json"
-rsync -a --delete -e "ssh -o BatchMode=yes" --exclude='tests' --exclude='__pycache__' "$S/image/" "$VM:imgbuild/src/"
-rsync -a --delete -e "ssh -o BatchMode=yes" "$OUT/" "$VM:imgbuild/src/payload/"
-echo "staged $VERSION on $VM:imgbuild/src (payload $(du -sh "$OUT" | cut -f1); vault files are added by build.sh)"
+if [ "$LOCAL" = 1 ]; then
+  DEST=${FRIDAY_IMG_SRC:-$HOME/imgbuild/src}
+  mkdir -p "$DEST"
+  rsync -a --delete --exclude='tests' --exclude='__pycache__' --exclude='payload' "$S/image/" "$DEST/"
+  rsync -a --delete "$OUT/" "$DEST/payload/"
+  echo "staged $VERSION in $DEST (payload $(du -sh "$OUT" | cut -f1); vault files are added by build.sh)"
+else
+  ssh -o BatchMode=yes "$VM" 'mkdir -p ~/imgbuild/src'
+  rsync -a --delete -e "ssh -o BatchMode=yes" --exclude='tests' --exclude='__pycache__' "$S/image/" "$VM:imgbuild/src/"
+  rsync -a --delete -e "ssh -o BatchMode=yes" "$OUT/" "$VM:imgbuild/src/payload/"
+  echo "staged $VERSION on $VM:imgbuild/src (payload $(du -sh "$OUT" | cut -f1); vault files are added by build.sh)"
+fi

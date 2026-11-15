@@ -13,7 +13,15 @@ rm -rf "$D/friday_satellite_agent" "$D/friday_agent_core"
 cp -r satellite/friday_satellite_agent common/friday_agent_core "$D/"
 find "$D" -name __pycache__ -prune -exec rm -rf {} +
 echo "${FRIDAY_VERSION_LINE:?FRIDAY_VERSION_LINE missing (use scripts/deploy.sh)}" > "$D/friday_agent_core/FRIDAY_VERSION"
-cp satellite/friday-satellite-agent.service /etc/systemd/system/
+# the repo unit runs the versioned layout (/opt/friday/current); a satellite still on the old layout (only this
+# manual path reaches it; deploy.sh refuses the OTA layout) keeps the old paths until its first OTA install
+if [ -e /opt/friday/current ]; then
+  cp satellite/friday-satellite-agent.service /etc/systemd/system/
+else
+  sed -e 's#/opt/friday/current/agent#/opt/friday-satellite-agent#g' \
+      -e 's#/opt/friday/current/venv/bin/python#/home/jose/oww/bin/python#g' \
+      satellite/friday-satellite-agent.service > /etc/systemd/system/friday-satellite-agent.service
+fi
 systemctl daemon-reload
 systemctl enable friday-satellite-agent
 install -m 0755 -o root -g root satellite/friday-wifi-apply /usr/local/sbin/friday-wifi-apply
