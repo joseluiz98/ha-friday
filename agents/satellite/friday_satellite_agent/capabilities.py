@@ -80,6 +80,8 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         _d("restart_program", "button", "Restart program", hidden=True, available=False, category=c),
         _d("reset_network", "button", "Reset network", category=c, icon="mdi:wifi-cog"),
         _d("reset_home", "button", "Forget home", category=c, icon="mdi:home-remove"),
+        # 15/11: every ring state in a row (~2.5 min), only while idle
+        _d("ring_preview", "button", "LED ring preview", category="diagnostic", icon="mdi:led-strip-variant"),
     ]
     for w in wakewords:
         n = w["nome"]
