@@ -65,10 +65,10 @@ n=$($SUDO find "$MNT/etc/ssh" -name 'ssh_host_*' 2>/dev/null | wc -l)
 [ "$($SUDO cat "$MNT/etc/machine-id" 2>/dev/null)" = uninitialized ] || bad "machine-id must be 'uninitialized' (empty is not a first boot)"
 
 echo "-- python (arm64 venv, run under qemu)"
-$SUDO chroot "$MNT" $PY -c \
+$SUDO env TMPDIR=/tmp chroot "$MNT" $PY -c \
   "import spake2, usb, libusb_package, openwakeword, zeroconf, cryptography, aiohttp, numpy, onnxruntime" 2>/dev/null \
   || bad "venv imports failed"
-$SUDO chroot "$MNT" $PY -c "import sys; sys.path.insert(0,'$PROG'); import ring, firstboot, comandos, maestro" \
+$SUDO env TMPDIR=/tmp chroot "$MNT" $PY -c "import sys; sys.path.insert(0,'$PROG'); import ring, firstboot, comandos, maestro" \
   2>/dev/null || bad "program modules do not import"
 
 [ "$fail" = 0 ] && echo "static checks: OK" || { echo "static checks: FAILED" >&2; exit 1; }

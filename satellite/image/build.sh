@@ -78,7 +78,8 @@ FRIDAY_VAULT_PY="$HERE/vault.py" python3 "$HERE/vault_payload.py" "$HERE/payload
 printf '{"endereco_friday": "https://%s:7443"}\n' "$VM_IP" > "$HERE/payload/house.json"
 $SUDO rm -rf "$MNT/payload"; $SUDO cp -a "$HERE/payload" "$MNT/payload"
 $SUDO install -m 0755 "$HERE/customize-chroot.sh" "$MNT/customize-chroot.sh"
-$SUDO nice -n 10 chroot "$MNT" /customize-chroot.sh
+# env TMPDIR=/tmp: as root from a systemd unit (no sudo to reset it) the host TMPDIR would leak into the chroot
+$SUDO env TMPDIR=/tmp nice -n 10 chroot "$MNT" /customize-chroot.sh
 $SUDO rm -f "$MNT/customize-chroot.sh" "$MNT/etc/resolv.conf" "$MNT/etc/resolv.conf.build" "$MNT/usr/bin/qemu-aarch64-static"
 $SUDO mv -f "$MNT/etc/resolv.conf.orig" "$MNT/etc/resolv.conf" 2>/dev/null || true
 
