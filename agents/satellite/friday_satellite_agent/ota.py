@@ -172,8 +172,11 @@ class OtaClient:
                  clock: Callable[[], float] = time.time, state_path: str = STATE, result_path: str = RESULT,
                  downloads: str = DOWNLOADS, channel_file: str = CHANNEL_FILE, token_file: str = TOKEN_FILE,
                  current: str = CURRENT, helper_path: str = HELPER, sudo: Callable[[list[str]], Awaitable] | None = None,
-                 on_change: Callable[[], Awaitable] | None = None) -> None:
+                 on_change: Callable[[], Awaitable] | None = None, legacy_version: str | None = None) -> None:
         self.sat_id, self.program, self.http = sat_id, program, http or HttpClient()
+        # the version line of the old layout (no release tag): only what HA shows, so the update entity has an
+        # installed version and offers Install; the VM still gets installed="" (FINDING 3, 14/11)
+        self.legacy_version = legacy_version
         self._helper, self._clock = helper, clock
         self.state_path, self.result_path, self.downloads = state_path, result_path, downloads
         self.channel_file, self.token_file, self.current = channel_file, token_file, current
@@ -252,7 +255,7 @@ class OtaClient:
     # ---------------------------------------------------------------- what HA sees
     def entity_state(self) -> dict:
         tag, _ = installed(self.current)
-        return {KEY: {"installed": tag, "latest": self.latest or tag, "in_progress": self.in_progress,
+        return {KEY: {"installed": tag or self.legacy_version or None, "latest": self.latest or tag, "in_progress": self.in_progress,
                       "title": "F.R.I.D.A.Y. satellite", "release_url": None, "summary": None},
                 "ota_channel": self.settings()["channel"], "ota_credentials": self.has_credentials()}
 

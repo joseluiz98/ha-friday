@@ -522,3 +522,19 @@ def test_update_channel_is_not_on_the_device_page():
     by_key = {d["key"]: d for d in OtaClient.descriptors()}
     assert by_key["ota_channel"]["hidden"] is True and by_key["ota_channel"]["options"] == ["stable", "alpha"]
     assert not by_key["ota"].get("hidden") and by_key["ota"]["name"] == "Software"
+
+
+async def test_old_layout_shows_the_version_line_so_ha_offers_install(tmp_path):
+    """FINDING 3 (14/11): on the old layout `installed` was None, the update entity unknown and HA had no Install."""
+    w = World(tmp_path, Http(offer()), current=None)
+    w.c.legacy_version = "v0.2.1-69-g75a1756"
+    await w.c.step()
+    st = w.c.entity_state()["ota"]
+    assert st["installed"] == "v0.2.1-69-g75a1756" and st["latest"] == "v0.3.0"
+    assert ota.installed(w.c.current) == (None, "")  # the offer still says "old layout" to the VM
+
+
+def test_versioned_layout_ignores_the_version_line(tmp_path):
+    w = World(tmp_path)
+    w.c.legacy_version = "v0.2.1-69-g75a1756"
+    assert w.c.entity_state()["ota"]["installed"] == "v0.2.1"

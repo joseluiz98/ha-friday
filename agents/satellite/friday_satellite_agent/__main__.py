@@ -116,7 +116,7 @@ async def main() -> None:
         memo["state"].update(changes)
         await core.push_state(changes, "agent")
 
-    updater = ota.OtaClient(sat_id, program, on_change=ota_changed)
+    updater = ota.OtaClient(sat_id, program, on_change=ota_changed, legacy_version=cap.VERSION)
     memo["state"].update(updater.entity_state())
 
     prov = provision.Provisioner(
