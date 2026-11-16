@@ -37,6 +37,7 @@ FINGERPRINT = SHA256  # of the VM's TLS certificate (DER)
 CHANNELS = ("stable", "alpha")
 KEY = "ota"  # the `update` entity of this satellite
 STATE = os.path.expanduser("~/.local/state/friday-ota.json")
+PROGRAM_UNIT = "friday-satelite.service"
 RESULT = "/var/lib/friday/ota.json"  # written by the helper (0644)
 DOWNLOADS = "/var/lib/friday/ota/downloads"
 CHANNEL_FILE = "/etc/friday-satelite/ota.json"  # {"channel": "stable", "url": "http://<vm>:8801"}
@@ -172,11 +173,13 @@ class OtaClient:
                  clock: Callable[[], float] = time.time, state_path: str = STATE, result_path: str = RESULT,
                  downloads: str = DOWNLOADS, channel_file: str = CHANNEL_FILE, token_file: str = TOKEN_FILE,
                  current: str = CURRENT, helper_path: str = HELPER, sudo: Callable[[list[str]], Awaitable] | None = None,
-                 on_change: Callable[[], Awaitable] | None = None, legacy_version: str | None = None) -> None:
+                 on_change: Callable[[], Awaitable] | None = None, legacy_version: str | None = None,
+                 program_stopped: Callable[[], Awaitable[bool]] | None = None) -> None:
         self.sat_id, self.program, self.http = sat_id, program, http or HttpClient()
         # the version line of the old layout (no release tag): only what HA shows, so the update entity has an
         # installed version and offers Install; the VM still gets installed="" (FINDING 3, 14/11)
         self.legacy_version = legacy_version
+        self._program_stopped = program_stopped or _program_unit_stopped
         self._helper, self._clock = helper, clock
         self.state_path, self.result_path, self.downloads = state_path, result_path, downloads
         self.channel_file, self.token_file, self.current = channel_file, token_file, current
@@ -553,7 +556,9 @@ class OtaClient:
                 await self._keep_pending(tag_now)
                 return
         st = await self._status(music=True)
-        if manual:
+        if st is None and (manual or offer.get("auto_install", True)) and await self._program_stopped():
+            ready = True  # FINDING 6 (15/11): a stopped program has nothing to interrupt, and the update may fix it
+        elif manual:
             ready = self._safe(st, True)
         elif not offer.get("auto_install", True):
             ready = False
@@ -619,6 +624,18 @@ class OtaClient:
 def _refusal(out: str, default_stage: str, rc: int) -> Failure:
     m = next((m for m in (_REFUSED.search(line) for line in reversed(out.splitlines())) if m), None)
     return Failure(m.group(1), m.group(2)) if m else Failure(default_stage, f"exit {rc}")
+
+
+async def _program_unit_stopped() -> bool:
+    """True only when systemd says the program is not running at all (inactive/failed); starting or answering slowly
+    is not stopped."""
+    try:
+        proc = await asyncio.create_subprocess_exec("systemctl", "is-active", PROGRAM_UNIT, stdout=asyncio.subprocess.PIPE,
+                                                    stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await proc.communicate()
+    except OSError:
+        return False
+    return out.decode().strip() in ("inactive", "failed")
 
 
 async def _sudo(argv: list[str]) -> int:

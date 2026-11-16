@@ -538,3 +538,32 @@ def test_versioned_layout_ignores_the_version_line(tmp_path):
     w = World(tmp_path)
     w.c.legacy_version = "v0.2.1-69-g75a1756"
     assert w.c.entity_state()["ota"]["installed"] == "v0.2.1"
+
+
+class SilentProgram(Program):
+    async def status(self, music=False):
+        return None
+
+    async def command(self, body):
+        raise OSError("program down")
+
+
+def _stopped(value):
+    async def f():
+        return value
+    return f
+
+
+async def test_a_stopped_program_does_not_block_the_install(tmp_path):
+    """FINDING 6 (15/11): with the program stopped the status is None and the update never found a safe moment."""
+    w = World(tmp_path, Http(offer()), program=SilentProgram())
+    w.c._program_stopped = _stopped(True)
+    await w.c.step()
+    assert "activate" in w.verbs()
+
+
+async def test_a_running_program_that_does_not_answer_still_waits(tmp_path):
+    w = World(tmp_path, Http(offer()), program=SilentProgram())
+    w.c._program_stopped = _stopped(False)
+    await w.c.step()
+    assert "activate" not in w.verbs()
