@@ -187,6 +187,8 @@ class Satelite:
             resumo = self.medidor_eco.resumo()
             if resumo:
                 print(json.dumps({"eco_rms_db": resumo}), flush=True)
+        if nome == "fala_comecou" and self.conexao:  # v0.3.7: depois de um corte, a fala nova dela volta a tocar
+            self.conexao.pessoa_falou()
         if nome == "mudo" and valor is not None:  # 31/10: botão de mudo do Jabra chega ao HA na hora
             self.emissor.emitir("config", {"mudancas": {"mudo_botao": bool(valor)}, "origem": "botao"})
             self.anel.set_muted(self._mudo_visivel())
@@ -233,6 +235,10 @@ class Satelite:
             self.microfone_aberto = False
         elif tipo == "microfone":
             self.microfone_aberto = bool(arg)
+        elif tipo == "parar_fala":  # v0.3.7: a palavra cortou o recado: para o som e descarta o resto da fala dela
+            self.alto.parar_ja()
+            if self.conexao:
+                self.conexao.cortar_fala()
         elif tipo == "cancelar_conversa":
             # Botão vermelho (spec 2026-11-04): para o som na hora, avisa o bot (cancela ferramentas e cérebro) e
             # fecha a conexão depois de 0,3 s, para a mensagem sair. O `desconectar` seguinte não encontra conexão.

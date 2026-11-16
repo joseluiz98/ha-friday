@@ -77,6 +77,7 @@ class Maestro:
     def _zerar(self):
         self.estado = PARADA
         self.pendentes = 0
+        self._recado = False  # v0.3.7: resposta pendente/entrega sendo falada: mic fechado, só a palavra interrompe
         self._prazo = None  # (motivo, instante)
         self._alguem_falando = False
         self._fala_desde = None  # R13: instante em que a fala contínua atual começou
@@ -155,6 +156,7 @@ class Maestro:
         return acoes
 
     def _fechar(self, agora, motivo, som="fim"):
+        self._recado = False
         como = self._abertura["como_abriu"] if self._abertura else None
         acoes = [("som", som)] if som else []
         acoes += [("luz", self._repouso()), ("desconectar", None)]
@@ -258,8 +260,10 @@ class Maestro:
         return [("alarme", "pausar")] + self._abrir_propria(agora, "timer", {"timer": self._alarme["timer"]})
 
     def _abrir_entrega(self, agora, entrega_id):
-        return [("volume_alerta", True), ("som", "lembrete")] + self._abrir_propria(
+        acoes = [("volume_alerta", True), ("som", "lembrete")] + self._abrir_propria(
             agora, "entrega", {"entrega": entrega_id})
+        self._recado = True
+        return acoes
 
     def _proxima_da_fila(self, agora):
         if self._fila_alarmes:
@@ -450,6 +454,9 @@ class Maestro:
                 self._prazo = ("resposta_curta", agora + self.a.espera_resposta_s)
             return []
         if nome == "palavra":
+            if self._recado and e in ABERTO and self.mudo is False:  # só a palavra ativa corta o recado
+                self._recado = False
+                return [("parar_fala", None), ("microfone", True), ("luz", "ouvindo")]
             if self.mudo is not False or e in ABERTO:
                 return []
             return self._abrir(agora, "palavra" if e == PARADA else self._abertura["como_abriu"],
@@ -501,7 +508,12 @@ class Maestro:
         if nome == "ela_comecou":
             self._ela_falando = True
             reabrir = []
-            if self._mic_fechado:  # 04/11: ela vai responder: o microfone volta (interrupção e continuação)
+            if e == AGUARDANDO:  # a resposta pendente chegou dentro da janela: é um recado também
+                self._recado = True
+            if self._recado:
+                self._mic_fechado = False
+                reabrir = [("microfone", False)]
+            elif self._mic_fechado:  # 04/11: ela vai responder: o microfone volta (interrupção e continuação)
                 self._mic_fechado = False
                 reabrir = [("microfone", True), ("luz", "ouvindo")]
             self._resposta_ate = None
@@ -511,9 +523,9 @@ class Maestro:
                                                 "como_abriu": self._abertura["como_abriu"]})]
                 self._t_fala_parou = None
             if e == AGUARDANDO:  # resposta do cérebro chegando sem "cerebro_entregando" (dentro da janela)
-                acoes = self._abrir(agora, self._abertura["como_abriu"])
+                acoes = self._fechar_mic_do_recado(self._abrir(agora, self._abertura["como_abriu"]))
                 self._prazo = None
-                return medida + acoes
+                return medida + acoes + [a for a in reabrir if a not in acoes]
             if self._prazo:
                 self._prazo = None
             return medida + reabrir
@@ -522,6 +534,9 @@ class Maestro:
             return []
         if nome == "ela_parou":
             self._ela_falando = False
+            if self._recado:  # o recado acabou: o microfone abre para a resposta, como antes
+                self._recado = False
+                return [("microfone", True), ("luz", "ouvindo")] + self.evento("ela_parou", agora)
             if self._cadastro is not None and e == OUVINDO:  # D15: a confirmação dela terminou: a Pi assume
                 return self._fechar(agora, "aprendizagem", som=None)
             if e == OUVINDO and self.a.no_follow_up_while_music and self._musica_tocando:
@@ -555,10 +570,15 @@ class Maestro:
                 return []
             if self.nao_perturbe:  # resposta atrasada = fala espontânea: calada (o bot registra no NDJSON)
                 return self._fechar(agora, "nao_perturbe", som=None)
-            acoes = self._abrir(agora, self._abertura["como_abriu"])
+            acoes = self._fechar_mic_do_recado(self._abrir(agora, self._abertura["como_abriu"]))
             self._prazo = ("resposta", agora + self.a.resposta_max_s)
             return acoes
         return []
+
+    def _fechar_mic_do_recado(self, acoes):
+        """v0.3.7: a resposta pendente sai com o microfone fechado (a palavra segue ouvida pela Pi)."""
+        self._recado = True
+        return [("microfone", False) if a == ("microfone", True) else a for a in acoes]
 
     def _falando_segura(self, motivo):
         """Com o cérebro pendente (ou a resposta ainda não falada), quem está falando segura o microfone aberto; o

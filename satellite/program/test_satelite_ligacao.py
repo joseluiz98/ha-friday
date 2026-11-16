@@ -19,7 +19,7 @@ class Falsos:
         self.escritas, self.sons, self.limpou, self.mensagens, self.conexoes = [], [], 0, [], []
         self.music, self.primed, self.mudo = [], False, []
         self.parou_ja, self.silenciadas, self.fechadas = 0, 0, 0
-        self.luzes = []
+        self.luzes, self.cortes, self.falas_pessoa = [], 0, 0
 
 
 F = Falsos()
@@ -61,6 +61,8 @@ class Conexao:
     def enviar_mensagem(self, tipo, dados):
         F.mensagens.append((tipo, dados)); return True
     def silenciar(self): F.silenciadas += 1
+    def cortar_fala(self): F.cortes += 1
+    def pessoa_falou(self): F.falas_pessoa += 1
     async def abrir(self): pass
     async def fechar(self): F.fechadas += 1
 
@@ -558,3 +560,17 @@ class TestAnelComMudo(Base):
         self.assertEqual(F.luzes[-1], ("alarme", False))
         self.s.comando_porta({"acao": "ring", "state": None, "preview": True})
         self.assertEqual(F.luzes[-1][1], True)
+
+
+class TestPararFala(Base):
+    async def test_parar_fala_cuts_playback_and_the_rest_of_her_speech(self):
+        self.s.maestro.evento("palavra", 0.0)
+        self.s._agir("conectar", None)
+        self.s._agir("parar_fala", None)
+        self.assertEqual((F.parou_ja, F.cortes), (1, 1))
+
+    async def test_person_speaking_is_told_to_the_connection(self):
+        self.s.maestro.evento("palavra", 0.0)
+        self.s._agir("conectar", None)
+        self.s.evento("fala_comecou", None)
+        self.assertEqual(F.falas_pessoa, 1)

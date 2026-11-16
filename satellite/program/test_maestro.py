@@ -186,7 +186,7 @@ class TestCerebro(Base):
     def test_entrega_reabre_com_som_de_inicio(self):
         self.aguardando()
         self.assertEqual(tipos(self.m.evento("cerebro_entregando", 40.0)),
-                         ["som:inicio", "luz:ouvindo", "microfone:True"])
+                         ["som:inicio", "luz:ouvindo", "microfone:False"])  # v0.3.7: o recado sai com o mic fechado
         self.m.evento("ela_comecou", 40.5)
         self.m.evento("cerebro_pendente", 40.6, 0)
         self.m.evento("ela_parou", 45.0)
@@ -229,7 +229,7 @@ class TestCerebro(Base):
         # 06/10: resposta do cérebro dentro da janela de 8 s chega sem "cerebro_entregando".
         self.aguardando()
         self.m.evento("cerebro_pendente", 30.0, 0)
-        self.assertEqual(tipos(self.m.evento("ela_comecou", 31.0)), ["som:inicio", "luz:ouvindo", "microfone:True"])
+        self.assertEqual(tipos(self.m.evento("ela_comecou", 31.0)), ["som:inicio", "luz:ouvindo", "microfone:False"])  # v0.3.7: recado com mic fechado
         self.assertEqual(self.m.estado, "ouvindo")
         self.m.evento("ela_parou", 35.0)
         self.assertEqual(self.m.evento("tique", 42.9), [])  # Ajustes() padrão: continuação de 8 s
@@ -292,7 +292,7 @@ class TestCerebroDevolveComConversaAberta(unittest.TestCase):
 
     def test_fala_dela_reabre_a_conversa(self):
         self.m.evento("tique", 45.7)
-        self.assertEqual(tipos(self.m.evento("ela_comecou", 46.5)), ["som:inicio", "luz:ouvindo", "microfone:True"])
+        self.assertEqual(tipos(self.m.evento("ela_comecou", 46.5)), ["som:inicio", "luz:ouvindo", "microfone:False"])  # v0.3.7: recado com mic fechado
 
     def test_sem_fala_fecha_calado_em_cerebro_fim_s_a_partir_da_resposta(self):
         self.m.evento("tique", 45.7)
@@ -929,3 +929,65 @@ class TestFalaComCerebroPendente(unittest.TestCase):
         m.evento("cerebro_pendente", 9.0, 0)  # resposta devolvida, ela ainda não falou
         self.assertNotIn(("microfone", False), m.evento("tique", 16.1))
         self.assertEqual(m.estado, "ouvindo")
+
+
+class TestRecadoSoAPalavraInterrompe(TestCerebro):
+    """v0.3.7 (spec 2026-11-16-delivery-barge-in-wakeword): resposta pendente/entrega sai com o microfone fechado;
+    conversa no cômodo não corta; uma palavra ativa corta e abre a escuta; ao fim do recado o microfone abre."""
+    def recado(self):
+        self.aguardando()
+        self.m.evento("cerebro_entregando", 40.0)
+        return self.m.evento("ela_comecou", 40.5)
+
+    def test_delivery_closes_mic_while_she_speaks(self):
+        self.assertNotIn(("microfone", True), self.recado())
+
+    def test_answer_arriving_in_the_window_also_closes_the_mic(self):
+        self.aguardando()
+        acoes = self.m.evento("ela_comecou", 20.0)  # resposta dentro da janela, sem cerebro_entregando
+        self.assertIn(("microfone", False), acoes)
+        self.assertNotIn(("microfone", True), acoes)
+
+    def test_room_speech_does_not_interrupt_delivery(self):
+        self.recado()
+        acoes = self.m.evento("fala_comecou", 41.0) + self.m.evento("fala_parou", 42.0)
+        self.assertNotIn(("parar_fala", None), acoes)
+        self.assertNotIn(("microfone", True), acoes)
+
+    def test_active_word_interrupts_delivery(self):
+        self.recado()
+        acoes = self.m.evento("palavra", 41.0, {"wake_word": "friday"})
+        self.assertEqual(tipos(acoes), ["parar_fala", "microfone:True", "luz:ouvindo"])
+
+    def test_extra_active_word_interrupts_delivery(self):
+        self.recado()
+        acoes = self.m.evento("palavra", 41.0, {"wake_word": "sexta_feira"})
+        self.assertIn(("parar_fala", None), acoes)
+
+    def test_mic_opens_when_delivery_speech_ends(self):
+        self.recado()
+        self.assertIn(("microfone", True), self.m.evento("ela_parou", 45.0))
+
+    def test_after_the_delivery_a_word_works_as_today(self):
+        self.recado()
+        self.m.evento("ela_parou", 45.0)
+        self.assertEqual(self.m.evento("palavra", 46.0, {"wake_word": "friday"}), [])  # conversa aberta: como antes
+
+    def test_pi_delivery_closes_the_mic_too(self):
+        self.m.mudo = False
+        self.m.campainha("e1abcdef", 0.0)
+        self.m.evento("conectou", 0.5)
+        self.assertIn(("microfone", False), self.m.evento("ela_comecou", 1.0))
+        self.assertIn(("parar_fala", None), self.m.evento("palavra", 1.5, {"wake_word": "friday"}))
+
+    def test_conversation_opened_by_the_word_unchanged(self):
+        self.m.mudo = False
+        self.abrir_e_conectar(0.0)
+        self.assertNotIn(("microfone", False), self.m.evento("ela_comecou", 2.0))
+
+
+class TestRecadoFecha(TestRecadoSoAPalavraInterrompe):
+    def test_closing_clears_the_delivery(self):
+        self.recado()
+        self.m.evento("encerrar", 41.0)
+        self.assertFalse(self.m._recado)
