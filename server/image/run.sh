@@ -73,6 +73,12 @@ if [ "$(jq -r '.gateway.tls.enabled // false' "$OC_CONF" 2>/dev/null)" = "true" 
   GW_SCHEME=https
 fi
 
+# Migração do estado do OpenClaw antes de qualquer comando dele: a 2026.11.3 recusa config e sessões até
+# `openclaw doctor --fix` migrar os bancos (uma vez por versão; gateway_loop.sh). GW_PID_FILE é do laço.
+GW_PID_FILE=/tmp/openclaw-gateway.pid
+. /gateway_loop.sh
+migrar_openclaw
+
 # Único ajuste do container na config do OpenClaw: o endpoint compatível com OpenAI, que a voz usa
 # para chamar o cérebro. Modelo, skills e política ficam com o onboarding do dono.
 openclaw config set gateway.http.endpoints.chatCompletions.enabled true >/dev/null 2>&1 \
@@ -133,8 +139,6 @@ mkdir -p "$AVULSOS"
 rodar_avulsos
 
 # Gateway do OpenClaw (loopback), religado pelo laço de gateway_loop.sh se sair.
-GW_PID_FILE=/tmp/openclaw-gateway.pid
-. /gateway_loop.sh
 # Partida do zero: processo novo, então a anotação de reinício no mesmo processo deixa de valer.
 mkdir -p "$(dirname "$GW_MARCA_REINICIO")"
 rm -f "$GW_MARCA_REINICIO"

@@ -24,7 +24,8 @@ GW_CHAVE_URL="${GW_CHAVE_URL:-${FRIDAY_HA_URL:?FRIDAY_HA_URL missing}/api/states
 GW_ESTADO_QUENTE="${GW_ESTADO_QUENTE:-/srv/friday/state/warm-brain.json}"
 
 # Migração do estado do OpenClaw (P0, 16/11): a 2026.11.3 recusa sessões até `openclaw doctor --fix` migrar os
-# bancos dos agentes ("schema version 24"; 69 s na VM). Roda uma vez por versão, antes da 1ª partida do gateway;
+# bancos dos agentes ("schema version 24"; 69 s na VM). Roda uma vez por versão; o run.sh chama antes de qualquer
+# comando do openclaw;
 # a marca guarda a versão migrada. Se falhar, o gateway sobe mesmo assim e a saúde do OTA decide o rollback.
 GW_DOCTOR_MARCA="${GW_DOCTOR_MARCA:-/srv/friday/state/openclaw-doctor.version}"
 GW_DOCTOR_MAX="${GW_DOCTOR_MAX:-900}"
@@ -82,7 +83,6 @@ prefixar_gateway() {
 
 manter_gateway() {
   local falhas=0 ini pid rc espera
-  migrar_openclaw
   while :; do
     preparar_remendo
     ini=$(date +%s)
