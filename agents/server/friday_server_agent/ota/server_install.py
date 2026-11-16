@@ -34,6 +34,7 @@ import urllib.error
 import urllib.request
 from typing import Callable
 
+from . import evidence
 from friday_agent_core.ota.constants import HEALTH_TIMEOUT_S, HEAVY_IDLE_S, KEEP_IMAGES, SNAPSHOT_KEEP_S
 from friday_agent_core.ota.manifest import COMPONENT_ORDER
 
@@ -367,6 +368,19 @@ class ServerInstaller:
                 shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
         shutil.copytree(backup, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns(".env"))
 
+    def _keep_evidence(self, run: dict, err: StepFailed) -> None:
+        texts = {"run.json": json.dumps({**run, "error": f"{err.stage}: {err.error}"}, indent=1, default=str)}
+        for name, cmd in (("docker-friday.log", ["docker", "logs", "--since", "2h", "friday"]),
+                          ("journal-server-agent.log", ["journalctl", "-u", "friday-server-agent", "--since",
+                                                        "-2h", "--no-pager"])):
+            try:
+                r = self._run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
+                texts[name] = r.stdout or ""
+            except Exception as e:  # noqa: BLE001 - evidence never blocks the way back
+                texts[name] = f"({type(e).__name__})"
+        tag = str(run.get("tag") or (run.get("line") or "unknown").split()[0])
+        evidence.save(tag, texts, root=self.paths.get("evidence", evidence.ROOT), clock=self._clock)
+
     def _rollback(self, run: dict, failed: str, err: StepFailed, comps: list[str] | None = None) -> dict:
         """Puts `comps` (default: every component this run touched) back on the versions the run replaced.
 
@@ -380,6 +394,7 @@ class ServerInstaller:
             run["stage"] = "rolling_back"
             try:
                 self._save_run(run)
+                self._keep_evidence(run, err)  # the restore takes the whole disk back, logs included (FINDING 9)
                 self.snapshots.annotate(snap, f"{ROLLBACK_MARK} {err.stage}: {err.error}")
                 # the VM stops inside this task; when it does not (refused, failed), the image path below runs
                 self.snapshots.wait(self.snapshots.rollback(snap, start=True), timeout=900)

@@ -530,3 +530,22 @@ def test_install_request_with_no_target_is_dropped(tmp_path):
     w.orch.install_server()
     w.orch.poll()
     assert w.store.data["server_ota"]["install_requested"] is False
+
+
+def test_container_failure_keeps_the_logs_off_the_vm_before_the_restore(tmp_path):
+    """FINDING 9 (16/11): the snapshot restore took the logs of the failed try with the disk."""
+    w = World(tmp_path, changed=["server/image/Dockerfile"], ready=False)
+    w.paths["evidence"] = w.inst.paths["evidence"] = str(tmp_path / "share" / "logs" / "friday" / "ota")
+    w.logs = "schema version 24; run openclaw doctor --fix\n"
+    seen = {}
+    rollback = w.snaps.rollback
+
+    def check_then_rollback(*a, **kw):
+        seen["dirs"] = os.listdir(w.paths["evidence"])
+        return rollback(*a, **kw)
+    w.snaps.rollback = check_then_rollback
+    w.inst.apply("v0.3.0", NEW, MANIFEST, manual=True)
+    assert len(seen["dirs"]) == 1 and seen["dirs"][0].startswith("v0.3.0-")
+    d = Path(w.paths["evidence"]) / seen["dirs"][0]
+    assert "doctor --fix" in (d / "docker-friday.log").read_text()
+    assert "health" in (d / "run.json").read_text()
