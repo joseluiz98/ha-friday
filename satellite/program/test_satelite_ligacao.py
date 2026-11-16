@@ -728,25 +728,20 @@ class TestDisputa(Base):
         self.assertEqual((d.claims, d.registros), ([], []))
 
     async def test_preroll_covers_wait(self):
-        d = self.disputa(outros=1)
         self.s.recentes.extend(bytes([i]) * 2 for i in range(29))
-        proximo = [29]
-
-        def captura_continua():  # a captura segue guardando enquanto a Pi espera o veredito
-            for _ in range(3):
-                self.s.recentes.append(bytes([proximo[0]]) * 2)
-                proximo[0] += 1
-        d.antes = captura_continua
-        self.s.evento("palavra", self.PALAVRA)
-        await asyncio.sleep(0.25)  # espera medida: ceil(0,25/0,08) = 4 pedaços a mais
-        d.liberar.set()
-        await asyncio.sleep(0.01)
+        self.s._espera_disputa_s = 0.3  # a espera medida do veredito (injetada, sem relógio)
+        self.s._agir("conectar", {"wake_word": "friday"})
         enviados = [b[0] for b in F.conexoes[-1].enviados]
         self.assertEqual(len(enviados), int(0.4 / 0.08) + 4 + 4)
-        self.assertEqual(enviados, list(range(enviados[0], enviados[0] + len(enviados))))  # contínuos
-        self.assertEqual(enviados[-1], 31)  # até o mais novo
-        # começa antes da palavra: nove pedaços (0,4 s + 4) contados do instante da ativação (pedaço 28)
-        self.assertLessEqual(enviados[0], 28 - 9 + 1)
+        self.assertEqual(enviados, list(range(29 - 13, 29)))  # os mais novos, contíguos até o microfone ao vivo
+        self.assertEqual(self.s._espera_disputa_s, 0.3)  # quem zera é `_disputar_e_agir`
+
+    async def test_preroll_with_wait_measured_by_the_claim_resets(self):
+        d = self.disputa(outros=1)
+        self.s.recentes.extend(bytes([i]) * 2 for i in range(29))
+        self.s.evento("palavra", self.PALAVRA)
+        await self.solta(d)
+        self.assertGreaterEqual(len(F.conexoes[-1].enviados), int(0.4 / 0.08) + 4)  # pelo menos o de sempre
         self.assertEqual(self.s._espera_disputa_s, 0)
 
     async def test_preroll_unchanged_when_alone(self):
@@ -754,6 +749,82 @@ class TestDisputa(Base):
         self.s.recentes.extend(bytes([i]) * 2 for i in range(29))
         self.s.evento("palavra", self.PALAVRA)
         self.assertEqual(len(F.conexoes[-1].enviados), int(0.4 / 0.08) + 4)
+
+    async def test_second_word_without_measurements_hits_the_pending_guard(self):
+        d = self.disputa(outros=1)
+        self.s.evento("palavra", self.PALAVRA)
+        self.s.evento("palavra", {"whisper": False, "wake_word": "friday"})
+        self.s.evento("palavra")
+        self.assertEqual(F.sons, [])  # nada despachado enquanto o veredito não vem
+        await self.solta(d)
+        self.assertEqual(len(F.conexoes), 1)
+
+    async def test_doorbell_during_the_wait_queues_and_the_word_goes_first(self):
+        d = self.disputa(outros=1, veredito="go")
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.assertEqual(self.s.campainha("abcd1234"), "na_fila")
+        self.s.tique()  # o tique não abre a fila por cima do aviso
+        self.assertEqual(F.conexoes, [])
+        await self.solta(d)
+        self.assertEqual(F.parou_ja, 0)  # a entrega não foi cortada
+        self.assertNotIn("entrega", F.conexoes[-1].dados)
+        self.assertEqual(F.conexoes[-1].dados["wake_word"], "friday")
+        self.assertEqual(self.s.maestro.publico()["fila_entregas"], 1)
+
+    async def test_timer_during_the_wait_wins_and_the_word_is_stale(self):
+        d = self.disputa(outros=1, veredito="go")
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.s.evento("timer_venceu", TestAlarmeMusical.TM)
+        self.assertEqual(self.s.maestro.estado, "alarme")
+        await self.solta(d)
+        self.assertEqual(self.s.maestro.estado, "alarme")  # o alarme não foi encerrado por uma palavra anterior a ele
+        self.assertEqual(F.conexoes, [])
+        self.assertFalse(self.s._claim_pendente)
+
+    async def test_mute_during_the_wait_drops_the_word_and_never_touches_a_muted_ring(self):
+        d = self.disputa(outros=1, veredito="go")
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.s.evento("mudo", True)
+        await self.solta(d)
+        self.assertEqual((F.sons, F.conexoes), ([], []))
+        self.assertEqual(self.luzes, ["listen"])  # mudo do botão: a luz é do Jabra, nada é escrito por cima
+        self.s.evento("mudo", False)  # ao desmutar o maestro refaz a luz
+        self.assertEqual(self.luzes[-1], "off")
+
+    async def test_software_mute_during_the_wait_restores_the_light(self):
+        d = self.disputa(outros=1, veredito="go")
+        self.s.maestro.mudo_software = True
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.s.evento("mudo", True)
+        await self.solta(d)
+        self.assertEqual(self.luzes, ["listen", "off"])
+
+    async def test_conversation_closed_during_the_wait_makes_the_word_stale(self):
+        d = self.disputa(outros=1, veredito="go")
+        m = self.s.maestro
+        m.estado, m._abertura = "aguardando", {"inicio": 0.0, "como_abriu": "palavra"}
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        m.estado, m._abertura = "parada", None
+        await self.solta(d)
+        self.assertEqual((F.sons, F.conexoes), ([], []))
+        self.assertEqual(self.luzes, ["off"])
+
+    async def test_whisper_and_recordings_use_the_2_s_window_not_the_preroll_buffer(self):
+        import inspect, re
+        self.s.recentes.extend(bytes([i]) * 2 for i in range(29))
+        janela = self.s._janela_palavra()
+        self.assertEqual(len(janela), fs.PEDACOS_JANELA_PALAVRA)
+        self.assertEqual(fs.PEDACOS_JANELA_PALAVRA, 25)
+        self.assertEqual(janela[-1], bytes([28]) * 2)
+        fonte = inspect.getsource(fs.Satelite.captura)
+        usos = [l.strip() for l in fonte.splitlines() if "self.recentes" in l]
+        self.assertEqual(usos, ["self.recentes.append(pcm)"])  # tudo mais passa por _janela_palavra()
+        self.assertIn('b"".join(self._janela_palavra())', fonte)  # entrada do sussurro e do piso de ruído
 
     async def test_active_word_value_carries_score_and_voice_level(self):
         import array

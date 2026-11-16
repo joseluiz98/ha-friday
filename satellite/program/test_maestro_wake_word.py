@@ -35,10 +35,6 @@ class TestWakeWord(unittest.TestCase):
         self.assertEqual(conectar(acoes), {"wake_word": "friday"})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestPalavraAgiria(unittest.TestCase):
     """Spec 2026-11-16 §5.1: o satélite só avisa o bot de uma palavra que o maestro de fato usaria. `palavra_agiria`
     é a mesma regra do `evento` (pura, sem mexer no estado)."""
@@ -64,9 +60,9 @@ class TestPalavraAgiria(unittest.TestCase):
                 for recado in (False, True):
                     with self.subTest(estado=estado, mudo=mudo, recado=recado):
                         m = self.maestro(estado, mudo, recado)
-                        previsto = m.palavra_agiria({"wake_word": "friday"})
                         antes = copy.deepcopy(m.__dict__)
-                        self.assertEqual(m.__dict__, antes)  # pura
+                        previsto = m.palavra_agiria({"wake_word": "friday"})
+                        self.assertEqual(m.__dict__, antes)  # pura: nada mudou depois da consulta
                         real = bool(copy.deepcopy(m).evento("palavra", 1.0, {"wake_word": "friday"}))
                         self.assertEqual(previsto, real)
 
@@ -87,3 +83,7 @@ class TestPalavraAgiria(unittest.TestCase):
         for estado in (TESTE_PALAVRA, CADASTRO):
             for mudo in (False, True):
                 self.assertFalse(self.maestro(estado, mudo).palavra_agiria({"wake_word": "friday"}))
+
+
+if __name__ == "__main__":
+    unittest.main()

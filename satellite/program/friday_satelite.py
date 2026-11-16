@@ -28,6 +28,7 @@ import timers as tm
 from whisper import noise_floor_rms, whisper_ratio_db
 import volume as vol
 
+PEDACOS_JANELA_PALAVRA = 25  # ~2 s: a janela que a razão do sussurro, o piso de ruído e as gravações sempre usaram
 CFG = "/etc/friday-satelite/config.json"
 ID = "/etc/friday-satelite/id"
 SONS = "/home/jose/satelite/sons"
@@ -68,6 +69,7 @@ class Satelite:
         self.recentes = collections.deque(maxlen=29)
         # spec 2026-11-16: disputa entre satélites (quem ouviu melhor responde). Presença a cada 4 s no `principal`.
         self.disputa = ClienteDisputa(self.cfg.get("endereco_friday"), self.cfg.get("senha_porta_local", ""))
+        self._estado_do_claim = None  # estado do maestro quando o aviso saiu: o veredito `go` só vale se ainda for esse
         self._claim_pendente = False  # há um aviso esperando o veredito: outra palavra nesse intervalo é ignorada
         self._espera_disputa_s = 0.0  # quanto a Pi esperou o veredito; a pré-gravação cobre esse tempo
         self._claim_id = None  # id do aviso da palavra que está abrindo a conversa (vai na oferta ao bot)
@@ -209,13 +211,11 @@ class Satelite:
     def _disputar_palavra(self, valor):
         """True se a palavra foi tratada aqui (esperando o veredito). Só avisa o bot de palavra ativa que o maestro
         usaria (`palavra_agiria`): mudo, conversa aberta sem recado, teste e cadastro seguem como hoje."""
-        claim = self._claim_de(valor, self.maestro.estado != "parada")
-        if claim is None:
-            return False
-        if self._claim_pendente:
+        if self._claim_pendente:  # qualquer palavra, com ou sem medidas, enquanto o veredito não chegou
             print(json.dumps({"arbitration": "pending"}), flush=True)
             return True
-        if not self.maestro.palavra_agiria(valor):
+        claim = self._claim_de(valor, self.maestro.estado != "parada")
+        if claim is None or not self.maestro.palavra_agiria(valor):
             return False
         valor = dict(valor, claim_id=claim["claim_id"])
         if not self.disputa.precisa_disputar():  # sozinha: age na hora; o aviso é só para registro
@@ -224,9 +224,16 @@ class Satelite:
             return True
         if self.maestro.estado == "parada":  # luz de escuta já; som e conversa só depois do veredito
             self._agir("luz", "ouvindo")
-        self._claim_pendente = True
+        self._claim_pendente, self._estado_do_claim = True, self.maestro.estado
         asyncio.ensure_future(self._disputar_e_agir(valor, claim))
         return True
+
+    def _restaurar_luz(self):
+        """Volta à luz do estado, só se parada, e pelo filtro do maestro: com o mudo do botão a luz é do Jabra
+        (escrever nela religaria o microfone); ao desmutar, o maestro já refaz a luz."""
+        if self.maestro.estado == "parada":
+            for tipo, arg in self.maestro._filtrar([("luz", self.maestro._luz_do_estado())]):
+                self._agir(tipo, arg)
 
     async def _disputar_e_agir(self, valor, claim):
         t0 = time.monotonic()
@@ -237,12 +244,15 @@ class Satelite:
                 veredito = {"verdict": "go", "reason": "error"}
             self._espera_disputa_s = time.monotonic() - t0
             if veredito.get("verdict") == "lost":
-                if self.maestro.estado == "parada":  # com conversa aberta nada mudou: a luz já é a dela
-                    self._agir("luz", self.maestro._luz_do_estado())
+                self._restaurar_luz()  # com conversa aberta nada mudou: a luz já é a dela
+            elif (self.maestro.estado != self._estado_do_claim or not self.maestro.palavra_agiria(valor)):
+                # durante a espera o mundo mudou (campainha, timer, mudo, conversa que fechou): a palavra ficou velha
+                print(json.dumps({"arbitration": "stale", "estado": self.maestro.estado}), flush=True)
+                self._restaurar_luz()
             else:
                 self._despachar_palavra(valor)
         finally:
-            self._claim_pendente = False
+            self._claim_pendente, self._estado_do_claim = False, None
             self._espera_disputa_s = 0.0
 
     def _despachar_palavra(self, valor):
@@ -251,6 +261,10 @@ class Satelite:
             self._despachar("palavra", valor)
         finally:
             self._claim_id = None
+
+    def _janela_palavra(self):
+        """Os últimos PEDACOS_JANELA_PALAVRA (~2 s): o `recentes` é maior só para a pré-gravação cobrir a espera."""
+        return list(self.recentes)[-PEDACOS_JANELA_PALAVRA:]
 
     def _valor_palavra(self, sussurro, palavra, nota, nota_verificador=None):
         """Valor do evento `palavra` de uma palavra ATIVA (a sombra nunca emite): vai ao maestro e à disputa."""
@@ -523,7 +537,8 @@ class Satelite:
             self.conexao.enviar_mensagem("resposta", resposta)
 
     def campainha(self, entrega_id):
-        resposta, acoes = self.maestro.campainha(entrega_id, time.monotonic())
+        # com um aviso esperando o veredito a campainha entra na fila, como com a conversa aberta (a palavra vem antes)
+        resposta, acoes = self.maestro.campainha(entrega_id, time.monotonic(), ocupado=self._claim_pendente)
         print(json.dumps({"campainha": entrega_id, "resposta": resposta, "estado": self.maestro.estado}), flush=True)
         for tipo, arg in acoes:
             self._agir(tipo, arg)
@@ -655,7 +670,8 @@ class Satelite:
             self.mixer.escrever(self.volume.atual)
 
     def tique(self):
-        self.evento("tique")
+        if not self._claim_pendente:  # no máximo 0,3 s: o tique não abre a fila de entregas por cima do aviso
+            self.evento("tique")
         agora = time.monotonic()
         if self._rede_checada is None or agora - self._rede_checada >= 5:  # spec 2026-11-08: estado do netwatch, a cada 5 s
             self._rede_checada = agora
@@ -834,7 +850,7 @@ class Satelite:
                     if pont < 0.2:
                         razao_ep, calculou = None, False
                     elif (pont >= dp.limiar and dp.armado and not calculou and dp.limiar_sussurro is not None):
-                        trecho = b"".join(self.recentes)  # ~2 s até a palavra; roda só aqui, uma vez por episódio
+                        trecho = b"".join(self._janela_palavra())  # ~2 s até a palavra; roda só aqui, uma vez por episódio
                         razao_ep, piso_ep, calculou = whisper_ratio_db(trecho), noise_floor_rms(trecho), True
                     disparou = dp.alimentar(pont, max(vozes), razao_ep)
                     consultado, nota_v = espiao.ler() if espiao is not None else (False, 0.0)
@@ -846,7 +862,7 @@ class Satelite:
                             nome = None
                             if self.cfg.get("gravar_ativacoes") and gravando is None:
                                 nome = self._nome_gravacao("barrada_")
-                                gravando = (list(self.recentes), [], nome)
+                                gravando = (self._janela_palavra(), [], nome)
                             nomes_f.append(nome)
                             reg.escrever(registro_palavra.linha("barrada_verificador", b["nota"], b["voz"], nome))
                     acao = escolher_acao(modo_f, disparou, False)
@@ -856,7 +872,7 @@ class Satelite:
                         nome = None
                         if self.cfg.get("gravar_ativacoes") and gravando is None:
                             nome = self._nome_gravacao()
-                            gravando = (list(self.recentes), [], nome)
+                            gravando = (self._janela_palavra(), [], nome)
                             ctx = os.path.join(os.path.dirname(nome), "contexto_" + os.path.basename(nome))
                             threading.Thread(target=self._gravar_ativacao, args=(list(self.contexto), [], ctx),
                                              daemon=True).start()
@@ -877,7 +893,7 @@ class Satelite:
                         nome = None
                         if self.cfg.get("gravar_ativacoes") and gravando is None:
                             nome = self._nome_gravacao("sombra_friday_")
-                            gravando = (list(self.recentes), [], nome)
+                            gravando = (self._janela_palavra(), [], nome)
                         reg.escrever(registro_palavra.linha("sombra", pont, max(vozes), nome, palavra="friday"))
                         nomes_f.append(nome)
                         self.emissor.emitir("ativacao", payload_ativacao(
@@ -891,7 +907,7 @@ class Satelite:
                         nome = None
                         if self.cfg.get("gravar_ativacoes") and gravando is None:
                             nome = self._nome_gravacao("sem_voz_")
-                            gravando = (list(self.recentes), [], nome)
+                            gravando = (self._janela_palavra(), [], nome)
                         nomes_f.append(nome)
                         reg.escrever(registro_palavra.linha("sem_voz", pont, max(vozes), nome,
                                                             whisper_ratio_db=razao_ep))
@@ -901,7 +917,7 @@ class Satelite:
                         nome = None
                         if self.cfg.get("gravar_ativacoes") and gravando is None:
                             nome = self._nome_gravacao("quase_")
-                            gravando = (list(self.recentes), [], nome)
+                            gravando = (self._janela_palavra(), [], nome)
                         nomes_f.append(nome)
                         reg.escrever(registro_palavra.linha("quase", q["nota"], q["voz"], nome))
                     # spec 2026-11-03: causa real da rejeição do episódio (a gravação pode ser escolhida no quadro que
@@ -941,7 +957,7 @@ class Satelite:
                         nome = None
                         if self.cfg.get("gravar_ativacoes") and gravando is None:
                             nome = self._nome_gravacao(f"{nome_e}_")  # prefixo próprio: não mistura com as da Friday
-                            gravando = (list(self.recentes), [], nome)
+                            gravando = (self._janela_palavra(), [], nome)
                         nomes_e.append(nome)
                         reg.escrever(registro_palavra.linha("ativou", nota_e, max(vozes), nome, palavra=nome_e))
                         self.emissor.emitir("ativacao", payload_ativacao(
@@ -953,7 +969,7 @@ class Satelite:
                         nome = None
                         if self.cfg.get("gravar_ativacoes") and gravando is None:
                             nome = self._nome_gravacao(f"sombra_{nome_e}_")
-                            gravando = (list(self.recentes), [], nome)
+                            gravando = (self._janela_palavra(), [], nome)
                         nomes_e.append(nome)
                         reg.escrever(registro_palavra.linha("sombra", nota_e, max(vozes), nome, palavra=nome_e))
                         self.emissor.emitir("ativacao", payload_ativacao(
@@ -965,7 +981,7 @@ class Satelite:
                         nome = None
                         if self.cfg.get("gravar_ativacoes") and gravando is None:
                             nome = self._nome_gravacao(registro_palavra.prefixo_quase_extra(nome_e))
-                            gravando = (list(self.recentes), [], nome)
+                            gravando = (self._janela_palavra(), [], nome)
                         nomes_e.append(nome)
                         reg.escrever(registro_palavra.linha("quase", q["nota"], q["voz"], nome, palavra=nome_e))
                     for n_ in nomes_e:
