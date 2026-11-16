@@ -8,6 +8,7 @@ import glob, os, queue, re, struct, subprocess, threading, time, wave
 # acendem nada (06/10); 0x08 e 0x40 tocam a campainha do Jabra.
 # ouvindo = 0x11 desde 04/11 (bancada do botão): visual idêntica à antiga 0x10, mas com o bit 0 o vermelho (00) se
 # distingue do verde (bit 0x10). O alarme segue 0x10: lá qualquer botão para o alarme ("ambos").
+BIT_MUDO_JABRA = 0x04  # LED vermelho/mudo do Jabra (0x05 = 0x01|0x04 cortava o microfone); confirmar ao vivo
 BITS_DO_ANEL = {"parada": 0x00, "ouvindo": 0x11, "cerebro": 0x01, "nao_perturbe": 0x41, "alarme": 0x10}
 
 
@@ -135,9 +136,12 @@ class Anel:
         self._bits = dict(BITS_DO_ANEL, **(bits or {}))
         self._detector = detector  # DetectorBotaoTelefone: o bit 0 do comando ecoa no relatório do botão
 
-    def mostrar(self, nome: str):
+    def mostrar(self, nome: str, mudo: bool = False):
         b = self._bits[nome]
-        assert b != 0x05, "0x05 corta o microfone (proibido)"
+        if mudo:  # v0.3.7: com o microfone mudo, o LED vermelho do Jabra acompanha qualquer luz
+            b |= BIT_MUDO_JABRA
+        else:
+            assert not b & BIT_MUDO_JABRA, "o bit do mudo corta o microfone (0x05 medido em 06/10): só com mudo"
         if self._detector:
             self._detector.comandou(b, time.monotonic())
         os.write(self._fd, bytes([3, b, 0]))

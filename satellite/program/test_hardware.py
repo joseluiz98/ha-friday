@@ -262,3 +262,24 @@ class TestControleMudo(unittest.TestCase):
     def test_falha_do_amixer_devolve_falso(self):
         m = hardware.ControleMudo(executar=lambda argv, timeout: mock.Mock(returncode=1))
         self.assertFalse(m.aplicar(True))
+
+
+class TestAnelMudo(unittest.TestCase):
+    """v0.3.7: com mudo, o relatório leva o bit do LED vermelho do Jabra (BIT_MUDO_JABRA)."""
+    def _anel(self):
+        a = hardware.Anel.__new__(hardware.Anel)
+        a._bits, a._detector, a._fd = dict(hardware.BITS_DO_ANEL), None, None
+        return a
+
+    def test_mudo_soma_o_bit(self):
+        a, escritos = self._anel(), []
+        with mock.patch.object(hardware.os, "write", lambda fd, b: escritos.append(b)):
+            a.mostrar("nao_perturbe", mudo=True)
+            a.mostrar("nao_perturbe")
+        self.assertEqual(escritos, [bytes([3, 0x41 | hardware.BIT_MUDO_JABRA, 0]), bytes([3, 0x41, 0])])
+
+    def test_bit_do_mudo_sem_mudo_continua_proibido(self):
+        a = self._anel()
+        a._bits["x"] = hardware.BIT_MUDO_JABRA | 0x01
+        with mock.patch.object(hardware.os, "write", lambda fd, b: None), self.assertRaises(AssertionError):
+            a.mostrar("x")
