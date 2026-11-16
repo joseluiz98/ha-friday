@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -111,3 +112,52 @@ class GitHubWatcher:
         except (KeyError, TypeError, ValueError, AttributeError) as e:
             raise GitHubError(f"github: unexpected payload ({type(e).__name__})") from None
         return out
+
+
+def _request(method: str, url: str, headers: dict, body: dict | None) -> dict | list | None:
+    data = None if body is None else json.dumps(body).encode()
+    hdrs = dict(headers)
+    if data is not None:
+        hdrs["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+    with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+        return json.load(resp)
+
+
+class GitHubPublisher:
+    """Marks a soaked pre-release as the stable ("latest") release. The only write the server makes to GitHub; the
+    token (a fine-grained one, contents:write on this repo) is read from a file on every call and never logged."""
+
+    def __init__(self, repo: str, token_file: str, request: Callable = _request):
+        self.repo = repo
+        self._token_file = token_file
+        self._request = request
+
+    def _token(self) -> str:
+        try:
+            with open(self._token_file, encoding="utf-8") as f:
+                token = f.read().strip()
+        except OSError:
+            token = ""
+        if not token:
+            raise GitHubError("no_token")
+        return token
+
+    def _call(self, method: str, path: str, token: str, body: dict | None = None):
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                   "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "friday-server-agent"}
+        try:
+            return self._request(method, f"{API}/repos/{self.repo}/{path}", headers, body)
+        except urllib.error.HTTPError as e:
+            raise GitHubError(f"http {e.code}") from None
+        except Exception as e:  # network, JSON: the message carries only the type, never request details
+            raise GitHubError(f"github {method.lower()}: {type(e).__name__}") from None
+
+    def promote(self, tag: str) -> None:
+        token = self._token()
+        rel = self._call("GET", f"releases/tags/{urllib.parse.quote(tag, safe='')}", token)
+        try:
+            release_id = int(rel["id"])
+        except (KeyError, TypeError, ValueError):
+            raise GitHubError("github: unexpected payload") from None
+        self._call("PATCH", f"releases/{release_id}", token, {"prerelease": False, "make_latest": "true"})

@@ -118,3 +118,54 @@ def test_an_old_red_stays_final_on_normal_polls():
     w = _watcher("v0.4.0", "d" * 40, runs(("completed", "success")), calls, now=1794312000.0 + 3 * 86400)
     assert w.poll(red)["v0.4.0"].release.ci == "red"
     assert not any("check-runs" in u for u in calls)
+
+
+# ---- GitHubPublisher (marks a soaked pre-release as the stable release)
+def _publisher(tmp_path, token="s3cret-token\n", responses=None, calls=None):
+    tf = tmp_path / "github_token"
+    if token is not None:
+        tf.write_text(token)
+    calls = calls if calls is not None else []
+
+    def request(method, url, headers, body):
+        calls.append((method, url, dict(headers), body))
+        v = (responses or {}).get((method, url), {"id": 77})
+        if isinstance(v, Exception):
+            raise v
+        return v
+    return g.GitHubPublisher("o/r", str(tf), request=request), calls
+
+
+def test_promote_patches_the_release_by_tag(tmp_path):
+    pub, calls = _publisher(tmp_path)
+    pub.promote("v0.3.7")
+    assert [(m, u) for m, u, _, _ in calls] == [("GET", f"{BASE}/releases/tags/v0.3.7"),
+                                                ("PATCH", f"{BASE}/releases/77")]
+    for _, _, headers, _ in calls:
+        assert headers["Authorization"] == "Bearer s3cret-token"
+        assert headers["Accept"] == "application/vnd.github+json"
+        assert headers["X-GitHub-Api-Version"] == "2022-11-28"
+    assert calls[1][3] == {"prerelease": False, "make_latest": "true"}
+
+
+def test_promote_without_token_raises_no_token(tmp_path):
+    pub, calls = _publisher(tmp_path, token=None)
+    with pytest.raises(g.GitHubError, match="no_token"):
+        pub.promote("v0.3.7")
+    pub, calls = _publisher(tmp_path, token="  \n")
+    with pytest.raises(g.GitHubError, match="no_token"):
+        pub.promote("v0.3.7")
+    assert calls == []
+
+
+def test_promote_http_error_has_no_token_in_message(tmp_path):
+    import urllib.error
+    err = urllib.error.HTTPError(f"{BASE}/releases/77", 403, "forbidden", {}, None)
+    pub, _ = _publisher(tmp_path, responses={("PATCH", f"{BASE}/releases/77"): err})
+    with pytest.raises(g.GitHubError) as ei:
+        pub.promote("v0.3.7")
+    assert str(ei.value) == "http 403" and "s3cret" not in str(ei.value)
+    pub, _ = _publisher(tmp_path, responses={("GET", f"{BASE}/releases/tags/v0.3.7"): OSError("s3cret-token")})
+    with pytest.raises(g.GitHubError) as ei:
+        pub.promote("v0.3.7")
+    assert "s3cret" not in str(ei.value)

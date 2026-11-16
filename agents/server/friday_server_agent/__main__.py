@@ -187,10 +187,14 @@ async def main() -> None:
     except (OSError, KeyError) as err:
         LOG.warning("OTA: no Proxmox snapshot access (%s)", type(err).__name__)
         snapshots = None
+    gh_token_file = os.environ.get("FRIDAY_GITHUB_TOKEN_FILE", "/srv/friday/state/github_token")
+    publisher = (otagh.GitHubPublisher(otagh.repo_from_env(), gh_token_file)
+                 if os.path.exists(gh_token_file) else None)  # no token file: no automatic promotion
     installer = otasrv.ServerInstaller(ota_store, ota_repo, snapshots, lambda: status_token)
     orch = otaorc.Orchestrator(ota_store, otastore.TokenBook(),
                                otagh.GitHubWatcher(os.environ.get("FRIDAY_OTA_REPO", "joseluiz98/ha-friday")),
-                               ota_repo, vault, notifier, installer=installer, images=otaimg.ImageBuilder())
+                               ota_repo, vault, notifier, installer=installer, images=otaimg.ImageBuilder(),
+                               publisher=publisher)
     state["ota_auto_install"] = ota_store.auto_install
     def ota_state() -> dict:
         """The server's OTA entities: its update, the integration's target (Task 18 installs it through HACS) and

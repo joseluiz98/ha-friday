@@ -35,3 +35,8 @@ def test_empty_chat_rejected():
 def test_withdrawn_message():
     m = n.format_withdrawn("sat-1", "v0.4.0", "health", "program not answering", "v0.3.0")
     assert "v0.4.0" in m and "sat-1" in m and "program not answering" in m and "v0.3.0" in m and "alpha" in m
+
+
+def test_format_promoted():
+    assert n.format_promoted("v0.3.7") == \
+        "F.R.I.D.A.Y. v0.3.7 passou na prova do alpha e agora é a versão stable."

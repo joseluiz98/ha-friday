@@ -389,3 +389,80 @@ def test_a_report_id_must_be_hex(tmp_path):
     import pytest
     with pytest.raises(ValueError, match="id"):
         w.orch.report({"sat_id": SAT, "tag": "v0.3.0", "result": "failed", "id": "../x"})
+
+
+# ---- automatic promotion on GitHub
+class FakePublisher:
+    def __init__(self, fail=None):
+        self.calls, self.fail = [], fail
+
+    def promote(self, tag):
+        self.calls.append(tag)
+        if self.fail:
+            raise gh.GitHubError(self.fail)
+
+
+def _soaked_world(tmp_path, releases, publisher, tag="v0.4.0"):
+    w = World(tmp_path, releases)
+    w.orch.publisher = publisher
+    w.orch.poll()
+    w.offer("alpha", sat="sat-0000a1")
+    w.orch.report({"sat_id": "sat-0000a1", "tag": tag, "result": "installed", "stage": "", "error": ""})
+    w.now += SOAK_S
+    return w
+
+
+def test_soaked_prerelease_is_promoted_once(tmp_path):
+    pub = FakePublisher()
+    w = _soaked_world(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)], pub)
+    w.orch.poll()
+    w.orch.poll()
+    assert pub.calls == ["v0.4.0"]
+    assert w.pushed == ["F.R.I.D.A.Y. v0.4.0 passou na prova do alpha e agora é a versão stable."]
+    assert w.store.data["promotions"]["v0.4.0"]["result"] == "promoted"
+
+
+def test_not_yet_soaked_prerelease_is_not_promoted(tmp_path):
+    pub = FakePublisher()
+    w = _soaked_world(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)], pub)
+    w.now -= SOAK_S // 2
+    w.orch.poll()
+    assert pub.calls == []
+
+
+def test_older_soaked_prerelease_is_not_promoted_over_a_newer_stable(tmp_path):
+    pub = FakePublisher()
+    w = _soaked_world(tmp_path, [rel("v0.4.0", pre=True), rel("v0.5.0")], pub)
+    w.orch.poll()
+    assert pub.calls == [] and w.pushed == []
+    assert w.store.data["promotions"]["v0.4.0"]["result"] == "superseded"
+
+
+def test_failed_promotion_retries_after_an_hour(tmp_path):
+    pub = FakePublisher(fail="http 502")
+    w = _soaked_world(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)], pub)
+    w.orch.poll()
+    w.orch.poll()
+    assert pub.calls == ["v0.4.0"] and w.pushed == []
+    w.now += orc.PROMOTE_RETRY_S
+    pub.fail = None
+    w.orch.poll()
+    assert pub.calls == ["v0.4.0", "v0.4.0"]
+    assert w.store.data["promotions"]["v0.4.0"]["result"] == "promoted" and len(w.pushed) == 1
+
+
+def test_no_publisher_is_a_noop(tmp_path):
+    w = _soaked_world(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)], None)
+    w.orch.poll()
+    assert "promotions" not in w.store.data or w.store.data["promotions"] == {}
+
+
+def test_promotion_survives_restart_without_repeating(tmp_path):
+    pub = FakePublisher()
+    w = _soaked_world(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)], pub)
+    w.orch.poll()
+    w2 = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)])
+    w2.orch.publisher = pub
+    w2.now = w.now
+    w2.orch.poll()
+    assert pub.calls == ["v0.4.0"]
