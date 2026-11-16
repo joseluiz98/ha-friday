@@ -100,6 +100,7 @@ async def test_advanced_sends_only_changes_and_logs(hass):
         r["flow_id"], form_values(wakeword_friday_mode="shadow", ducking_restore=2.0))
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "advanced_saved"
     assert sorted(got) == [("ducking_restore", 2.0), ("wakeword_friday_mode", "shadow")]
+    await hass.async_block_till_done()  # the logbook event reaches the listener on a later loop turn (flaky on CI, 15/11)
     assert any("wakeword_friday_mode off → shadow" in m and m.startswith("Advanced settings") for m in seen)
     assert dict(entry.subentries["s0"].data) == {"host": "127.0.0.1", "port": sat.port, "token": "t"}
     await hass.config_entries.async_unload(entry.entry_id)
