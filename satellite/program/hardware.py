@@ -8,7 +8,7 @@ import glob, os, queue, re, struct, subprocess, threading, time, wave
 # acendem nada (06/10); 0x08 e 0x40 tocam a campainha do Jabra.
 # ouvindo = 0x11 desde 04/11 (bancada do botão): visual idêntica à antiga 0x10, mas com o bit 0 o vermelho (00) se
 # distingue do verde (bit 0x10). O alarme segue 0x10: lá qualquer botão para o alarme ("ambos").
-BIT_MUDO_JABRA = 0x04  # LED vermelho/mudo do Jabra (0x05 = 0x01|0x04 cortava o microfone); confirmar ao vivo
+BIT_MUDO_JABRA = 0x04  # LED vermelho/mudo do Jabra (0x05 = 0x01|0x04 cortava o microfone); confirmado ao vivo 16/11
 BITS_DO_ANEL = {"parada": 0x00, "ouvindo": 0x11, "cerebro": 0x01, "nao_perturbe": 0x41, "alarme": 0x10}
 
 
