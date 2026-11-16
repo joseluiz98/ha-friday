@@ -1,6 +1,6 @@
 """friday-satelite: liga Jabra, palavra, maestro e conexão (spec 2026-10-05). Serviço systemd na Pi.
 Registro: uma linha JSON por abertura no journald (sem áudio, nunca)."""
-import asyncio, collections, datetime, json, os, subprocess, sys, tempfile, threading, time, wave
+import asyncio, collections, datetime, json, math, os, subprocess, sys, tempfile, threading, time, wave
 import aiohttp
 import numpy as np
 from openwakeword.model import Model
@@ -11,9 +11,10 @@ import volume_inicial
 from ducking import MusicDucker, SENDSPIN_STATUS, sendspin_playing, should_duck
 import comandos
 import configuracao as cfgmod
+from arbitragem import ClienteDisputa, novo_claim_id
 from conexao import ConexaoFriday
 from detectores import (DetectorBotaoTelefone, DetectorFala, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
-                        MedidorEco, PicoDaFala, escolher_acao, portao_eco, trecho_do_episodio)
+                        MedidorEco, PicoDaFala, escolher_acao, portao_eco, rms_dbfs, trecho_do_episodio)
 from hardware import AltoFalante, Anel, Botao, Captura, ControleMudo, Mixer, MusicMixer, TeclasVolume
 from maestro import Ajustes, Maestro
 import palavra_modelo
@@ -63,7 +64,13 @@ class Satelite:
         self.conversa_sussurrada = False
         self.fala_em_andamento = False
         self.piso_conversa = 0.0  # piso de ruído do trecho da palavra (spec 2026-10-20), usado na conversa sussurrada
-        self.recentes = collections.deque(maxlen=25)  # ~2 s de pedaços de 80 ms
+        # 29 = 25 (~2 s de pedaços de 80 ms) + 4: a espera do veredito da disputa (0,3 s) não pode abrir buraco na pré-gravação
+        self.recentes = collections.deque(maxlen=29)
+        # spec 2026-11-16: disputa entre satélites (quem ouviu melhor responde). Presença a cada 4 s no `principal`.
+        self.disputa = ClienteDisputa(self.cfg.get("endereco_friday"), self.cfg.get("senha_porta_local", ""))
+        self._claim_pendente = False  # há um aviso esperando o veredito: outra palavra nesse intervalo é ignorada
+        self._espera_disputa_s = 0.0  # quanto a Pi esperou o veredito; a pré-gravação cobre esse tempo
+        self._claim_id = None  # id do aviso da palavra que está abrindo a conversa (vai na oferta ao bot)
         self.contexto = collections.deque(maxlen=375)  # 20/10: ~30 s antes de cada ativação (tentativas perdidas)
         self.ambiente = ambiente.GravadorAmbiente()  # 02/11: gravação contínua para o retreino (gravar_ambiente_ate)
         # spec 2026-10-12: volume (o gravado, ou o que o aparelho tem) e timers
@@ -177,6 +184,90 @@ class Satelite:
 
     # ---- eventos (sempre no laço asyncio)
     def evento(self, nome, valor=None):
+        if nome == "palavra" and self._disputar_palavra(valor):
+            return
+        self._despachar(nome, valor)
+
+    # ---- disputa entre satélites (spec 2026-11-16 §5.1, §5.3, §5.4)
+    @staticmethod
+    def _claim_de(valor, busy):
+        """O aviso de ativação a partir do valor do evento; None se faltar medida (então a palavra vai como hoje)."""
+        if not isinstance(valor, dict):
+            return None
+        palavra, nota, voz = valor.get("wake_word"), valor.get("score"), valor.get("voice_dbfs")
+        medidas = [v for v in (nota, voz) if isinstance(v, (int, float)) and not isinstance(v, bool)
+                   and math.isfinite(v)]
+        if not isinstance(palavra, str) or not palavra or len(medidas) != 2:
+            return None
+        claim = {"claim_id": novo_claim_id(), "wake_word": palavra, "score": float(nota), "voice_dbfs": float(voz),
+                 "busy": bool(busy)}
+        verificador = valor.get("verifier_score")
+        if isinstance(verificador, (int, float)) and not isinstance(verificador, bool) and math.isfinite(verificador):
+            claim["verifier_score"] = float(verificador)
+        return claim
+
+    def _disputar_palavra(self, valor):
+        """True se a palavra foi tratada aqui (esperando o veredito). Só avisa o bot de palavra ativa que o maestro
+        usaria (`palavra_agiria`): mudo, conversa aberta sem recado, teste e cadastro seguem como hoje."""
+        claim = self._claim_de(valor, self.maestro.estado != "parada")
+        if claim is None:
+            return False
+        if self._claim_pendente:
+            print(json.dumps({"arbitration": "pending"}), flush=True)
+            return True
+        if not self.maestro.palavra_agiria(valor):
+            return False
+        valor = dict(valor, claim_id=claim["claim_id"])
+        if not self.disputa.precisa_disputar():  # sozinha: age na hora; o aviso é só para registro
+            asyncio.ensure_future(self.disputa.registrar(claim))
+            self._despachar_palavra(valor)
+            return True
+        if self.maestro.estado == "parada":  # luz de escuta já; som e conversa só depois do veredito
+            self._agir("luz", "ouvindo")
+        self._claim_pendente = True
+        asyncio.ensure_future(self._disputar_e_agir(valor, claim))
+        return True
+
+    async def _disputar_e_agir(self, valor, claim):
+        t0 = time.monotonic()
+        try:
+            try:
+                veredito = await self.disputa.disputar(claim)
+            except Exception:  # o cliente nunca levanta; por garantia, nada deixa a Pi muda
+                veredito = {"verdict": "go", "reason": "error"}
+            self._espera_disputa_s = time.monotonic() - t0
+            if veredito.get("verdict") == "lost":
+                if self.maestro.estado == "parada":  # com conversa aberta nada mudou: a luz já é a dela
+                    self._agir("luz", self.maestro._luz_do_estado())
+            else:
+                self._despachar_palavra(valor)
+        finally:
+            self._claim_pendente = False
+            self._espera_disputa_s = 0.0
+
+    def _despachar_palavra(self, valor):
+        self._claim_id = valor.get("claim_id")
+        try:
+            self._despachar("palavra", valor)
+        finally:
+            self._claim_id = None
+
+    def _valor_palavra(self, sussurro, palavra, nota, nota_verificador=None):
+        """Valor do evento `palavra` de uma palavra ATIVA (a sombra nunca emite): vai ao maestro e à disputa."""
+        valor = {"whisper": sussurro, "wake_word": palavra, "score": float(nota), "voice_dbfs": self._voz_dbfs()}
+        if nota_verificador is not None:
+            valor["verifier_score"] = float(nota_verificador)
+        return valor
+
+    def _voz_dbfs(self):
+        """Volume do ~1 s antes da detecção (últimos 12 pedaços); qualquer falha = silêncio (-120)."""
+        try:
+            v = rms_dbfs(b"".join(list(self.recentes)[-12:]))
+            return float(v) if math.isfinite(v) else -120.0
+        except Exception:
+            return -120.0
+
+    def _despachar(self, nome, valor=None):
         if nome != "tique":  # 06/10: rastro no journal para entender fechamentos (sem áudio)
             print(json.dumps({"evento": nome, "valor": valor, "estado": self.maestro.estado}), flush=True)
         for tipo, arg in self.maestro.evento(nome, time.monotonic(), valor):
@@ -217,12 +308,16 @@ class Satelite:
                 self.anel.show_maestro(ring.ESTADO_DO_MAESTRO[self.maestro._luz_do_estado()])
                 print(json.dumps({"undo_mute": "jabra"}), flush=True)
         elif tipo == "conectar":  # arg: None (palavra/botão) ou {"timer": ...}/{"entrega": id} (spec 2026-10-12)
+            com_voz = arg is None or arg.get("whisper") or arg.get("wake_word")
+            if self._claim_id and arg is not None:  # spec 2026-11-16: o bot cruza a conversa com o aviso da disputa
+                arg = dict(arg, claim_id=self._claim_id)
             self.conexao = ConexaoFriday(self.cfg["endereco_friday"], cfgmod.dados_conexao(self.sid, self.cfg, arg),
                                          self._de_fora, self.alto.tocar_pcm48)
             self.conversa_sussurrada = bool(arg and arg.get("whisper"))
             self.fala_em_andamento = self.conversa_sussurrada  # a captura põe o DetectorFala "falando"  # D7: a fala também se mede pela razão
-            if arg is None or arg.get("whisper") or arg.get("wake_word"):  # pré-gravação só quando alguém falou; na conversa aberta pela Pi ela teria o alarme
+            if com_voz:  # pré-gravação só quando alguém falou; na conversa aberta pela Pi ela teria o alarme
                 n = int(self.cfg["pre_gravacao_s"] / 0.08) + 4  # +4 pedaços: a detecção chega ~0,3 s depois da palavra
+                n += math.ceil(self._espera_disputa_s / 0.08)  # spec 2026-11-16 §5.5: mais o que se esperou o veredito
                 for pcm in list(self.recentes)[-n:]:
                     self.conexao.enviar(pcm)
             self.microfone_aberto = True
@@ -775,7 +870,8 @@ class Satelite:
                             voz=max(vozes), nota_verificador=nota_v if consultado else None,
                             limiar_verificador=self.cfg.get("limiar_verificador") if consultado else None,
                             razao_sussurro_db=razao_ep, sussurro=sussurro, gravacao=nome))
-                        self.loop.call_soon_threadsafe(self.evento, "palavra", {"whisper": sussurro, "wake_word": "friday"})
+                        self.loop.call_soon_threadsafe(self.evento, "palavra", self._valor_palavra(
+                            sussurro, "friday", pont, nota_v if consultado else None))
                     elif acao == "sombra":  # spec 2026-10-24: pontua e registra; sem evento, som nem luz
                         print(json.dumps({"palavra_sombra": "friday", "nota": round(pont, 2)}), flush=True)
                         nome = None
@@ -851,7 +947,7 @@ class Satelite:
                         self.emissor.emitir("ativacao", payload_ativacao(
                             nome_e, nota_e, "conversa", modo="ativa", limiar=det.limiar, limiar_voz=det.limiar_voz,
                             voz=max(vozes), paciencia=e.get("paciencia"), gravacao=nome))
-                        self.loop.call_soon_threadsafe(self.evento, "palavra", {"whisper": False, "wake_word": nome_e})
+                        self.loop.call_soon_threadsafe(self.evento, "palavra", self._valor_palavra(False, nome_e, nota_e))
                     elif acao == "sombra":
                         print(json.dumps({"palavra_sombra": nome_e, "nota": round(nota_e, 2)}), flush=True)
                         nome = None
@@ -963,6 +1059,7 @@ async def principal():
         threading.Thread(target=corpo, daemon=True).start()
 
     em_thread(s.captura); em_thread(s.botao)
+    presenca = asyncio.ensure_future(s.disputa.laco_presenca())  # spec 2026-11-16: quantos outros satélites estão online
     threading.Thread(target=s.teclas, daemon=True).start()
     threading.Thread(target=s.duck_laco, daemon=True).start()
     await porta_local.iniciar(CFG, s.estado_publico, s.ao_mudar_config, s.cfg["porta_local"], s.campainha,
@@ -975,6 +1072,8 @@ async def principal():
             await asyncio.wait_for(morreu.wait(), timeout=0.2)
         except asyncio.TimeoutError:
             pass
+    presenca.cancel()
+    await s.disputa.fechar()
     sys.exit(2)
 
 

@@ -123,6 +123,19 @@ class Maestro:
             acoes = [a for a in acoes if a not in (("som", "inicio"), ("som", "fim"))]
         return acoes
 
+    def palavra_agiria(self, valor=None) -> bool:
+        """Spec 2026-11-16 §5.1: o `evento("palavra", ...)` devolveria ações agora? Pura (não muda estado) e
+        espelha as guardas de `_trata` para a palavra; quem muda lá muda aqui (test_palavra_agiria_matches_evento).
+        O teste da palavra e a gravação do cadastro são da Pi e nunca disputam, embora o `evento` os trate."""
+        e = self.estado
+        if e in (TESTE_PALAVRA, CADASTRO) or self.mudo is not False:
+            return False
+        if e == ALARME:  # a palavra encerra o alarme e abre a conversa
+            return True
+        if self._recado and e in ABERTO:  # v0.3.7/b287504: só a palavra ativa corta o recado
+            return True
+        return e not in ABERTO  # PARADA, CORTADA e AGUARDANDO abrem/reabrem; aberta sem recado ignora
+
     def campainha(self, entrega_id: str, agora: float):
         """POST /doorbell (spec 2026-10-12 §3): ("calado" | "na_fila" | "vou_abrir", ações)."""
         if self.nao_perturbe:

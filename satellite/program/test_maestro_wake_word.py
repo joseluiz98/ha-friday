@@ -1,7 +1,9 @@
 """28/10/2026: a palavra que abriu a conversa vai na oferta ao bot (aparece no Jarvis Logbook, só no 1º turno).
 cd /homeassistant/tools/satelite/programa && python3 -m unittest test_maestro_wake_word -v"""
+import copy
 import unittest
-from maestro import Ajustes, Maestro
+from maestro import (ALARME, AGUARDANDO, CADASTRO, CONECTANDO, CORTADA, OUVINDO, PARADA, TESTE_PALAVRA, Ajustes,
+                     Maestro)
 
 
 def conectar(acoes):
@@ -35,3 +37,53 @@ class TestWakeWord(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPalavraAgiria(unittest.TestCase):
+    """Spec 2026-11-16 §5.1: o satélite só avisa o bot de uma palavra que o maestro de fato usaria. `palavra_agiria`
+    é a mesma regra do `evento` (pura, sem mexer no estado)."""
+
+    def maestro(self, estado, mudo, recado=False):
+        m = Maestro(Ajustes(), mudo_inicial=mudo)
+        m.estado = estado
+        if estado in (CONECTANDO, OUVINDO, CORTADA, AGUARDANDO):
+            m._abertura = {"inicio": 0.0, "como_abriu": "palavra"}
+        if estado == ALARME:
+            m._alarme = {"timer": {"id": "t1"}, "inicio": 0.0, "atendido": False}
+        if estado == TESTE_PALAVRA:
+            m._teste = {"contagem": 0}
+        if estado == CADASTRO:
+            m._cadastro = {"nome": "x"}
+        m._recado = recado
+        return m
+
+    def test_palavra_agiria_matches_evento(self):
+        estados = (PARADA, CONECTANDO, OUVINDO, CORTADA, AGUARDANDO, ALARME)
+        for estado in estados:
+            for mudo in (False, True, None):
+                for recado in (False, True):
+                    with self.subTest(estado=estado, mudo=mudo, recado=recado):
+                        m = self.maestro(estado, mudo, recado)
+                        previsto = m.palavra_agiria({"wake_word": "friday"})
+                        antes = copy.deepcopy(m.__dict__)
+                        self.assertEqual(m.__dict__, antes)  # pura
+                        real = bool(copy.deepcopy(m).evento("palavra", 1.0, {"wake_word": "friday"}))
+                        self.assertEqual(previsto, real)
+
+    def test_abertas_so_agem_sobre_um_recado(self):
+        for estado in (CONECTANDO, OUVINDO):
+            self.assertFalse(self.maestro(estado, False).palavra_agiria(None))
+            self.assertTrue(self.maestro(estado, False, recado=True).palavra_agiria(None))
+            self.assertFalse(self.maestro(estado, True, recado=True).palavra_agiria(None))
+
+    def test_parada_cortada_aguardando_agem_e_o_alarme_tambem(self):
+        for estado in (PARADA, CORTADA, AGUARDANDO, ALARME):
+            self.assertTrue(self.maestro(estado, False).palavra_agiria(None))
+            self.assertFalse(self.maestro(estado, True).palavra_agiria(None))
+            self.assertFalse(self.maestro(estado, None).palavra_agiria(None))
+
+    def test_teste_e_cadastro_nunca_disputam(self):
+        # o teste da palavra e a gravação são da Pi (nada de "quem ouviu melhor"): o evento é tratado como hoje
+        for estado in (TESTE_PALAVRA, CADASTRO):
+            for mudo in (False, True):
+                self.assertFalse(self.maestro(estado, mudo).palavra_agiria({"wake_word": "friday"}))
