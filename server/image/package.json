@@ -1,1 +1,1 @@
-{"name": "friday-image-deps", "private": true, "dependencies": {"openclaw": "2026.11.3", "mcporter": "0.17.0"}}
+{"name": "friday-image-deps", "private": true, "dependencies": {"openclaw": "2026.9.9", "mcporter": "0.14.1"}}
