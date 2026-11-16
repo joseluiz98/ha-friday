@@ -545,19 +545,34 @@ class TestAnelComMudo(Base):
         self.s.ao_mudar_config(novo)
         self.assertEqual(F.luzes[-1][1], False)
 
-    async def test_button_mute_sets_indicator(self):
+    async def test_button_mute_leaves_the_jabra_alone(self):
+        # o mudo do botão é do próprio Jabra (vermelho dele); escrever uma luz sem o bit o desfaria (06/10)
         self.s.cfg["mudo"] = False
         self.s.arranque_do_anel()
+        n = len(F.luzes)
         self.s.evento("mudo", True)
-        self.assertEqual(F.luzes[-1][1], True)
-        self.s.evento("mudo", False)
+        self.assertTrue(all(not m for _, m in F.luzes[n:]))
+        self.assertEqual(F.luzes[n:], [])
+
+    async def test_unmute_from_ha_after_the_zeros_set_maestro_mudo(self):  # C1
+        self.s.cfg["mudo"] = True
+        self.s.arranque_do_anel()
+        self.s.evento("mudo", True)  # o bit cortou o microfone: a captura vê zeros
+        self.s.ao_mudar_config(dict(self.s.cfg, mudo=False))
+        self.assertEqual(F.luzes[-1][1], False)  # a luz sem o bit sai: o Jabra libera o microfone
+
+    async def test_desfazer_mudo_writes_without_the_bit(self):  # I1
+        self.s.cfg["mudo"] = False
+        self.s.arranque_do_anel()
+        self.s.maestro.mudo = True
+        self.s._agir("desfazer_mudo", None)
         self.assertEqual(F.luzes[-1][1], False)
 
     async def test_preview_command_is_unitary(self):
         self.s.cfg["mudo"] = True
         self.s.arranque_do_anel()
         self.s.comando_porta({"acao": "ring", "state": "alarm", "preview": True})
-        self.assertEqual(F.luzes[-1], ("alarme", False))
+        self.assertEqual(F.luzes[-1], ("alarme", True))  # um estado por vez, mas no Jabra o mudo não se perde
         self.s.comando_porta({"acao": "ring", "state": None, "preview": True})
         self.assertEqual(F.luzes[-1][1], True)
 

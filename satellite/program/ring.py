@@ -77,6 +77,7 @@ class _Composto:
     """Entrada comum dos drivers. `show` = comandos de fora (OTA, porta local); `show_maestro` = a luz da conversa;
     `preview` = um estado cru, sem composição (botão de prévia). Cada driver só implementa `_draw(base, mudo, dir)`."""
     ERRO_MOMENTANEO = False
+    MUDO_NA_PREVIA = False
 
     def _init_composto(self):
         self._estado = RingState()
@@ -114,10 +115,8 @@ class _Composto:
             self._estado.set_layer("maestro", state)
             if state == "listen":
                 self._direcao = direction
-            if self._cru is None:
-                self._redesenhar()
-            else:
-                self._iniciado = True
+            self._cru = None  # uma luz da conversa encerra a prévia (prévia interrompida não manda o fim)
+            self._redesenhar()
 
     def preview(self, state):
         with self._trava:
@@ -125,7 +124,7 @@ class _Composto:
                 self._cru = None
             else:
                 self._validar(state)
-                self._fim_do_erro()
+                self._fim_do_erro(devolver=True)  # o erro momentâneo não fica preso na camada
                 self._cru = state
             self._redesenhar()
 
@@ -144,8 +143,9 @@ class _Composto:
 
     def _redesenhar(self):
         self._iniciado = True
-        if self._cru is not None:
-            self._draw(self._cru, False, self._direcao if self._cru == "listen" else None)
+        if self._cru is not None:  # prévia: um estado cru; no Jabra o bit do mudo vai junto (sem ele, desmutaria)
+            self._draw(self._cru, self.MUDO_NA_PREVIA and self._estado.muted,
+                       self._direcao if self._cru == "listen" else None)
             return
         base, mudo = self._estado.resolve()
         self._draw(base, mudo, self._direcao if base == "listen" else None)
@@ -153,7 +153,7 @@ class _Composto:
     def _comecar_erro(self):  # só no driver com erro momentâneo
         pass
 
-    def _fim_do_erro(self):
+    def _fim_do_erro(self, devolver=False):
         pass
 
 
@@ -197,6 +197,7 @@ class JabraRing(_Composto):
     """Usa o `Anel` atual (sem cache: o comportamento tem de ser idêntico ao de antes, inclusive o detector do botão).
     Com mudo, todo relatório leva o bit do LED vermelho do próprio Jabra: uma luz nova nunca tira o mudo.
     A contagem usa os LEDs de volume (uma posição do PCM por LED): `posicao_fn(k)` escreve no mixer, sem gravar."""
+    MUDO_NA_PREVIA = True
     def __init__(self, anel, posicao_fn=None):
         self._anel = anel
         self._posicao_fn = posicao_fn
@@ -265,17 +266,28 @@ class Xvf3800Ring(_Composto):
             self._timer.cancel()  # erro repetido: a volta continua sendo a de antes do primeiro
         else:
             self._volta = self._estado._camadas["externo"]
-        self._timer = self._agendar(ERROR_HOLD_S, self._voltar)
+        self._timer = self._agendar_proprio(ERROR_HOLD_S, self._voltar, "_timer")
 
-    def _fim_do_erro(self):
+    def _fim_do_erro(self, devolver=False):
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+            if devolver:
+                self._estado.set_layer("externo", self._volta)
         self._volta = None
 
-    def _voltar(self):
+    def _agendar_proprio(self, atraso, fn, campo):
+        """O callback só age se o seu timer ainda for o atual em `campo` (um callback velho pode estar parado na
+        trava enquanto o timer é trocado)."""
+        caixa = []
+        t = self._timer_factory(atraso, lambda: fn(caixa[0]))
+        caixa.append(t)
+        t.start()
+        return t
+
+    def _voltar(self, meu=None):
         with self._trava:
-            if self._timer is None:
+            if self._timer is None or (meu is not None and meu is not self._timer):
                 return  # cancelado: um estado novo já ocupou o lugar
             self._timer = None
             self._estado.set_layer("externo", self._volta)
@@ -292,23 +304,27 @@ class Xvf3800Ring(_Composto):
     def _dnd_vale(self):
         return self._cru is None and self._estado.resolve() == ("dnd", False)
 
-    def _pulso(self):
+    def _pulso(self, meu=None):
         with self._trava:
+            if meu is not None and meu is not self._timer_dnd:
+                return
             self._timer_dnd = None
             if not self._dnd_vale():
                 return
             efeito, cor, vel = _XVF["dnd"]
             self._aplicar(("dnd", "pulso"), [("LED_COLOR", [cor]), ("LED_SPEED", [vel]),
                                              ("LED_BRIGHTNESS", [BRIGHTNESS]), ("LED_EFFECT", [1])])
-            self._timer_dnd = self._agendar(DND_PULSE_S, self._baixo)
+            self._timer_dnd = self._agendar_proprio(DND_PULSE_S, self._baixo, "_timer_dnd")
 
-    def _baixo(self):
+    def _baixo(self, meu=None):
         with self._trava:
+            if meu is not None and meu is not self._timer_dnd:
+                return
             self._timer_dnd = None
             if not self._dnd_vale():
                 return
             self._aplicar(("dnd", "baixo"), [("LED_COLOR", [escalar(_XVF["dnd"][1], DND_LOW)]), ("LED_EFFECT", [3])])
-            self._timer_dnd = self._agendar(DND_PULSE_EVERY_S, self._pulso)
+            self._timer_dnd = self._agendar_proprio(DND_PULSE_EVERY_S, self._pulso, "_timer_dnd")
 
     # ---- desenho
     @staticmethod
@@ -354,7 +370,7 @@ class Xvf3800Ring(_Composto):
             self._parar_dnd()
             self._ultimo = None if self._ultimo == ("dnd", "pulso") else self._ultimo
             self._aplicar(("dnd", "baixo"), [("LED_COLOR", [escalar(_XVF["dnd"][1], DND_LOW)]), ("LED_EFFECT", [3])])
-            self._timer_dnd = self._agendar(DND_PULSE_EVERY_S, self._pulso)
+            self._timer_dnd = self._agendar_proprio(DND_PULSE_EVERY_S, self._pulso, "_timer_dnd")
             return
         self._parar_dnd()
         chave = (base, None if base != "listen" or direction is None else tuple(self._quadro(direction)))

@@ -190,6 +190,7 @@ class TestCerebro(Base):
         self.m.evento("ela_comecou", 40.5)
         self.m.evento("cerebro_pendente", 40.6, 0)
         self.m.evento("ela_parou", 45.0)
+        self.assertIn(("microfone", True), self.m.evento("tique", 46.6))  # v0.3.7: fim do recado (pausa de 1,5 s)
         self.assertEqual(tipos(self.m.evento("tique", 53.0)), ["som:fim", "luz:parada", "desconectar"])
 
     def test_palavra_aguardando_reabre_na_mesma_conversa(self):
@@ -232,6 +233,7 @@ class TestCerebro(Base):
         self.assertEqual(tipos(self.m.evento("ela_comecou", 31.0)), ["som:inicio", "luz:ouvindo", "microfone:False"])  # v0.3.7: recado com mic fechado
         self.assertEqual(self.m.estado, "ouvindo")
         self.m.evento("ela_parou", 35.0)
+        self.assertIn(("microfone", True), self.m.evento("tique", 36.6))  # v0.3.7: fim do recado (pausa de 1,5 s)
         self.assertEqual(self.m.evento("tique", 42.9), [])  # Ajustes() padrão: continuação de 8 s
         self.assertEqual(tipos(self.m.evento("tique", 43.0)), ["som:fim", "luz:parada", "desconectar"])
 
@@ -584,7 +586,8 @@ class TestEsperaCurta(Base):
         self.assertEqual(self.m.campainha("e1abcdef", 0.0)[0], "vou_abrir")
         self.m.evento("conectou", 0.5)
         self.m.evento("ela_comecou", 1.0); self.m.evento("ela_parou", 3.0)
-        self.m.evento("fala_comecou", 4.0); self.m.evento("fala_parou", 5.0)
+        self.m.evento("tique", 4.6)  # v0.3.7: fim do recado (pausa de 1,5 s): o microfone abre
+        self.m.evento("fala_comecou", 4.8); self.m.evento("fala_parou", 5.0)
         self.assertEqual(self.m.evento("tique", 24.9), [])
         self.assertEqual(registro(self.m.evento("tique", 25.0))["como_fechou"], "sem_resposta")
 
@@ -966,12 +969,14 @@ class TestRecadoSoAPalavraInterrompe(TestCerebro):
 
     def test_mic_opens_when_delivery_speech_ends(self):
         self.recado()
-        self.assertIn(("microfone", True), self.m.evento("ela_parou", 45.0))
+        self.m.evento("ela_parou", 45.0)
+        self.assertIn(("microfone", True), self.m.evento("tique", 46.6))
 
     def test_after_the_delivery_a_word_works_as_today(self):
         self.recado()
         self.m.evento("ela_parou", 45.0)
-        self.assertEqual(self.m.evento("palavra", 46.0, {"wake_word": "friday"}), [])  # conversa aberta: como antes
+        self.m.evento("tique", 46.6)
+        self.assertEqual(self.m.evento("palavra", 47.0, {"wake_word": "friday"}), [])  # conversa aberta: como antes
 
     def test_pi_delivery_closes_the_mic_too(self):
         self.m.mudo = False
@@ -991,3 +996,37 @@ class TestRecadoFecha(TestRecadoSoAPalavraInterrompe):
         self.recado()
         self.m.evento("encerrar", 41.0)
         self.assertFalse(self.m._recado)
+
+
+class TestRevisaoFinalV037(TestRecadoSoAPalavraInterrompe):
+    def test_cut_clears_the_delivery_and_never_reopens_the_mic(self):  # I4
+        self.recado()
+        self.m.evento("botao", 41.0)  # verde: corta
+        self.assertFalse(self.m._recado)
+        self.assertNotIn(("microfone", True), self.m.evento("ela_parou", 42.0))
+
+    def test_a_pause_inside_the_delivery_keeps_the_mic_closed(self):  # I5
+        self.recado()
+        self.assertNotIn(("microfone", True), self.m.evento("ela_parou", 42.0))
+        self.m.evento("ela_comecou", 42.5)  # continuou depois da pausa
+        self.assertNotIn(("microfone", True), self.m.evento("tique", 44.5))
+        self.assertIn(("parar_fala", None), self.m.evento("palavra", 45.0, {"wake_word": "friday"}))
+
+    def test_the_mic_opens_after_the_pause_grace(self):  # I5
+        self.recado()
+        self.m.evento("ela_parou", 42.0)
+        self.assertEqual(self.m.evento("tique", 42.0 + 1.0), [])
+        self.assertIn(("microfone", True), self.m.evento("tique", 42.0 + 1.6))
+        self.assertFalse(self.m._recado)
+
+
+class TestLuzComMudoPorSoftware(Base):  # I3
+    def test_software_mute_lets_lights_through(self):
+        self.m.mudo = True  # zeros na captura: o próprio mudo por software
+        self.m.mudo_software = True
+        self.assertIn(("luz", "nao_perturbe"), self.m.evento("nao_perturbe_inicial", 0.0, True))
+
+    def test_button_mute_still_drops_lights(self):
+        self.m.mudo = True
+        self.m.mudo_software = False
+        self.assertNotIn("luz", [a[0] for a in self.m.evento("nao_perturbe_inicial", 0.0, True)])

@@ -512,5 +512,57 @@ class TestComposicaoXvf(unittest.TestCase):
         self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 5))  # de volta: dnd com o mudo por cima
 
 
+class TestRevisaoFinalRing(unittest.TestCase):
+    def setUp(self):
+        self.t = Falso()
+        self.timers = []
+        self.r = ring.Xvf3800Ring(self.t, timer_factory=lambda a, f: TimerFalso(a, f, self.timers))
+
+    def test_a_maestro_light_ends_an_interrupted_preview(self):  # I2
+        self.r.preview("update_pending")
+        self.r.show_maestro("listen")
+        self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 4))
+        self.r.set_muted(True)
+        self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 5))
+
+    def test_preview_during_error_does_not_leave_error_stuck(self):  # M2
+        self.r.show("speak")
+        self.r.show("error")
+        self.r.preview("think")
+        self.r.preview(None)
+        self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 3))  # speak, não o erro
+
+    def test_a_stale_dnd_timer_does_nothing(self):  # M1
+        self.r.show_maestro("dnd")
+        velho = self.timers[-1]
+        self.r.show_maestro("listen")
+        self.r.show_maestro("dnd")
+        novo = self.timers[-1]
+        self.t.chamadas.clear()
+        velho.fn()  # callback atrasado do timer cancelado
+        self.assertEqual(self.t.chamadas, [])
+        novo.fn()
+        self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 1))
+
+    def test_a_stale_error_timer_does_nothing(self):  # M1
+        self.r.show("speak")
+        self.r.show("error")
+        velho = self.timers[-1]
+        self.r.show("error")
+        self.t.chamadas.clear()
+        velho.fn()
+        self.assertEqual(self.t.chamadas, [])
+
+
+class TestPreviaJabraComMudo(unittest.TestCase):
+    def test_preview_on_a_muted_jabra_keeps_the_bit(self):  # M3
+        j = Jabra()
+        r = ring.JabraRing(j)
+        r.set_muted(True)
+        r.show_maestro("off")
+        r.preview("alarm")
+        self.assertEqual((j.nomes[-1], j.mudos[-1]), ("alarme", True))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ CADASTRO = "cadastro"  # spec 2026-10-15 D15–D20: a Pi conduz a gravação do 
 TESTE_PALAVRA = "teste_palavra"  # spec 2026-11-05 §6.4: a Pi confere a palavra de ativação (duas vezes) na instalação
 ABERTO = (CONECTANDO, OUVINDO)
 TESTE_SEM_PALAVRA_S = 15.0  # sem nenhuma palavra por tanto tempo: "o microfone está mudo?" (uma vez)
+RECADO_PAUSA_S = 1.5  # v0.3.7: pausa dentro do recado (bot-stopped/started na mesma resposta)
 
 
 @dataclass
@@ -78,6 +79,8 @@ class Maestro:
         self.estado = PARADA
         self.pendentes = 0
         self._recado = False  # v0.3.7: resposta pendente/entrega sendo falada: mic fechado, só a palavra interrompe
+        self._recado_fim = None  # v0.3.7: pausa dentro do recado: o mic só abre se ela não voltar em RECADO_PAUSA_S
+        self.mudo_software = False  # v0.3.7: mudo pela config; o anel leva o bit do mudo, então as luzes podem passar
         self._prazo = None  # (motivo, instante)
         self._alguem_falando = False
         self._fala_desde = None  # R13: instante em que a fala contínua atual começou
@@ -114,7 +117,7 @@ class Maestro:
         return [som] + acoes
 
     def _filtrar(self, acoes):
-        if self.mudo is not False:  # mudo físico (ou ainda desconhecido): o anel é do Jabra, não escrever
+        if self.mudo is not False and not self.mudo_software:  # mudo do botão (ou desconhecido): o anel é do Jabra
             acoes = [a for a in acoes if a[0] != "luz"]
         if self.whisper:  # D5: sem sons de início e fim (erro e os demais continuam)
             acoes = [a for a in acoes if a not in (("som", "inicio"), ("som", "fim"))]
@@ -156,7 +159,7 @@ class Maestro:
         return acoes
 
     def _fechar(self, agora, motivo, som="fim"):
-        self._recado = False
+        self._recado, self._recado_fim = False, None
         como = self._abertura["como_abriu"] if self._abertura else None
         acoes = [("som", som)] if som else []
         acoes += [("luz", self._repouso()), ("desconectar", None)]
@@ -275,6 +278,7 @@ class Maestro:
         return []
 
     def _cortar(self, agora, motivo):
+        self._recado, self._recado_fim = False, None
         self.estado = CORTADA
         self._motivo_corte = motivo
         self._prazo = ("resposta", agora + self.a.resposta_max_s)
@@ -330,6 +334,11 @@ class Maestro:
     def _trata(self, nome, agora, valor):
         e = self.estado
         if nome == "tique":
+            if self._recado_fim is not None and agora >= self._recado_fim:
+                parou = self._recado_fim - RECADO_PAUSA_S  # quando ela de fato parou: os prazos contam dali
+                self._recado, self._recado_fim = False, None  # o recado acabou: abre como antes do v0.3.7
+                return [("microfone", True), ("luz", "ouvindo")] + self._trata("ela_parou", parou, None) + \
+                    self._tique(agora)
             return self._tique(agora)
         if nome == "nao_perturbe_inicial":  # arranque da Pi: aplica o estado gravado, sem som
             self.nao_perturbe = bool(valor)
@@ -455,7 +464,7 @@ class Maestro:
             return []
         if nome == "palavra":
             if self._recado and e in ABERTO and self.mudo is False:  # só a palavra ativa corta o recado
-                self._recado = False
+                self._recado, self._recado_fim = False, None
                 return [("parar_fala", None), ("microfone", True), ("luz", "ouvindo")]
             if self.mudo is not False or e in ABERTO:
                 return []
@@ -508,6 +517,7 @@ class Maestro:
         if nome == "ela_comecou":
             self._ela_falando = True
             reabrir = []
+            self._recado_fim = None  # voltou a falar dentro da pausa: o recado continua
             if e == AGUARDANDO:  # a resposta pendente chegou dentro da janela: é um recado também
                 self._recado = True
             if self._recado:
@@ -534,9 +544,9 @@ class Maestro:
             return []
         if nome == "ela_parou":
             self._ela_falando = False
-            if self._recado:  # o recado acabou: o microfone abre para a resposta, como antes
-                self._recado = False
-                return [("microfone", True), ("luz", "ouvindo")] + self.evento("ela_parou", agora)
+            if self._recado and e in ABERTO:  # pausa ou fim do recado: o mic abre se ela não voltar logo (_tique)
+                self._recado_fim = agora + RECADO_PAUSA_S
+                return []
             if self._cadastro is not None and e == OUVINDO:  # D15: a confirmação dela terminou: a Pi assume
                 return self._fechar(agora, "aprendizagem", som=None)
             if e == OUVINDO and self.a.no_follow_up_while_music and self._musica_tocando:

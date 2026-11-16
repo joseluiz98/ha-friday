@@ -191,7 +191,6 @@ class Satelite:
             self.conexao.pessoa_falou()
         if nome == "mudo" and valor is not None:  # 31/10: botão de mudo do Jabra chega ao HA na hora
             self.emissor.emitir("config", {"mudancas": {"mudo_botao": bool(valor)}, "origem": "botao"})
-            self.anel.set_muted(self._mudo_visivel())
 
     @staticmethod
     async def _fechar_depois(conexao, atraso_s):
@@ -625,11 +624,13 @@ class Satelite:
             self.evento("nao_perturbe", bool(novo.get("nao_perturbe")))
 
     def _mudo_visivel(self) -> bool:
-        """O indicador de mudo do anel (v0.3.7): o mudo por software (config) ou o do botão do Jabra."""
-        return bool(self.cfg.get("mudo")) or self.maestro.mudo is True
+        """O indicador de mudo do anel (v0.3.7) segue só o mudo por software (config). O do botão é do próprio Jabra
+        (vermelho dele, luzes retidas pelo maestro); e os zeros que o próprio bit causa na captura não podem prendê-lo."""
+        return bool(self.cfg.get("mudo"))
 
     def arranque_do_anel(self):
         """Arranque: o mudo gravado entra no anel ANTES da primeira luz (16/11: o não perturbe apagava o vermelho)."""
+        self.maestro.mudo_software = bool(self.cfg.get("mudo"))
         self.anel.set_muted(self._mudo_visivel())
         self.anel.show("off")
         self._aplicar_mudo(inicial=True)  # restaura o último mudo gravado; sem mudo, não força a captura
@@ -639,6 +640,7 @@ class Satelite:
 
         `inicial` (arranque): restaura o ÚLTIMO estado gravado (`mudo` na config persistida); com mudo
         desligado não escreve nada, deixando a captura do aparelho como está (comportamento de antes)."""
+        self.maestro.mudo_software = bool(self.cfg.get("mudo"))
         self.anel.set_muted(self._mudo_visivel())
         if inicial and not self.cfg.get("mudo"):
             return
