@@ -219,15 +219,25 @@ class Orchestrator:
             promotions = self.store.data.setdefault("promotions", {})
             soak = self.store.soak()
             infos = self.store.release_infos()
-            todo = [r for r in self._eligible()
-                    if r.prerelease and ch.promoted(r, soak, now) and r.tag not in promotions]
-            newest_stable = max((ch.version_key(i.release.tag) for i in infos.values()
-                                 if not i.release.prerelease and ch.eligible([i.release])), default=None)
-            superseded = [r for r in todo if newest_stable is not None and newest_stable > ch.version_key(r.tag)]
-            for r in superseded:
-                promotions[r.tag] = {"at": now, "result": "superseded"}
-                todo.remove(r)
-            if superseded:
+            candidates = [r for r in self._eligible()
+                          if r.prerelease and ch.promoted(r, soak, now) and r.tag not in promotions]
+            # newest stable: releases GitHub reports as stable, plus the tags this agent promoted (the stored flag
+            # stays pre-release until a full poll)
+            stable_keys = [ch.version_key(i.release.tag) for i in infos.values()
+                           if not i.release.prerelease and ch.eligible([i.release])]
+            stable_keys += [ch.version_key(t) for t, p in promotions.items()
+                            if isinstance(p, dict) and p.get("result") == "promoted"]
+            newest_stable = max(stable_keys, default=None)
+            best = max(candidates, key=lambda r: ch.version_key(r.tag), default=None)
+            if best is not None and newest_stable is not None and ch.version_key(best.tag) <= newest_stable:
+                best = None
+            # only the newest candidate is promoted; every other one is superseded (recomputed on each call, so a
+            # failed older tag is never promoted after a newer one, which would move GitHub "latest" backwards)
+            todo = [best] if best is not None else []
+            for r in candidates:
+                if r is not best:
+                    promotions[r.tag] = {"at": now, "result": "superseded"}
+            if len(candidates) > len(todo):
                 self.store.save()
         for r in todo:
             if now - self._promote_tried.get(r.tag, -PROMOTE_RETRY_S) < PROMOTE_RETRY_S:

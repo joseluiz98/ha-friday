@@ -466,3 +466,53 @@ def test_promotion_survives_restart_without_repeating(tmp_path):
     w2.now = w.now
     w2.orch.poll()
     assert pub.calls == ["v0.4.0"]
+
+
+def _soak_all(w, *tags):
+    for t in tags:
+        w.store.data["soak"][t] = {"started_at": w.now - SOAK_S - 1, "failed": False}
+
+
+def test_two_soaked_prereleases_promote_only_the_newest(tmp_path):
+    pub = FakePublisher()
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True), rel("v0.4.1", pre=True)])
+    w.orch.publisher = pub
+    w.orch.poll()
+    _soak_all(w, "v0.4.0", "v0.4.1")
+    w.orch.poll()
+    w.orch.poll()
+    assert pub.calls == ["v0.4.1"]
+    assert w.store.data["promotions"]["v0.4.1"]["result"] == "promoted"
+    assert w.store.data["promotions"]["v0.4.0"]["result"] == "superseded"
+
+
+def test_a_failed_older_promotion_is_superseded_after_a_newer_one_succeeds(tmp_path):
+    pub = FakePublisher(fail="http 502")
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True), rel("v0.4.1", pre=True)])
+    w.orch.publisher = pub
+    w.orch.poll()
+    _soak_all(w, "v0.4.0")  # only the older one has soaked so far
+    w.orch.poll()
+    assert pub.calls == ["v0.4.0"] and "v0.4.0" not in w.store.data["promotions"]
+    _soak_all(w, "v0.4.1")  # the newer one finishes its soak; GitHub recovers
+    pub.fail = None
+    w.orch.poll()
+    assert pub.calls[-1] == "v0.4.1"
+    w.now += orc.PROMOTE_RETRY_S
+    w.orch.poll()
+    assert pub.calls == ["v0.4.0", "v0.4.1"]  # v0.4.0 is never promoted after v0.4.1 ("latest" must not go back)
+    assert w.store.data["promotions"]["v0.4.0"]["result"] == "superseded"
+    assert w.store.data["promotions"]["v0.4.1"]["result"] == "promoted"
+
+
+def test_a_tag_promoted_by_us_counts_as_stable(tmp_path):
+    pub = FakePublisher()
+    # the stored release flag stays pre-release until a full poll, but v0.4.0 was promoted by this agent
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.3.5", pre=True), rel("v0.4.0", pre=True)])
+    w.orch.publisher = pub
+    w.orch.poll()
+    w.store.data["promotions"] = {"v0.4.0": {"at": w.now, "result": "promoted"}}
+    _soak_all(w, "v0.3.5")
+    w.orch.poll()
+    assert pub.calls == []
+    assert w.store.data["promotions"]["v0.3.5"]["result"] == "superseded"
