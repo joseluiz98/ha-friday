@@ -6,13 +6,22 @@ routes. It uses its own clock (arrival time), never the satellites'.
 
 The winning criterion lives in `pick` only, so it can be swapped without touching the round mechanics.
 """
-import asyncio, json, logging, time, uuid
+import asyncio, json, logging, math, time, uuid
 
 TIE_DB = 1.0  # voice gap below this counts as a tie, decided by the wake-word score
 
 
+def _num(value, default: float) -> float:
+    """Coerce to a finite float; None, strings and NaN/inf fall back to `default` (a claim must never break a round)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
 def _adjusted(sid: str, claim: dict, offsets: dict) -> float:
-    return float(claim.get("voice_dbfs", -120.0)) + float(offsets.get(sid, 0.0))
+    return _num(claim.get("voice_dbfs"), -120.0) + _num(offsets.get(sid), 0.0)
 
 
 def pick(candidates: dict, offsets: dict) -> str:
@@ -21,7 +30,7 @@ def pick(candidates: dict, offsets: dict) -> str:
     adj = {sid: _adjusted(sid, c, offsets) for sid, c in candidates.items()}
     top = max(adj.values())
     contenders = [sid for sid in candidates if top - adj[sid] < TIE_DB]
-    return max(contenders, key=lambda sid: (float(candidates[sid].get("score", 0.0)), adj[sid], sid))
+    return max(contenders, key=lambda sid: (_num(candidates[sid].get("score"), 0.0), adj[sid], sid))
 
 
 class _Round:
@@ -63,8 +72,8 @@ class Arbiter:
 
     def _candidate(self, sid: str, claim: dict) -> dict:
         return {"sid": sid, "claim_id": claim.get("claim_id"), "wake_word": claim.get("wake_word"),
-                "score": claim.get("score"), "voice_dbfs": claim.get("voice_dbfs"),
-                "offset_db": self.offsets.get(sid, 0.0), "busy": bool(claim.get("busy", False))}
+                "score": _num(claim.get("score"), 0.0), "voice_dbfs": _num(claim.get("voice_dbfs"), -120.0),
+                "offset_db": _num(self.offsets.get(sid), 0.0), "busy": bool(claim.get("busy", False))}
 
     def _log_single(self, sid: str, claim: dict, round_id: str, reason: str) -> None:
         self._emit({"ts": time.time(), "round_id": round_id, "window_ms": 0,
@@ -109,18 +118,25 @@ class Arbiter:
     def _close(self, rnd: _Round) -> None:
         if rnd.done.is_set():
             return
-        rnd.winner = pick(rnd.candidates, self.offsets)
-        if self._round is rnd:
-            self._round = None
-        self._last = rnd
-        if rnd.timer is not None and rnd.timer is not asyncio.current_task():
-            rnd.timer.cancel()
         reason = "only_one_heard" if len(rnd.candidates) == 1 else "best"
-        self._emit({"ts": time.time(), "round_id": rnd.id,
-                    "window_ms": round((self._clock() - rnd.start) * 1000),
-                    "candidates": [self._candidate(s, c) for s, c in rnd.candidates.items()],
-                    "winner": rnd.winner, "reason": reason})
-        rnd.done.set()
+        try:
+            try:
+                rnd.winner = pick(rnd.candidates, self.offsets)
+            except Exception:
+                logging.exception("arbitration: pick failed, falling back to the first candidate")
+                rnd.winner, reason = next(iter(rnd.candidates)), "error"
+            self._emit({"ts": time.time(), "round_id": rnd.id,
+                        "window_ms": round((self._clock() - rnd.start) * 1000),
+                        "candidates": [self._candidate(s, c) for s, c in rnd.candidates.items()],
+                        "winner": rnd.winner, "reason": reason})
+        finally:
+            # Always release the round: a failure here must never leave a dead round open.
+            if self._round is rnd:
+                self._round = None
+            self._last = rnd
+            if rnd.timer is not None and rnd.timer is not asyncio.current_task():
+                rnd.timer.cancel()
+            rnd.done.set()
 
 
 def load_offsets(path: str) -> dict:

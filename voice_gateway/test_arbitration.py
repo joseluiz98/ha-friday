@@ -185,6 +185,40 @@ class ArbiterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.logs[0]["candidates"][0]["claim_id"], "a1")
         self.assertFalse([l for l in self.logs if l.get("event") == "round_opened"])
 
+    async def test_bad_numbers_do_not_wedge_the_arbiter(self):
+        arb = self.make()
+        guard = 2.0
+        a, b = await asyncio.wait_for(asyncio.gather(
+            arb.claim("A", {"claim_id": "a1", "wake_word": "friday", "score": "high", "voice_dbfs": None}),
+            arb.claim("B", {"claim_id": "b1", "wake_word": "friday", "score": None, "voice_dbfs": "loud"})), guard)
+        self.assertEqual(sorted([a["verdict"], b["verdict"]]), ["go", "lost"])
+        self.assertIsNone(arb._round)
+        self.clock.advance(5)
+        arb.presence("A"); arb.presence("B")
+        a, b = await asyncio.wait_for(asyncio.gather(
+            arb.claim("A", claim("a2", -30)), arb.claim("B", claim("b2", -24))), guard)
+        self.assertEqual((b["verdict"], a["verdict"]), ("go", "lost"))
+        rec = [l for l in self.logs if "candidates" in l][0]
+        self.assertEqual({c["voice_dbfs"] for c in rec["candidates"]}, {-120.0})
+
+    async def test_pick_failure_still_closes_round(self):
+        import arbitration
+        arb = self.make()
+        orig = arbitration.pick
+        arbitration.pick = lambda *a, **k: 1 / 0
+        try:
+            with self.assertLogs(level="ERROR"):
+                a, b = await asyncio.wait_for(asyncio.gather(
+                    arb.claim("A", claim("a1", -30)), arb.claim("B", claim("b1", -24))), 2.0)
+        finally:
+            arbitration.pick = orig
+        self.assertEqual(sorted([a["verdict"], b["verdict"]]), ["go", "lost"])
+        self.assertEqual([l["reason"] for l in self.logs if "candidates" in l], ["error"])
+        self.clock.advance(5)
+        arb.presence("A"); arb.presence("B")
+        r = await asyncio.wait_for(arb.claim("A", claim("a2", -30)), 2.0)
+        self.assertEqual(r["verdict"], "go")
+
     async def test_log_failure_does_not_break_claim(self):
         arb = self.make(sids=("A",))
         arb._log = lambda rec: 1 / 0
