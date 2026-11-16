@@ -227,6 +227,28 @@ class ArbiterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r["verdict"], "go")
 
 
+class SetBusyTest(unittest.IsolatedAsyncioTestCase):
+    async def test_set_busy_marks_candidate(self):
+        clock = FakeClock()
+        logs = []
+        arb = Arbiter(clock=clock, window_s=0.05, log=logs.append)
+        arb.presence("A")
+        arb.presence("B")
+        arb.set_busy("A", True)
+        await asyncio.gather(arb.claim("A", claim("a1", -30)), arb.claim("B", claim("b1", -20)))
+        rec = next(r for r in logs if "candidates" in r)
+        busy = {c["sid"]: c["busy"] for c in rec["candidates"]}
+        self.assertEqual(busy, {"A": True, "B": False})
+        self.assertEqual(rec["winner"], "B")  # busy never weighs in
+        arb.set_busy("A", False)
+        logs.clear()
+        clock.advance(5)  # past same_activation_s
+        arb.presence("B")
+        await asyncio.gather(arb.claim("A", claim("a2", -30)), arb.claim("B", claim("b2", -20)))
+        rec = next(r for r in logs if "candidates" in r)
+        self.assertFalse(any(c["busy"] for c in rec["candidates"]))
+
+
 class LoadOffsetsTest(unittest.TestCase):
     def test_load_offsets_missing_file_is_empty(self):
         self.assertEqual(load_offsets("/nonexistent/offsets.json"), {})

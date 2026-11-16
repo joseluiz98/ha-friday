@@ -47,7 +47,7 @@ class TestProducao(unittest.TestCase):
         t = open(os.path.join(AQUI, "bot.py")).read()
         self.assertNotIn("cc.ler_satelites(SATELITES_ARQ)", t)
         # desde 19/10 o cache entra pela leitura sem travar (read_satellites_without_blocking usa ler_satelites_com_cache)
-        self.assertEqual(t.count("cc.read_satellites_without_blocking(SATELITES_ARQ, SATELITES_CACHE)"), 4)  # 21/10: +1 (player do satélite, fato de música; com prazo), +1 (/satellite_media)
+        self.assertEqual(t.count("cc.read_satellites_without_blocking(SATELITES_ARQ, SATELITES_CACHE)"), 6)  # 21/10: +1 (player do satélite, fato de música; com prazo), +1 (/satellite_media); 16/11: +2 (/satellite_presence, /wake_claim)
 
 
 if __name__ == "__main__":

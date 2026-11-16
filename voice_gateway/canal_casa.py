@@ -1,10 +1,12 @@
 """Canal da casa (spec 2026-10-12 §3): o cérebro entrega mensagens pelo satélite (POST /deliver) e o satélite
 avisa o dono de timer não atendido (POST /satellite_alert → Telegram). Lógica pura com IO injetado: roda sem o
 Pipecat e sem rede (test_canal_casa.py). Quem liga isto ao servidor do bot é o bot.py."""
-import asyncio, hmac, json, os, re, secrets, time
+import asyncio, hmac, json, logging, math, os, re, secrets, time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import satelite_modo as sm
+from arbitration import load_offsets
 
 MAX_TEXTO = 1000
 ESPERA_CONEXAO_S = 90.0  # campainha → a Pi abrir a conversa (inclui a fila da Pi)
@@ -142,6 +144,75 @@ def autenticar_satelite(satelites: dict, cabecalho):
         if hmac.compare_digest(dado, s["senha"]):
             return sid
     return None
+
+
+# --- Arbitragem entre satélites (spec 2026-11-16-satellite-arbitration §5.2) ---
+ARBITRATION_DIR_DEFAULT = "/srv/friday/state/arbitration"
+ARBITRATION_OFFSETS_DEFAULT = "/srv/friday/state/arbitration/offsets.json"
+OFFSETS_REFRESH_S = 60.0
+_SAO_PAULO = ZoneInfo("America/Sao_Paulo")
+
+
+def arbitration_dir() -> str:
+    return os.environ.get("FRIDAY_ARBITRATION_DIR", ARBITRATION_DIR_DEFAULT)
+
+
+def arbitration_offsets_path() -> str:
+    return os.environ.get("FRIDAY_ARBITRATION_OFFSETS", ARBITRATION_OFFSETS_DEFAULT)
+
+
+def write_arbitration_record(record: dict, directory: str | None = None, now: float | None = None) -> None:
+    """Append one NDJSON line to `<dir>/YYYY-MM-DD.ndjson` (day in America/Sao_Paulo). Never raises: the log must
+    not break a request."""
+    try:
+        directory = directory or arbitration_dir()
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        day = datetime.fromtimestamp(time.time() if now is None else now, _SAO_PAULO).strftime("%Y-%m-%d")
+        fd = os.open(os.path.join(directory, f"{day}.ndjson"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logging.warning(f"arbitration: could not write the log: {e!r}")
+
+
+class OffsetsReloader:
+    """Keeps `arbiter.offsets` in sync with the offsets file, re-reading it at most every `OFFSETS_REFRESH_S`."""
+
+    def __init__(self, path: str | None = None, clock=time.monotonic, interval_s: float = OFFSETS_REFRESH_S):
+        self._path, self._clock, self._interval = path, clock, interval_s
+        self._last: float | None = None
+
+    def apply(self, arbiter) -> None:
+        now = self._clock()
+        if self._last is not None and now - self._last < self._interval:
+            return
+        self._last = now
+        arbiter.offsets = load_offsets(self._path or arbitration_offsets_path())
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+async def handle_presence(arbiter, sats: dict, authorization) -> tuple[int, dict]:
+    sid = autenticar_satelite(sats, authorization)
+    if not sid:
+        return 401, {"error": "unauthorized"}
+    return 200, {"others_online": arbiter.presence(sid)}
+
+
+async def handle_wake_claim(arbiter, sats: dict, authorization, body) -> tuple[int, dict]:
+    sid = autenticar_satelite(sats, authorization)
+    if not sid:
+        return 401, {"error": "unauthorized"}
+    if not isinstance(body, dict):
+        return 400, {"error": "body must be a JSON object"}
+    if not (isinstance(body.get("claim_id"), str) and body["claim_id"]):
+        return 400, {"error": "claim_id must be a non-empty string"}
+    for key in ("score", "voice_dbfs"):
+        if not _is_number(body.get(key)):
+            return 400, {"error": f"{key} must be a number"}
+    return 200, await arbiter.claim(sid, body)  # the authenticated sid wins; a satellite_id in the body is ignored
 
 
 async def _tocar(deps, sid, eid):

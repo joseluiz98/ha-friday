@@ -50,6 +50,7 @@ class Arbiter:
         self.offsets = dict(offsets or {})
         self._log = log
         self._seen: dict[str, float] = {}
+        self._busy: set[str] = set()  # sids with a conversation open; shown in the log only, never weighs in
         self._round: _Round | None = None
         self._last: _Round | None = None  # last closed round, for late claims
 
@@ -70,10 +71,14 @@ class Arbiter:
         self._seen[sid] = self._clock()
         return len(self._online() - {sid})
 
+    def set_busy(self, sid: str, busy: bool) -> None:
+        """Mark `sid` as having a conversation open (or not). Informational: it is logged, never used to decide."""
+        (self._busy.add if busy else self._busy.discard)(sid)
+
     def _candidate(self, sid: str, claim: dict) -> dict:
         return {"sid": sid, "claim_id": claim.get("claim_id"), "wake_word": claim.get("wake_word"),
                 "score": _num(claim.get("score"), 0.0), "voice_dbfs": _num(claim.get("voice_dbfs"), -120.0),
-                "offset_db": _num(self.offsets.get(sid), 0.0), "busy": bool(claim.get("busy", False))}
+                "offset_db": _num(self.offsets.get(sid), 0.0), "busy": bool(claim.get("busy", False)) or sid in self._busy}
 
     def _log_single(self, sid: str, claim: dict, round_id: str, reason: str) -> None:
         self._emit({"ts": time.time(), "round_id": round_id, "window_ms": 0,

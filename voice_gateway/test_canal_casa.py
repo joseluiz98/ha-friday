@@ -1,6 +1,8 @@
 """cd /srv/friday/app && python3 -m unittest test_canal_casa -v   (spec 2026-10-12 §3)"""
 import asyncio, json, os, stat, tempfile, unittest
+from datetime import datetime, timezone
 import canal_casa as cc
+from arbitration import Arbiter
 
 SAT = {"sat-0a1b2c": {"comodo": "Escritório", "senha": "s" * 43, "ip": "192.0.2.15"}}
 
@@ -382,6 +384,134 @@ class TestMusicaDoAlarme(unittest.IsolatedAsyncioTestCase):
             r = await cc.play_for_satellite("sat-1", ruim, d)
             self.assertFalse(r["ok"], repr(ruim))
         self.assertEqual(d.chamadas, [])
+
+
+class ArbitrationRoutesTest(unittest.IsolatedAsyncioTestCase):
+    SATS = {"sat-1": {"senha": "s1"}, "sat-2": {"senha": "s2"}}
+
+    def make(self, **kw):
+        self.logs = []
+        return Arbiter(window_s=0.05, log=self.logs.append, **kw)
+
+    @staticmethod
+    def body(**extra):
+        return {"claim_id": "c1", "wake_word": "friday", "score": 0.8, "voice_dbfs": -30.0, **extra}
+
+    async def test_presence_ok(self):
+        arb = self.make()
+        status, out = await cc.handle_presence(arb, self.SATS, "Bearer s1")
+        self.assertEqual((status, out), (200, {"others_online": 0}))
+        status, out = await cc.handle_presence(arb, self.SATS, "Bearer s2")
+        self.assertEqual((status, out), (200, {"others_online": 1}))
+
+    async def test_presence_unauthorized(self):
+        arb = self.make()
+        for auth in (None, "Bearer errada", "s1"):
+            status, out = await cc.handle_presence(arb, self.SATS, auth)
+            self.assertEqual((status, out), (401, {"error": "unauthorized"}))
+        self.assertEqual(arb.presence("sat-9"), 0)  # nobody was registered by the failed calls
+
+    async def test_claim_ok_returns_verdict(self):
+        arb = self.make()
+        status, out = await cc.handle_wake_claim(arb, self.SATS, "Bearer s1", self.body())
+        self.assertEqual(status, 200)
+        self.assertEqual((out["verdict"], out["reason"]), ("go", "alone"))
+
+    async def test_claim_unauthorized(self):
+        arb = self.make()
+        arb.presence("sat-2")
+        for auth in (None, "Bearer errada"):
+            status, out = await cc.handle_wake_claim(arb, self.SATS, auth, self.body(satellite_id="sat-1"))
+            self.assertEqual((status, out), (401, {"error": "unauthorized"}))
+        self.assertEqual(self.logs, [])
+        self.assertIsNone(arb._round)  # never joined or opened a round
+
+    async def test_claim_bad_body_400(self):
+        arb = self.make()
+        bad = [None, [], "x", {}, self.body(claim_id=None), self.body(claim_id=""), self.body(claim_id=5),
+               {k: v for k, v in self.body().items() if k != "score"},
+               {k: v for k, v in self.body().items() if k != "voice_dbfs"},
+               self.body(score="alto"), self.body(voice_dbfs=None), self.body(score=True),
+               self.body(voice_dbfs=float("nan")), self.body(score=float("inf"))]
+        for b in bad:
+            status, out = await cc.handle_wake_claim(arb, self.SATS, "Bearer s1", b)
+            self.assertEqual(status, 400, repr(b))
+            self.assertIn("error", out)
+        self.assertEqual(self.logs, [])
+
+    async def test_claim_uses_authenticated_sid_not_body(self):
+        arb = self.make()
+        status, out = await cc.handle_wake_claim(arb, self.SATS, "Bearer s1", self.body(satellite_id="sat-2"))
+        self.assertEqual(status, 200)
+        self.assertEqual(self.logs[0]["winner"], "sat-1")
+        self.assertEqual(self.logs[0]["candidates"][0]["sid"], "sat-1")
+        self.assertEqual(arb.presence("sat-1"), 0)  # sat-2 was never marked online by the body
+
+    async def test_two_satellites_one_round(self):
+        arb = self.make()
+        arb.presence("sat-1"); arb.presence("sat-2")
+        (s1, o1), (s2, o2) = await asyncio.gather(
+            cc.handle_wake_claim(arb, self.SATS, "Bearer s1", self.body(claim_id="a", voice_dbfs=-40.0)),
+            cc.handle_wake_claim(arb, self.SATS, "Bearer s2", self.body(claim_id="b", voice_dbfs=-20.0)))
+        self.assertEqual((o1["verdict"], o2["verdict"]), ("lost", "go"))
+
+    async def test_log_writes_one_line_per_round(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = os.path.join(tmp, "arbitration")
+            old = os.environ.get("FRIDAY_ARBITRATION_DIR")
+            os.environ["FRIDAY_ARBITRATION_DIR"] = d
+            try:
+                arb = Arbiter(window_s=0.05, same_activation_s=0.0, log=cc.write_arbitration_record)
+                await cc.handle_wake_claim(arb, self.SATS, "Bearer s1", self.body(claim_id="a"))
+                await cc.handle_wake_claim(arb, self.SATS, "Bearer s1", self.body(claim_id="b"))
+            finally:
+                if old is None:
+                    del os.environ["FRIDAY_ARBITRATION_DIR"]
+                else:
+                    os.environ["FRIDAY_ARBITRATION_DIR"] = old
+            files = os.listdir(d)
+            self.assertEqual(len(files), 1)
+            self.assertRegex(files[0], r"^\d{4}-\d{2}-\d{2}\.ndjson$")
+            self.assertEqual(stat.S_IMODE(os.stat(d).st_mode), 0o700)
+            path = os.path.join(d, files[0])
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+            with open(path, encoding="utf-8") as f:
+                lines = [json.loads(x) for x in f.read().splitlines()]
+            self.assertEqual([r["candidates"][0]["claim_id"] for r in lines], ["a", "b"])
+            self.assertEqual({r["reason"] for r in lines}, {"alone"})
+
+    def test_log_day_uses_sao_paulo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # 2026-11-17 01:30 UTC is still 2026-11-16 in Sao Paulo (UTC-3)
+            t = datetime(2026, 11, 17, 1, 30, tzinfo=timezone.utc).timestamp()
+            cc.write_arbitration_record({"x": 1}, directory=tmp, now=t)
+            self.assertEqual(os.listdir(tmp), ["2026-11-16.ndjson"])
+
+    def test_log_writer_never_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            blocker = os.path.join(tmp, "file")
+            open(blocker, "w").close()
+            with self.assertLogs(level="WARNING"):
+                cc.write_arbitration_record({"x": 1}, directory=os.path.join(blocker, "sub"))
+
+    def test_offsets_reload_at_most_every_60s(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "offsets.json")
+            with open(p, "w") as f:
+                f.write('{"sat-1": 3}')
+            now = [1000.0]
+            arb = Arbiter()
+            reloader = cc.OffsetsReloader(p, clock=lambda: now[0])
+            reloader.apply(arb)
+            self.assertEqual(arb.offsets, {"sat-1": 3.0})
+            with open(p, "w") as f:
+                f.write('{"sat-1": 5}')
+            now[0] += 30
+            reloader.apply(arb)
+            self.assertEqual(arb.offsets, {"sat-1": 3.0})
+            now[0] += 31
+            reloader.apply(arb)
+            self.assertEqual(arb.offsets, {"sat-1": 5.0})
 
 
 if __name__ == "__main__":
