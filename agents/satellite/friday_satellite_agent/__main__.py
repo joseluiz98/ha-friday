@@ -18,7 +18,7 @@ from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
 from . import local, ota, pairing, provision, recordings, server_watch
-from . import room_sensors
+from . import ring_preview, room_sensors
 from . import wifi
 from .announce import Keeper, lan_ip as _lan_ip
 from . import power as power_mod
@@ -86,6 +86,7 @@ async def main() -> None:
         await core.push_log(message, {})
 
     power = Power(program_state=lambda: memo["state"].get("program_state"), log=power_log)
+    preview = ring_preview.RingPreview(program.command, lambda: memo["state"].get("program_state"))
     memo["state"]["voice_enabled"] = power.enabled
     off_task: list[asyncio.Task] = []
 
@@ -168,6 +169,8 @@ async def main() -> None:
             return await power.reboot()
         if key == "restart_program":
             return await power.restart_program()
+        if key == "ring_preview":
+            return preview.start()
         return {"ok": False, "error": "unknown_key"}
 
     room = room_sensors.Monitor(room_sensors.RoomSensors(), lambda v: room_state(v), lambda: room_caps())

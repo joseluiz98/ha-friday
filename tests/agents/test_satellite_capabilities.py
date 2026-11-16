@@ -389,7 +389,7 @@ def test_continue_listening_while_speaking_switch():
 
 USER_PAGE = {"volume", "do_not_disturb", "mute", "whisper_mode", "turn_sounds", "alarm_volume", "alarm_ramp",
              "ducking", "ducking_level",
-             "follow_up_mode", "voice_enabled", "reboot", "reset_network", "reset_home"}
+             "follow_up_mode", "voice_enabled", "reboot", "reset_network", "reset_home", "ring_preview"}
 
 
 def test_page_has_only_user_controls():
