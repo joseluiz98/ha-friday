@@ -66,7 +66,8 @@ class FridayOtaCard extends HTMLElement {
       ? `<div class="grid"><span>Versão</span><b>${esc(info.tag)}</b><span>Construída em</span><b>${esc(date)}</b>
          <span>Tamanho</span><b>${esc(formatBytes(info.size))}</b><span>Situação</span><b>${esc(statusText(info.status))}</b></div>
          ${info.error ? `<div class="err">${esc(info.error)}</div>` : ""}
-         ${info.file ? `<button class="dl" data-file="${esc(info.file)}">Baixar</button>` : ""}`
+         ${info.file ? `<button class="dl" data-file="${esc(info.file)}">Baixar</button>` : ""}
+         ${info.missing ? `<div class="empty">O arquivo desta versão ainda não está na VM (em construção ou removido).</div>` : ""}`
       : `<div class="empty">Nenhuma imagem construída ainda.</div>`;
     this.shadowRoot.innerHTML = `<style>
       .card{padding:12px;background:var(--ha-card-background,var(--card-background-color));border-radius:var(--ha-card-border-radius,12px);color:var(--primary-text-color)}

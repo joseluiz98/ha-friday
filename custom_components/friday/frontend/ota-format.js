@@ -29,6 +29,7 @@ export function imageInfo(state, attributes, images) {
     builtAt: builtAt && !Number.isNaN(builtAt.getTime()) ? builtAt : null,
     size: item ? item.size : null,
     file: item ? item.file : null,
+    missing: Boolean(tag && !item),  // the sensor names a tag whose file is not (or no longer) on the VM
     downloadUrl: attrs.download_url ?? (item ? `/api/friday/image/${item.file}` : null),
   };
 }

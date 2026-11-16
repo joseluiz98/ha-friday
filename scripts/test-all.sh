@@ -11,7 +11,7 @@ step() { echo "== $1"; shift; "$@" || { echo "FAILED: $*" >&2; fail=1; }; }
 step "sweep (private list)" python3 scripts/sweep.py
 step "integration + agents + tools (VM, python:3.14)" bash scripts/test.sh
 step "satellite program" sh -c 'cd satellite/program && python3 -m unittest -q 2>&1 | tail -3 | grep -q "^OK"'
-step "satellite image" sh -c 'cd satellite/image && python3 -m unittest -q tests.test_payload_check tests.test_make_manifest tests.test_vault_payload'
+step "satellite image" sh -c 'cd satellite/image && python3 -m unittest -q tests.test_payload_check tests.test_make_manifest tests.test_vault_payload tests.test_build_download'
 step "ota scripts" bash ota/test_self_update.sh
 rsync -az --delete --exclude __pycache__ --exclude .git ./ "$VM:$ALL/"
 step "voice gateway (friday image, production workspace)" ssh -o BatchMode=yes "$VM" \

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs the VM services from the repo tree this script sits in (run on the VM as root): status port, essentials
 # backup, cataloger (Lucid), cost, aec and asr go to /opt/friday/<name> (files copied
-# over, never deleting what is not in the repo), the systemd units to /etc/systemd/system. Restarts only the status
+# over; of what is not in the repo only stale .py files are removed, so a module deleted from the repo stops being
+# importable), the systemd units to /etc/systemd/system. Restarts only the status
 # port (no conversation impact). The container image is its own component (server/image/install.sh).
 #   sudo FRIDAY_VERSION_LINE="<describe> <sha>" bash server/install.sh      (scripts/deploy.sh sets the line)
 set -euo pipefail
@@ -14,6 +15,11 @@ for d in status essentials cataloger cost aec asr; do
   for f in "$HERE/$d"/*; do
     n=$(basename "$f"); [ -f "$f" ] || continue
     cp -p "$f" "$OPT/$d/.$n.new" && mv -f "$OPT/$d/.$n.new" "$OPT/$d/$n"
+  done
+  for f in "$OPT/$d"/*.py; do
+    n=$(basename "$f"); [ -f "$f" ] || continue
+    [ "$d/$n" = cataloger/local_config.py ] && continue   # copied below from voice_gateway/
+    [ -e "$HERE/$d/$n" ] || rm -f "$f"
   done
   echo "$LINE" > "$OPT/$d/FRIDAY_VERSION"
 done

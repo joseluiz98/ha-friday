@@ -51,8 +51,14 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== base image"
-[ -f "$BASE_XZ" ] || curl -fL --retry 3 -o "$BASE_XZ" "$BASE_URL"
-if [ ! -f "$BASE_IMG" ] || [ "$(stat -c %s "$BASE_IMG")" != "$BASE_SIZE" ]; then xz -dkf "$BASE_XZ"; fi
+# via .part: an interrupted curl never leaves a truncated .xz that later builds would trust
+if [ ! -f "$BASE_XZ" ]; then
+  curl -fL --retry 3 -o "$BASE_XZ.part" "$BASE_URL" || { rm -f "$BASE_XZ.part"; echo "base image download failed" >&2; exit 1; }
+  mv -f "$BASE_XZ.part" "$BASE_XZ"
+fi
+if [ ! -f "$BASE_IMG" ] || [ "$(stat -c %s "$BASE_IMG")" != "$BASE_SIZE" ]; then
+  xz -dkf "$BASE_XZ" || { rm -f "$BASE_XZ" "$BASE_IMG"; echo "base image does not decompress: dropped, download again" >&2; exit 1; }
+fi
 echo "$BASE_SHA256  $BASE_IMG" | sha256sum -c - >/dev/null || { echo "base image hash mismatch" >&2; exit 1; }
 
 echo "== grow"

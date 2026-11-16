@@ -21,3 +21,9 @@ test("no image yet", () => {
   const i = imageInfo("unknown", null, []);
   assert.equal(i.tag, null); assert.equal(i.downloadUrl, null); assert.equal(i.builtAt, null);
 });
+test("a tag whose file is not on the list yet says so (ledger Task 18 M5)", () => {
+  const i = imageInfo("v0.9.0", { status: "building" }, []);
+  assert.equal(i.tag, "v0.9.0"); assert.equal(i.file, null); assert.equal(i.missing, true);
+  const j = imageInfo("v0.9.0", {}, [{ tag: "v0.9.0", file: "f.img.xz", size: 1, mtime: 1 }]);
+  assert.equal(j.missing, false);
+});
