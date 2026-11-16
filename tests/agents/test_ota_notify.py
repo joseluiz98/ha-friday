@@ -30,3 +30,8 @@ def test_failed_send_is_kept():
 def test_empty_chat_rejected():
     with pytest.raises(ValueError):
         n.Notifier("")
+
+
+def test_withdrawn_message():
+    m = n.format_withdrawn("sat-1", "v0.4.0", "health", "program not answering", "v0.3.0")
+    assert "v0.4.0" in m and "sat-1" in m and "program not answering" in m and "v0.3.0" in m and "alpha" in m

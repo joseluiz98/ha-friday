@@ -358,3 +358,15 @@ def test_an_offer_with_new_wheels_is_heavy(tmp_path):
     other = w.orch.offer(SAT, "stable", None, 1, "x" * 64)
     assert same["wheels_url"] is None and same["heavy"] is False
     assert other["wheels_url"] and other["heavy"] is True
+
+
+def test_alpha_rollback_that_withdraws_the_release_pushes_once(tmp_path):
+    """FINDING 7 (15/11): the withdrawn release left the satellite 'up_to_date' with no retry and no push."""
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True)])
+    w.orch.poll()
+    w.offer("alpha", sat="sat-0000a1")
+    w.orch.report({"sat_id": "sat-0000a1", "tag": "v0.4.0", "result": "rolled_back", "stage": "health",
+                   "error": "program not answering"})
+    assert len(w.pushed) == 1 and "v0.4.0" in w.pushed[0] and "program not answering" in w.pushed[0]
+    w.orch.report({"sat_id": "sat-0000a1", "tag": "v0.4.0", "result": "rolled_back", "stage": "health", "error": "e"})
+    assert len(w.pushed) == 1

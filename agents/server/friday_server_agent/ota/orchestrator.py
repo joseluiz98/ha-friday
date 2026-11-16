@@ -440,6 +440,11 @@ class Orchestrator:
                 # against promotion: a version that broke the device (rolled back) or kept failing (exhausted);
                 # a transient download error does not count, and a version already promoted is not demoted
                 if alpha and (r["result"] == "rolled_back" or a.exhausted) and not self._promoted(r["tag"], now):
+                    rec = self.store.soak().get(r["tag"])
+                    if not (rec and rec.failed) and not a.exhausted:
+                        # FINDING 7 (15/11): the release leaves alpha, so no retry follows and no exhaustion push
+                        self.notifier.queue(nt.format_withdrawn(r["sat_id"], r["tag"], r["stage"], r["error"],
+                                                                d["installed"]), self.store.data["pushes"])
                     self.store.soak_fail(r["tag"])
                 if a.exhausted and not was_exhausted:
                     self.notifier.queue(nt.format_exhausted(r["sat_id"], r["tag"], r["stage"], r["error"], d["installed"]),
