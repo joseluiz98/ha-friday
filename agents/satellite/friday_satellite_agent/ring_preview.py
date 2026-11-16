@@ -37,15 +37,15 @@ class RingPreview:
         return {"ok": True}
 
     async def run(self) -> str:
-        """'done', or 'interrupted' when the program left idle. The ring always ends on `off` (the program draws the
-        update-pending background on top of it by itself)."""
+        """'done', or 'interrupted' when the program left idle. The preview shows one state at a time (`preview`); it always
+        ends with `state: None`, which hands the ring back to the composition (mute, DND, update pending)."""
         result = "done"
         try:
             for state in SEQUENCE:
                 if self._state() != "idle":
                     result = "interrupted"
                     return result
-                await self._command({"acao": "ring", "state": state})
+                await self._command({"acao": "ring", "state": state, "preview": True})
                 await self._sleep(STEP_S)
             if self._state() != "idle":
                 result = "interrupted"
@@ -60,6 +60,6 @@ class RingPreview:
         finally:
             if result != "interrupted":
                 try:
-                    await self._command({"acao": "ring", "state": "off"})
+                    await self._command({"acao": "ring", "state": None, "preview": True})  # back to the composition
                 except Exception:  # noqa: BLE001
                     pass

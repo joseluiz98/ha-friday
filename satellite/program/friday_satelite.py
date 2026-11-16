@@ -189,6 +189,7 @@ class Satelite:
                 print(json.dumps({"eco_rms_db": resumo}), flush=True)
         if nome == "mudo" and valor is not None:  # 31/10: botão de mudo do Jabra chega ao HA na hora
             self.emissor.emitir("config", {"mudancas": {"mudo_botao": bool(valor)}, "origem": "botao"})
+            self.anel.set_muted(self._mudo_visivel())
 
     @staticmethod
     async def _fechar_depois(conexao, atraso_s):
@@ -206,12 +207,13 @@ class Satelite:
             if cfgmod.som_permitido(self.cfg, arg):  # spec 2026-10-29: sons_turno falso pula inicio/fim
                 self.alto.tocar_wav(self._som(arg))
         elif tipo == "luz":
-            self.anel.show(ring.ESTADO_DO_MAESTRO[arg])
+            self.anel.show_maestro(ring.ESTADO_DO_MAESTRO[arg])
         elif tipo == "desfazer_mudo":  # spec 2026-11-08: a rede voltou e o mudo veio da luz de erro; não ficar mudo
             if isinstance(self.anel, ring.Xvf3800Ring):  # sem caminho de software conhecido no código: só registra
                 print(json.dumps({"undo_mute": "unsupported_xvf3800"}), flush=True)
             else:  # Jabra: escrever a luz religa o microfone mudo (medido em 06/10)
-                self.anel.show(ring.ESTADO_DO_MAESTRO[self.maestro._luz_do_estado()])
+                self.anel.set_muted(self._mudo_visivel())
+                self.anel.show_maestro(ring.ESTADO_DO_MAESTRO[self.maestro._luz_do_estado()])
                 print(json.dumps({"undo_mute": "jabra"}), flush=True)
         elif tipo == "conectar":  # arg: None (palavra/botão) ou {"timer": ...}/{"entrega": id} (spec 2026-10-12)
             self.conexao = ConexaoFriday(self.cfg["endereco_friday"], cfgmod.dados_conexao(self.sid, self.cfg, arg),
@@ -301,6 +303,8 @@ class Satelite:
                 self._tocar_frases(arg)
             elif nome == "anel":
                 self.anel.show(arg)
+            elif nome == "anel_previa":  # botão de prévia: um estado por vez, sem composição; None volta
+                self.anel.preview(arg)
             elif nome == "update_pendente":
                 self.anel.set_pending(arg)
             elif nome == "contagem":
@@ -614,11 +618,22 @@ class Satelite:
         if mudou_np:  # PUT /config pela porta local
             self.evento("nao_perturbe", bool(novo.get("nao_perturbe")))
 
+    def _mudo_visivel(self) -> bool:
+        """O indicador de mudo do anel (v0.3.7): o mudo por software (config) ou o do botão do Jabra."""
+        return bool(self.cfg.get("mudo")) or self.maestro.mudo is True
+
+    def arranque_do_anel(self):
+        """Arranque: o mudo gravado entra no anel ANTES da primeira luz (16/11: o não perturbe apagava o vermelho)."""
+        self.anel.set_muted(self._mudo_visivel())
+        self.anel.show("off")
+        self._aplicar_mudo(inicial=True)  # restaura o último mudo gravado; sem mudo, não força a captura
+
     def _aplicar_mudo(self, inicial=False):
         """Mudo por software (spec 2026-10-29): falha do amixer nunca derruba o programa.
 
         `inicial` (arranque): restaura o ÚLTIMO estado gravado (`mudo` na config persistida); com mudo
         desligado não escreve nada, deixando a captura do aparelho como está (comportamento de antes)."""
+        self.anel.set_muted(self._mudo_visivel())
         if inicial and not self.cfg.get("mudo"):
             return
         try:
@@ -925,8 +940,7 @@ async def principal():
     n = s.vozes.limpar_novos()  # Review Focus 4: gravação ou treino interrompidos por um reinício
     if n:
         print(json.dumps({"aprendizagem": "pastas_novas_apagadas", "n": n}), flush=True)
-    s.anel.show("off")
-    s._aplicar_mudo(inicial=True)  # restaura o último mudo gravado; sem mudo, não força a captura
+    s.arranque_do_anel()
     s.volume.iniciar()  # M5: aplica o volume gravado (o último real, da voz ou do botão)
     s.evento("nao_perturbe_inicial", s.cfg["nao_perturbe"])  # arranque: aplica o estado, sem som de confirmação
     morreu = asyncio.Event()

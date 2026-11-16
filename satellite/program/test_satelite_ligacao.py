@@ -19,6 +19,7 @@ class Falsos:
         self.escritas, self.sons, self.limpou, self.mensagens, self.conexoes = [], [], 0, [], []
         self.music, self.primed, self.mudo = [], False, []
         self.parou_ja, self.silenciadas, self.fechadas = 0, 0, 0
+        self.luzes = []
 
 
 F = Falsos()
@@ -48,7 +49,7 @@ class ControleMudo:
 
 class Anel:
     def __init__(self, detector=None): pass
-    def mostrar(self, nome): pass
+    def mostrar(self, nome, mudo=False): F.luzes.append((nome, mudo))
 
 
 class Conexao:
@@ -420,7 +421,7 @@ class TestContinuacaoMusicaEPausa(Base):
 class TestAnel(Base):
     async def test_luz_do_maestro_chega_ao_anel_como_estado(self):
         vistos = []
-        self.s.anel = types.SimpleNamespace(show=lambda estado, direcao=None: vistos.append(estado))
+        self.s.anel = types.SimpleNamespace(show_maestro=lambda estado, direcao=None: vistos.append(estado))
         for nome in ("ouvindo", "cerebro", "nao_perturbe", "alarme", "parada"):
             self.s._agir("luz", nome)
         self.assertEqual(vistos, ["listen", "think", "dnd", "alarm", "off"])
@@ -523,3 +524,37 @@ class TestRedeEsgotadaLigacao(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnelComMudo(Base):
+    """v0.3.7 (16/11): mudo + não perturbe gravados; depois do restart a luz era só a do não perturbe."""
+    async def test_restart_with_mute_and_dnd_saved_draws_mute_first(self):
+        self.s.cfg["mudo"], self.s.cfg["nao_perturbe"] = True, True
+        F.luzes.clear()
+        self.s.arranque_do_anel()
+        self.s.evento("nao_perturbe_inicial", True)
+        self.assertTrue(F.luzes and all(m for _, m in F.luzes), F.luzes)
+        self.assertEqual(F.luzes[-1], ("nao_perturbe", True))
+
+    async def test_unmute_from_ha_clears_indicator(self):
+        self.s.cfg["mudo"] = True
+        self.s.arranque_do_anel()
+        novo = dict(self.s.cfg, mudo=False)
+        self.s.ao_mudar_config(novo)
+        self.assertEqual(F.luzes[-1][1], False)
+
+    async def test_button_mute_sets_indicator(self):
+        self.s.cfg["mudo"] = False
+        self.s.arranque_do_anel()
+        self.s.evento("mudo", True)
+        self.assertEqual(F.luzes[-1][1], True)
+        self.s.evento("mudo", False)
+        self.assertEqual(F.luzes[-1][1], False)
+
+    async def test_preview_command_is_unitary(self):
+        self.s.cfg["mudo"] = True
+        self.s.arranque_do_anel()
+        self.s.comando_porta({"acao": "ring", "state": "alarm", "preview": True})
+        self.assertEqual(F.luzes[-1], ("alarme", False))
+        self.s.comando_porta({"acao": "ring", "state": None, "preview": True})
+        self.assertEqual(F.luzes[-1][1], True)
