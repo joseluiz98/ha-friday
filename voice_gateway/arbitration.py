@@ -1,0 +1,136 @@
+"""Wake-word arbiter between satellites (spec 2026-11-16-satellite-arbitration, section 5.2).
+
+When several satellites hear the same wake word, each one sends a claim; the arbiter opens a short round, picks one
+winner and tells every claimant `go` or `lost`. Pure logic: no FastAPI, no Pipecat. The gateway wraps it in HTTP
+routes. It uses its own clock (arrival time), never the satellites'.
+
+The winning criterion lives in `pick` only, so it can be swapped without touching the round mechanics.
+"""
+import asyncio, json, logging, time, uuid
+
+TIE_DB = 1.0  # voice gap below this counts as a tie, decided by the wake-word score
+
+
+def _adjusted(sid: str, claim: dict, offsets: dict) -> float:
+    return float(claim.get("voice_dbfs", -120.0)) + float(offsets.get(sid, 0.0))
+
+
+def pick(candidates: dict, offsets: dict) -> str:
+    """Return the winning sid. Score = voice_dbfs + device offset; a gap under 1 dB to the loudest is a tie that the
+    higher wake-word `score` decides."""
+    adj = {sid: _adjusted(sid, c, offsets) for sid, c in candidates.items()}
+    top = max(adj.values())
+    contenders = [sid for sid in candidates if top - adj[sid] < TIE_DB]
+    return max(contenders, key=lambda sid: (float(candidates[sid].get("score", 0.0)), adj[sid], sid))
+
+
+class _Round:
+    def __init__(self, round_id: str, start: float):
+        self.id, self.start = round_id, start
+        self.candidates: dict[str, dict] = {}
+        self.done = asyncio.Event()
+        self.timer = None
+        self.winner = None
+
+
+class Arbiter:
+    def __init__(self, clock=time.monotonic, window_s=0.2, same_activation_s=1.5, online_s=30.0,
+                 offsets: dict | None = None, log=None):
+        self._clock = clock
+        self.window_s, self.same_activation_s, self.online_s = window_s, same_activation_s, online_s
+        self.offsets = dict(offsets or {})
+        self._log = log
+        self._seen: dict[str, float] = {}
+        self._round: _Round | None = None
+        self._last: _Round | None = None  # last closed round, for late claims
+
+    def _emit(self, record: dict) -> None:
+        if self._log is None:
+            return
+        try:
+            self._log(record)
+        except Exception:
+            logging.exception("arbitration: log failed")
+
+    def _online(self) -> set:
+        now = self._clock()
+        return {sid for sid, t in self._seen.items() if now - t <= self.online_s}
+
+    def presence(self, sid: str) -> int:
+        """Record that `sid` is alive; return how many OTHER satellites are online."""
+        self._seen[sid] = self._clock()
+        return len(self._online() - {sid})
+
+    def _candidate(self, sid: str, claim: dict) -> dict:
+        return {"sid": sid, "claim_id": claim.get("claim_id"), "wake_word": claim.get("wake_word"),
+                "score": claim.get("score"), "voice_dbfs": claim.get("voice_dbfs"),
+                "offset_db": self.offsets.get(sid, 0.0), "busy": bool(claim.get("busy", False))}
+
+    def _log_single(self, sid: str, claim: dict, round_id: str, reason: str) -> None:
+        self._emit({"ts": time.time(), "round_id": round_id, "window_ms": 0,
+                    "candidates": [self._candidate(sid, claim)], "winner": sid, "reason": reason})
+
+    async def claim(self, sid: str, claim: dict) -> dict:
+        self.presence(sid)
+        if claim.get("record_only"):
+            round_id = uuid.uuid4().hex[:12]
+            self._log_single(sid, claim, round_id, "record_only")
+            return {"verdict": "go", "reason": "record_only", "round_id": round_id}
+
+        rnd = self._round
+        if rnd is None:
+            last = self._last
+            if (last is not None and sid not in last.candidates
+                    and self._clock() - last.start < self.same_activation_s):
+                return {"verdict": "lost", "reason": "late", "round_id": last.id}
+            if not (self._online() - {sid}):
+                round_id = uuid.uuid4().hex[:12]
+                self._log_single(sid, claim, round_id, "alone")
+                return {"verdict": "go", "reason": "alone", "round_id": round_id}
+            rnd = self._round = _Round(uuid.uuid4().hex[:12], self._clock())
+            rnd.timer = asyncio.ensure_future(self._expire(rnd))
+            self._emit({"event": "round_opened", "round_id": rnd.id, "sid": sid, "ts": time.time()})
+
+        previous = rnd.candidates.get(sid)
+        if previous is None or pick({"old": previous, "new": claim}, {}) == "new":
+            rnd.candidates[sid] = claim  # same satellite twice: keep the best one
+        if self._online() <= set(rnd.candidates):
+            self._close(rnd)
+        await rnd.done.wait()
+        if sid == rnd.winner:
+            return {"verdict": "go", "reason": "only_one_heard" if len(rnd.candidates) == 1 else "best",
+                    "round_id": rnd.id}
+        return {"verdict": "lost", "reason": "best", "round_id": rnd.id}
+
+    async def _expire(self, rnd: _Round) -> None:
+        await asyncio.sleep(self.window_s)
+        self._close(rnd)
+
+    def _close(self, rnd: _Round) -> None:
+        if rnd.done.is_set():
+            return
+        rnd.winner = pick(rnd.candidates, self.offsets)
+        if self._round is rnd:
+            self._round = None
+        self._last = rnd
+        if rnd.timer is not None and rnd.timer is not asyncio.current_task():
+            rnd.timer.cancel()
+        reason = "only_one_heard" if len(rnd.candidates) == 1 else "best"
+        self._emit({"ts": time.time(), "round_id": rnd.id,
+                    "window_ms": round((self._clock() - rnd.start) * 1000),
+                    "candidates": [self._candidate(s, c) for s, c in rnd.candidates.items()],
+                    "winner": rnd.winner, "reason": reason})
+        rnd.done.set()
+
+
+def load_offsets(path: str) -> dict:
+    """Read `{sid: dB}`; a missing or invalid file means no offsets."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): float(v) for k, v in data.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool)}
