@@ -9,7 +9,10 @@ Teste: cd /srv/friday/app && python3 -m unittest -q test_inventario_casa
 import asyncio
 import re
 
-PEDIDO = {"jsonrpc": "2.0", "id": 1, "method": "prompts/get", "params": {"name": "Assist"}}
+# HA 2026.11 renamed the MCP prompt "Assist" to "Device control" (same text): the voice got an empty inventory
+# after the update on 16/11/2026. Try the new name first, then the old one.
+NOMES = ("Device control", "Assist")
+PEDIDO = {"jsonrpc": "2.0", "id": 1, "method": "prompts/get", "params": {"name": NOMES[0]}}
 
 
 def extrair_texto(resposta) -> str:
@@ -59,8 +62,13 @@ async def _post_aiohttp(url: str, token: str, corpo: dict):
 
 async def buscar(url: str, token: str, timeout: float = 2.0, post=_post_aiohttp):
     """(texto, None) ou ("", nome do erro). Nunca levanta exceção nem passa do prazo."""
+    async def _tentar():
+        for nome in NOMES:
+            texto = extrair_texto(await post(url, token, {**PEDIDO, "params": {"name": nome}}))
+            if texto:
+                return texto
+        return ""
     try:
-        resposta = await asyncio.wait_for(post(url, token, PEDIDO), timeout)
+        return await asyncio.wait_for(_tentar(), timeout), None
     except Exception as e:  # inclui o TimeoutError do prazo
         return "", type(e).__name__
-    return extrair_texto(resposta), None

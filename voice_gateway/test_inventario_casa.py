@@ -50,11 +50,22 @@ class TestBuscar(unittest.TestCase):
     def test_sucesso(self):
         async def post(url, token, corpo):
             self.assertEqual(corpo["method"], "prompts/get")
-            self.assertEqual(corpo["params"], {"name": "Assist"})
+            self.assertEqual(corpo["params"], {"name": "Device control"})
             return RESPOSTA
         texto, erro = asyncio.run(ic.buscar("http://x/mcp", "t", post=post))
         self.assertIn("Luz Escritório", texto)
         self.assertIsNone(erro)
+
+    def test_ha_antigo_cai_no_nome_assist(self):
+        nomes = []
+        async def post(url, token, corpo):
+            nomes.append(corpo["params"]["name"])
+            if corpo["params"]["name"] == "Assist":
+                return RESPOSTA
+            return {"jsonrpc": "2.0", "id": 1, "error": {"code": -32602, "message": "not found"}}
+        texto, erro = asyncio.run(ic.buscar("http://x/mcp", "t", post=post))
+        self.assertIn("Luz Escritório", texto)
+        self.assertEqual(nomes, ["Device control", "Assist"])
 
     def test_lento_estoura_o_prazo_sem_atrasar_a_conversa(self):
         async def post(url, token, corpo):

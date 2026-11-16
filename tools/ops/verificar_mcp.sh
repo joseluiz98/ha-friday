@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Confere o que a voz enxerga pelo MCP do HA: o inventário da casa (prompt "Assist") e as ferramentas.
+# Confere o que a voz enxerga pelo MCP do HA: o inventário da casa (prompt "Device control", ex-"Assist") e as ferramentas.
 # Uso: bash verificar_mcp.sh "Luz Escritório" "sem:Office Lights" "ferramenta:script__tv_netflix" ...
 #   texto -> precisa aparecer no inventário; sem:texto -> não pode aparecer; ferramenta:nome -> precisa existir.
 set -uo pipefail
 U=http://supervisor/core/api/mcp
 H=(-H "Authorization: Bearer $SUPERVISOR_TOKEN" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream")
-inv=$(curl -s "${H[@]}" "$U" -d '{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"Assist"}}' \
+inv=$(curl -s "${H[@]}" "$U" -d '{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"Device control"}}' \
   | python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(m["content"]["text"] for m in d["result"]["messages"]))')
 fer=$(curl -s "${H[@]}" "$U" -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   | python3 -c 'import json,sys; print("\n".join(t["name"] for t in json.load(sys.stdin)["result"]["tools"]))')
