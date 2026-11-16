@@ -82,3 +82,38 @@ def texto_push(pedido, resposta, limite=700):
     if len(texto) > limite:
         texto = texto[: limite - len(sufixo)].rstrip() + sufixo
     return texto
+
+
+class RespostasPeloTelegram:
+    """14/11 (árvore de Natal): pedidos ao cérebro cuja resposta vai só pelo Telegram, porque o pedido do canal veio
+    depois da chamada ao cérebro. Esses pedidos não seguram a conversa do satélite aberta."""
+
+    def __init__(self):
+        self._tarefas, self._marcadas = set(), set()
+
+    def acompanhar(self, tarefa):
+        self._tarefas = {t for t in self._tarefas if not t.done()}
+        self._tarefas.add(tarefa)
+
+    def marcar(self) -> int:
+        abertas = {t for t in self._tarefas if not t.done()}
+        self._marcadas |= abertas
+        return len(abertas)
+
+    def vai_pelo_telegram(self, tarefa) -> bool:
+        return tarefa in self._marcadas
+
+    def segurando(self, pendentes: int) -> int:
+        """Dos `pendentes` ainda em curso, quantos seguram a conversa (os marcados para o Telegram não seguram)."""
+        return max(0, pendentes - sum(1 for t in self._marcadas if not t.done()))
+
+
+def texto_telegram(pedido, resposta, limite=3500):
+    """A resposta inteira (o Telegram aceita 4096), sem negrito nem código do markdown, com as quebras de linha."""
+    sufixo = "… (resposta completa no app da Sexta-feira)"
+    limpo = resposta.replace("**", "").replace("`", "")
+    limpo = re.sub(r"(?m)^\s*#+\s*", "", limpo).strip()
+    texto = f"Sobre “{pedido[:80]}”:\n\n{limpo}"
+    if len(texto) > limite:
+        texto = texto[: limite - len(sufixo)].rstrip() + sufixo
+    return texto

@@ -475,6 +475,30 @@ class TestBotLigaApresentacao(unittest.TestCase):
 
 
 
+class TestConversaComCerebroPendente(unittest.TestCase):
+    """14/11: encerrar_conversa com pedido pendente deixava a resposta só no registro."""
+
+    def test_encerrar_descreve_a_espera(self):
+        self.assertNotIn("descartada", sm.DESCRICAO_ENCERRAR)
+        self.assertIn("Telegram", sm.DESCRICAO_ENCERRAR)
+
+    def test_resultado_quando_segura(self):
+        r = sm.resultado_encerrar_com_pendente(1)
+        self.assertEqual(r["fechada"], False)
+        self.assertEqual(r["pedidos_em_andamento"], 1)
+
+    def test_resultado_telegram(self):
+        self.assertEqual(sm.resultado_resposta_pelo_telegram(2)["pedidos_marcados"], 2)
+        self.assertEqual(sm.resultado_resposta_pelo_telegram(0)["pedidos_marcados"], 0)
+        self.assertIn("erro", sm.resultado_resposta_pelo_telegram(0))
+
+    def test_textos_sao_fatos(self):
+        for t in (sm.DESCRICAO_ENCERRAR, sm.DESCRICAO_RESPOSTA_PELO_TELEGRAM,
+                  sm.resultado_encerrar_com_pendente(1)["situacao"]):
+            for ordem in ("Diga ", "Explique", "Pergunte", "Você deve", "Nunca", "SEMPRE"):
+                self.assertNotIn(ordem, t)
+
+
 if __name__ == "__main__":
     unittest.main()
 
