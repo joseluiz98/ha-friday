@@ -52,7 +52,7 @@ saida="$(bash "$R" "$D3" aplicar)"; rc=$?
 [ $rc -ne 0 ] && [ "$(cat "$F3")" = "$antes" ] && [ ! -e "$F3.orig" ] && echo "$saida" | grep -q "assinatura" \
   && ok "assinatura diferente: recusa sem mexer" || erro "assinatura diferente: rc=$rc, saída '$saida'"
 # 9. dois arquivos de pool na raiz: recusa.
-D4="$TMP/d4"; novo_dist "$D4"; cp "$D4/worker-task-pool-abc123.mjs" "$D4/worker-task-pool-xyz.mjs"
+D4="$TMP/d4"; novo_dist "$D4"; cp "$D4/worker-task-pool-abc123.mjs" "$D4/worker-task-pool-xyz999.mjs"
 bash "$R" "$D4" aplicar > /dev/null; rc=$?
 [ $rc -ne 0 ] && grep -qF '?? 6e4;' "$D4/worker-task-pool-abc123.mjs" && ok "dois pools: recusa" || erro "dois pools: aplicou (rc=$rc)"
 # 10. ação inválida e dist inexistente: código != 0.
@@ -87,11 +87,41 @@ D6="$TMP/d6"; novo_dist_299 "$D6"; F6="$D6/worker-task-pool-BQlnRNqZ.mjs"
 printf '\t\tconst idleMs = this.options.idleTimeoutMs ?? 6e4;\n' >> "$F6"; antes="$(cat "$F6")"
 bash "$R" "$D6" aplicar > /dev/null; rc=$?
 [ $rc -ne 0 ] && [ "$(cat "$F6")" = "$antes" ] && ok "duas formas no mesmo arquivo: recusa" || erro "duas formas: rc=$rc"
+# ---- 2026.11.3: o pool foi para src-*.mjs, com slots de rajada (burst) no mesmo temporizador.
+novo_dist_2611() {
+  mkdir -p "$1"
+  cat > "$1/src-NEpyeLp1.mjs" <<'EOF3'
+	function idle(slot, elapsedIdleMs = 0) {
+		const idleMs = (burst ? options.burstIdleTimeoutMs : options.idleTimeoutMs) ?? 6e4;
+		if (idleMs <= 0) return;
+	}
+		if ((this.options.idleTimeoutMs ?? 6e4) > 0) {
+EOF3
+  printf 'export { WorkerTaskPool };\n' > "$1/worker-task-pool-CvM7d10Q.mjs"
+  printf 'const livePools = new Set();\n' > "$1/worker-task-pool-registry-D6q0YAmu.mjs"
+}
+# 15. 2026.11.3: com 3 worker-task-pool-*.mjs, acha o src-*.mjs; só o temporizador normal vira ?? 0.
+D8="$TMP/d8"; novo_dist_2611 "$D8"; F8="$D8/src-NEpyeLp1.mjs"; ORIG8="$(cat "$F8")"
+saida="$(bash "$R" "$D8" aplicar)"; rc=$?
+if [ $rc -eq 0 ] && grep -qF 'const idleMs = burst ? options.burstIdleTimeoutMs ?? 6e4 : options.idleTimeoutMs ?? 0;' "$F8" \
+   && grep -qF '(this.options.idleTimeoutMs ?? 6e4) > 0' "$F8"; then ok "2026.11.3: remenda só o temporizador normal"; else erro "2026.11.3: falhou (rc=$rc: $saida)"; fi
+antes="$(cat "$F8")"; bash "$R" "$D8" aplicar > /dev/null && [ "$(cat "$F8")" = "$antes" ] && ok "2026.11.3: idempotente" || erro "2026.11.3: aplicar de novo mudou"
+bash "$R" "$D8" reverter > /dev/null && [ "$(cat "$F8")" = "$ORIG8" ] && ok "2026.11.3: reverter restaura" || erro "2026.11.3: reverter falhou"
+# 17. 2026.11.3: cópia do pool em pacote autônomo sem hash no nome fica intacta.
+D9="$TMP/d9"; novo_dist_2611 "$D9"; cp "$D9/src-NEpyeLp1.mjs" "$D9/managed-handoff-runtime.mjs"; B9="$(cat "$D9/managed-handoff-runtime.mjs")"
+bash "$R" "$D9" aplicar > /dev/null && [ "$(cat "$D9/managed-handoff-runtime.mjs")" = "$B9" ] && grep -qF 'options.idleTimeoutMs ?? 0;' "$D9/src-NEpyeLp1.mjs" \
+  && ok "2026.11.3: pacote autônomo sem hash fica intacto" || erro "2026.11.3: mexeu no pacote autônomo"
+# 16. o JS remendado escolhe certo: normal = 0 (nunca fecha), rajada sem valor = 60 s.
+if command -v node > /dev/null; then
+  r="$(node -e 'const options={}; let burst=false; const a=burst ? options.burstIdleTimeoutMs ?? 6e4 : options.idleTimeoutMs ?? 0; burst=true; const b=burst ? options.burstIdleTimeoutMs ?? 6e4 : options.idleTimeoutMs ?? 0; console.log(a, b)')"
+  [ "$r" = "0 60000" ] && ok "2026.11.3: precedência do JS remendado" || erro "2026.11.3: JS deu '$r'"
+fi
+
 # 14. arquivo real da 2026.9.9, se informado (OC_DIST_REAL=<pasta dist do pacote>): aplica e reverte numa cópia.
 if [ -n "${OC_DIST_REAL:-}" ]; then
-  D7="$TMP/d7"; mkdir -p "$D7"; cp "$OC_DIST_REAL"/worker-task-pool-*.mjs "$D7/"
-  F7="$(ls "$D7"/worker-task-pool-*.mjs)"; ORIG7="$(cat "$F7")"
-  bash "$R" "$D7" aplicar > /dev/null && [ "$(grep -cF 'idleTimeoutMs ?? 0;' "$F7")" = 1 ] \
+  D7="$TMP/d7"; mkdir -p "$D7"; cp "$OC_DIST_REAL"/*.mjs "$D7/"
+  bash "$R" "$D7" aplicar > /dev/null; F7="$(ls "$D7"/*.orig | sed 's/\.orig$//')"; ORIG7="$(cat "$F7.orig")"
+  [ "$(ls "$D7"/*.orig | wc -l)" = 1 ] && [ "$(grep -cF 'idleTimeoutMs ?? 0;' "$F7")" = 1 ] \
     && bash "$R" "$D7" reverter > /dev/null && [ "$(cat "$F7")" = "$ORIG7" ] \
     && ok "arquivo real ($(basename "$F7")): aplica e reverte" || erro "arquivo real: falhou"
 fi

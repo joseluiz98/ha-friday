@@ -23,6 +23,26 @@ GW_CHAVE_URL="${GW_CHAVE_URL:-${FRIDAY_HA_URL:?FRIDAY_HA_URL missing}/api/states
 # Estado da última decisão (chave, remendo aplicado ou não, quando): a porta de status lê este arquivo.
 GW_ESTADO_QUENTE="${GW_ESTADO_QUENTE:-/srv/friday/state/warm-brain.json}"
 
+# Migração do estado do OpenClaw (P0, 16/11): a 2026.11.3 recusa sessões até `openclaw doctor --fix` migrar os
+# bancos dos agentes ("schema version 24"; 69 s na VM). Roda uma vez por versão, antes da 1ª partida do gateway;
+# a marca guarda a versão migrada. Se falhar, o gateway sobe mesmo assim e a saúde do OTA decide o rollback.
+GW_DOCTOR_MARCA="${GW_DOCTOR_MARCA:-/srv/friday/state/openclaw-doctor.version}"
+GW_DOCTOR_MAX="${GW_DOCTOR_MAX:-900}"
+migrar_openclaw() {
+  local versao
+  versao="$(jq -r '.version // empty' "$GW_DIST/../package.json" 2>/dev/null)"  # sem rodar o openclaw
+  [ -n "$versao" ] || { log "[doctor] versão do OpenClaw ilegível; sigo sem migrar"; return 0; }
+  [ "$(cat "$GW_DOCTOR_MARCA" 2>/dev/null)" = "$versao" ] && return 0
+  log "[doctor] migrando o estado para $versao"
+  if timeout "$GW_DOCTOR_MAX" openclaw doctor --fix --non-interactive > >(prefixar_gateway) 2>&1; then
+    printf '%s\n' "$versao" > "$GW_DOCTOR_MARCA" 2>/dev/null || true
+    log "[doctor] estado migrado para $versao"
+  else
+    log "[doctor] doctor falhou (código $?); o gateway sobe sem a migração"
+  fi
+  return 0
+}
+
 # "on" só com prova: HA fora do ar, entidade inexistente ou qualquer outro estado = "off" (D2).
 ler_chave_remendo() {
   local estado
@@ -62,6 +82,7 @@ prefixar_gateway() {
 
 manter_gateway() {
   local falhas=0 ini pid rc espera
+  migrar_openclaw
   while :; do
     preparar_remendo
     ini=$(date +%s)

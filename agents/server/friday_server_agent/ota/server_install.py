@@ -35,7 +35,7 @@ import urllib.request
 from typing import Callable
 
 from . import evidence
-from friday_agent_core.ota.constants import HEALTH_TIMEOUT_S, HEAVY_IDLE_S, KEEP_IMAGES, SNAPSHOT_KEEP_S
+from friday_agent_core.ota.constants import CONTAINER_HEALTH_TIMEOUT_S, HEALTH_TIMEOUT_S, HEAVY_IDLE_S, KEEP_IMAGES, SNAPSHOT_KEEP_S
 from friday_agent_core.ota.manifest import COMPONENT_ORDER
 
 from .. import collectors
@@ -262,7 +262,9 @@ class ServerInstaller:
         return r.returncode == 0 and start >= 0 and "Traceback" not in text[start:]
 
     def healthy(self, comp: str, tree: str, line: str, since: float) -> bool:
-        if comp in ("voice-gateway", "container"):
+        if comp == "container":
+            return self._wait(lambda: self._voice_up(since), CONTAINER_HEALTH_TIMEOUT_S)
+        if comp == "voice-gateway":
             return self._wait(lambda: self._voice_up(since))
         if comp == "server":
             units = ["friday-status"] + sorted(os.path.basename(u) for u in
@@ -553,7 +555,7 @@ class ServerInstaller:
         since = self._clock()
         self._compose_up(image_tag)
         if not self.healthy("container", tree, line, since):
-            raise StepFailed("health", f"container not healthy in {HEALTH_TIMEOUT_S}s")
+            raise StepFailed("health", f"container not healthy in {CONTAINER_HEALTH_TIMEOUT_S}s")
         prev = run.get("prev_image", "").partition(":")[2]
         self._prune_images([image_tag] + ([prev] if prev else []))
 

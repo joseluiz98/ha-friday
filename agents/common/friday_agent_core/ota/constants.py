@@ -19,6 +19,8 @@ SOAK_S = int(os.environ.get("FRIDAY_OTA_SOAK_S") or 172800)  # 48 h in alpha bef
 RETRY_DELAYS_S = _delays(os.environ.get("FRIDAY_OTA_RETRY_DELAYS")) or (900, 3600, 21600, 86400)
 PUSH_WINDOW = ("07:30", "22:00")
 HEALTH_TIMEOUT_S = 180
+# The container switch: OpenClaw migrates its databases on the first start of a new version (69 s on 16/11).
+CONTAINER_HEALTH_TIMEOUT_S = 600
 HEAVY_IDLE_S = 1800
 KEEP_RELEASES = 2
 KEEP_IMAGES = 2

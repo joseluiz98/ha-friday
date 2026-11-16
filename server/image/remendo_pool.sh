@@ -5,11 +5,21 @@
 # fechar"). A inscrição no aviso openclaw.memory.critical fica intacta: sob pressão de memória o próprio OpenClaw
 # ainda aposenta as threads paradas. Só o pool da raiz de dist/ (o do motor de memória).
 # Assinatura exata ou nada: numa versão nova do OpenClaw, sai com código != 0 e o arquivo fica intacto.
-# Duas formas conhecidas da linha (spec 2026-10-12 D10): a da 2026.9.6 (`this.options…`) e a da 2026.9.9
-# (`options…`, pool reescrito com uma janela quente de 5 min). Exatamente uma das duas, uma vez, ou nada.
+# Formas conhecidas da linha (spec 2026-10-12 D10): a da 2026.9.6 (`this.options…`), a da 2026.9.9 (`options…`,
+# pool reescrito com uma janela quente de 5 min) e a da 2026.11.3 (o pool foi para src-*.mjs e ganhou slots de
+# rajada: só o temporizador normal vira `?? 0`; o da rajada fica em 60 s, senão as threads extras nunca fechariam).
+# O alvo é o único chunk com hash no nome (`nome-<hash>.mjs`, hash com maiúscula ou dígito) da raiz de dist/ que contém uma forma conhecida
+# (original ou remendada). Na 2026.11.3 há cópias do pool em pacotes autônomos sem hash
+# (managed-handoff-runtime.mjs, package-update-activation-recovery.mjs): não são o gateway e ficam intactas.
+# Exatamente uma forma, uma vez, ou nada.
 # Uso: remendo_pool.sh <dist> aplicar|reverter        Testes: bash /opt/friday/image/test_remendo_pool.sh
 set -uo pipefail
-FORMAS=('const idleMs = this.options.idleTimeoutMs ?? 6e4;' 'const idleMs = options.idleTimeoutMs ?? 6e4;')
+FORMAS=('const idleMs = this.options.idleTimeoutMs ?? 6e4;'
+        'const idleMs = options.idleTimeoutMs ?? 6e4;'
+        'const idleMs = (burst ? options.burstIdleTimeoutMs : options.idleTimeoutMs) ?? 6e4;')
+REMENDOS=('const idleMs = this.options.idleTimeoutMs ?? 0;'
+          'const idleMs = options.idleTimeoutMs ?? 0;'
+          'const idleMs = burst ? options.burstIdleTimeoutMs ?? 6e4 : options.idleTimeoutMs ?? 0;')
 INSCRICAO='(this.options.idleTimeoutMs ?? 6e4) > 0'
 
 falhar() { echo "$*"; exit 1; }
@@ -20,19 +30,27 @@ acao="${2:-}"
 case "$acao" in aplicar|reverter) ;; *) falhar "uso: remendo_pool.sh <dist> aplicar|reverter" ;; esac
 [ -d "$dist" ] || falhar "dist não encontrado: $dist"
 shopt -s nullglob
-arquivos=("$dist"/worker-task-pool-*.mjs)
-[ "${#arquivos[@]}" -eq 1 ] || falhar "esperava 1 worker-task-pool-*.mjs em $dist, achei ${#arquivos[@]}; nada mudou"
+# Um grep só sobre os chunks com hash (são ~9 mil .mjs na 2026.11.3; um grep por arquivo levava ~80 s na VM).
+padroes=(); for i in "${!FORMAS[@]}"; do padroes+=(-e "${FORMAS[$i]}" -e "${REMENDOS[$i]}"); done
+candidatos=()
+for f in "$dist"/*.mjs; do
+  h="${f##*/}"; h="${h%.mjs}"; h="${h##*-}"  # hash do chunk: 6+ caracteres com maiúscula ou dígito ("runtime" não é)
+  [[ "$h" =~ ^[A-Za-z0-9_]{6,}$ && "$h" =~ [A-Z0-9] ]] && candidatos+=("$f")
+done
+arquivos=()
+[ "${#candidatos[@]}" -gt 0 ] && mapfile -t arquivos < <(printf '%s\0' "${candidatos[@]}" | xargs -0 grep -lF "${padroes[@]}" --)
+[ "${#arquivos[@]}" -eq 0 ] && falhar "nenhum .mjs em $dist com a assinatura esperada (OpenClaw atualizado?); nada mudou"
+[ "${#arquivos[@]}" -eq 1 ] || falhar "esperava 1 arquivo do pool (.mjs com o temporizador) em $dist, achei ${#arquivos[@]}; nada mudou"
 alvo="${arquivos[0]}"
 nome="$(basename "$alvo")"
 
 # Escolhe a forma presente: soma original + remendada de cada uma; só vale se exatamente uma aparece, uma vez.
-TEMPORIZADOR=""; achadas=0
-for forma in "${FORMAS[@]}"; do
-  n=$(( $(contar "$forma" "$alvo") + $(contar "${forma/?? 6e4;/?? 0;}" "$alvo") ))
-  [ "$n" -gt 0 ] && { achadas=$((achadas + n)); TEMPORIZADOR="$forma"; }
+TEMPORIZADOR=""; REMENDADO=""; achadas=0
+for i in "${!FORMAS[@]}"; do
+  n=$(( $(contar "${FORMAS[$i]}" "$alvo") + $(contar "${REMENDOS[$i]}" "$alvo") ))
+  [ "$n" -gt 0 ] && { achadas=$((achadas + n)); TEMPORIZADOR="${FORMAS[$i]}"; REMENDADO="${REMENDOS[$i]}"; }
 done
 [ "$achadas" -eq 1 ] || falhar "assinatura diferente da esperada em $nome (OpenClaw atualizado?); nada mudou"
-REMENDADO="${TEMPORIZADOR/?? 6e4;/?? 0;}"
 
 remendado() { [ "$(contar "$REMENDADO" "$alvo")" = 1 ] && [ "$(contar "$TEMPORIZADOR" "$alvo")" = 0 ] && [ "$(contar "$INSCRICAO" "$alvo")" = 1 ]; }
 original() { [ "$(contar "$TEMPORIZADOR" "$alvo")" = 1 ] && [ "$(contar "$REMENDADO" "$alvo")" = 0 ] && [ "$(contar "$INSCRICAO" "$alvo")" = 1 ]; }
