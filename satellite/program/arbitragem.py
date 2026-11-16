@@ -2,7 +2,7 @@
 
 Duas rotas do bot: `POST /satellite_presence` (quantos OUTROS satélites estão online) e `POST /wake_claim` (aviso
 de ativação, resposta `go`/`lost`). Regra de ouro: nenhuma falha deixa a Pi muda. Bot fora, versão antiga (404),
-senha errada, timeout ou resposta estranha = a Pi age como hoje (`go`, motivo `timeout`) e a presença vira "sozinha".
+senha errada, timeout ou resposta estranha = a Pi age como hoje (`go`, com o motivo da falha) e a presença vira "sozinha".
 O programa (Task 4) decide quando chamar; aqui só se fala com o bot. Log: uma linha JSON no stdout (journal)."""
 import asyncio
 import json
@@ -13,7 +13,6 @@ ESPERA_DISPUTA_S = 0.3
 ESPERA_PRESENCA_S = 2
 ESPERA_REGISTRO_S = 2
 VEREDITOS = ("go", "lost")
-FALLBACK = {"verdict": "go", "reason": "timeout"}
 
 
 def novo_claim_id():
@@ -21,26 +20,62 @@ def novo_claim_id():
     return uuid.uuid4().hex
 
 
-async def _post_aiohttp(url, json, headers, timeout_s):
-    """POST real, mesmo padrão do `_avisar_bot` (ssl=False). Devolve (status, corpo-dict; {} se não for JSON)."""
-    import aiohttp  # só na Pi; os testes injetam `post`
-    async with aiohttp.ClientSession() as s:
-        async with s.post(url, json=json, ssl=False, headers=headers,
-                          timeout=aiohttp.ClientTimeout(total=timeout_s)) as r:
-            try:
-                corpo = await r.json()
-            except Exception:
-                corpo = {}
-            return r.status, corpo if isinstance(corpo, dict) else {}
+def _aiohttp():
+    """Import preguiçoso: aiohttp só existe na Pi; os testes trocam esta função por um falso."""
+    import aiohttp
+    return aiohttp
 
 
 class ClienteDisputa:
     def __init__(self, endereco, senha, post=None, clock=time.monotonic):
         self.endereco = endereco
         self._senha = senha
-        self._post = post or _post_aiohttp
+        self._post = post or self._post_padrao
         self._clock = clock
         self.outros_online = 0
+        self._sessao_atual = None
+
+    def _sessao(self):
+        """UMA sessão aiohttp para tudo, criada preguiçosamente dentro do laço em execução. A conexão
+        (TCP + TLS do socat, que bifurca por conexão) fica aberta entre as chamadas: sem isso o handshake comeria
+        o orçamento de 0,3 s do veredito. A presença a cada 4 s mantém a conexão quente (keep-alive do uvicorn: 5 s)."""
+        if self._sessao_atual is None:
+            aiohttp = _aiohttp()
+            self._sessao_atual = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False, keepalive_timeout=30))
+        return self._sessao_atual
+
+    def _largar_sessao(self):
+        """Erro ou cancelamento (estado da conexão incerto): descarta; a próxima chamada recria."""
+        sessao, self._sessao_atual = self._sessao_atual, None
+        if sessao is not None:
+            asyncio.ensure_future(self._fechar_quieto(sessao))
+
+    @staticmethod
+    async def _fechar_quieto(sessao):
+        try:
+            await sessao.close()
+        except BaseException:
+            pass
+
+    async def fechar(self):
+        sessao, self._sessao_atual = self._sessao_atual, None
+        if sessao is not None:
+            await self._fechar_quieto(sessao)
+
+    async def _post_padrao(self, url, json, headers, timeout_s):
+        """POST real (mesmo padrão do `_avisar_bot`, ssl=False). Devolve (status, corpo-dict; {} se não for JSON)."""
+        aiohttp = _aiohttp()
+        try:
+            async with self._sessao().post(url, json=json, headers=headers,
+                                           timeout=aiohttp.ClientTimeout(total=timeout_s)) as r:
+                try:
+                    corpo = await r.json()
+                except Exception:
+                    corpo = {}
+                return r.status, corpo if isinstance(corpo, dict) else {}
+        except BaseException:
+            self._largar_sessao()
+            raise
 
     def _headers(self):
         return {"Authorization": f"Bearer {self._senha}"}
@@ -63,7 +98,7 @@ class ClienteDisputa:
         except Exception:
             self.outros_online = 0
 
-    async def laco_presenca(self, intervalo_s=10.0):
+    async def laco_presenca(self, intervalo_s=4.0):
         """Para sempre; nunca levanta (só o cancelamento da tarefa sai)."""
         while True:
             try:
@@ -75,17 +110,25 @@ class ClienteDisputa:
             await asyncio.sleep(intervalo_s)
 
     async def disputar(self, claim):
-        """Avisa o bot e espera o veredito por até 0,3 s. Timeout/erro/não-200/resposta inválida = `go`."""
+        """Avisa o bot e espera o veredito por até 0,3 s. Qualquer falha = `go`, com o motivo da falha:
+        `timeout`, `http_<status>`, `error` (exceção) ou `bad_body` (200 sem veredito válido)."""
         t0 = self._clock()
-        resultado = dict(FALLBACK)
+        resultado = {"verdict": "go", "reason": "error"}
         try:
             status, corpo = await self._enviar("/wake_claim", claim, ESPERA_DISPUTA_S)
-            if status == 200 and corpo.get("verdict") in VEREDITOS:
-                resultado = corpo
+            if status != 200:
+                resultado["reason"] = f"http_{status}"
+            elif corpo.get("verdict") in VEREDITOS:
+                resultado = dict(corpo)
+                resultado["reason"] = corpo.get("reason") or "unknown"
+            else:
+                resultado["reason"] = "bad_body"
+        except asyncio.TimeoutError:
+            resultado["reason"] = "timeout"
         except Exception:
             pass
         ms = round((self._clock() - t0) * 1000)
-        print(json.dumps({"arbitration": resultado.get("reason"), "verdict": resultado["verdict"], "ms": ms}),
+        print(json.dumps({"arbitration": resultado["reason"], "verdict": resultado["verdict"], "ms": ms}),
               flush=True)
         return resultado
 
