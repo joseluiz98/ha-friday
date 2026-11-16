@@ -341,3 +341,16 @@ def test_activating_the_current_release_never_touches_previous(env):
     (env["root"] / "var/lib/friday/ota.json").write_text(json.dumps(s))
     assert helper(env, "activate", "v0.2.0", detached=True).returncode == 0
     assert state(env)["previous"] == "v0.1.0"
+
+
+def test_prune_drops_a_stage_left_by_a_crash_hours_ago(env):
+    # Task 13 minor: a `.<tag>.new` of a stage cut by a power cut was never removed unless that tag was staged again
+    rels = env["root"] / "opt/friday/releases"
+    (rels / "v0.2.0").mkdir()
+    (rels / ".v0.5.0.new").mkdir()
+    (rels / ".v0.6.0.new").mkdir()
+    old = time.time() - 7 * 3600
+    os.utime(rels / ".v0.5.0.new", (old, old))
+    os.symlink("releases/v0.2.0", env["root"] / "opt/friday/current")
+    assert helper(env, "prune").returncode == 0
+    assert sorted(p.name for p in rels.iterdir()) == [".v0.6.0.new", "v0.2.0"]

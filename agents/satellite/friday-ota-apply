@@ -426,6 +426,9 @@ def recover(detached=False):
     return 0
 
 
+STALE_STAGE_S = 6 * 3600  # a stage takes ~15 min on a Pi 3 (wheels included)
+
+
 def _vkey(tag):
     m = re.match(r"^v(\d+)\.(\d+)\.(\d+)", tag)
     return tuple(int(x) for x in m.groups()) if m else (-1,)
@@ -436,8 +439,16 @@ def prune():
         return 0
     keep = {current_tag(), read_state().get("previous")}  # the KEEP_RELEASES (2) good versions of the spec
     for t in os.listdir(RELEASES):
-        if t not in keep and not t.startswith("."):  # a `.<tag>.new` belongs to a stage in progress
-            shutil.rmtree(os.path.join(RELEASES, t), ignore_errors=True)
+        path = os.path.join(RELEASES, t)
+        if t.startswith("."):  # a `.<tag>.new` belongs to a stage in progress, unless a crash left it hours ago
+            try:
+                stale = time.time() - os.path.getmtime(path) > STALE_STAGE_S
+            except OSError:
+                stale = False
+            if stale:
+                shutil.rmtree(path, ignore_errors=True)
+        elif t not in keep:
+            shutil.rmtree(path, ignore_errors=True)
     return 0
 
 

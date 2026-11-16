@@ -14,6 +14,9 @@ erro() { echo "FALHA - $1"; falhou=1; }
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/openclaw" <<'EOF'
 #!/bin/sh
+case "$1" in
+  doctor) echo "$*" >> "$DOCTOR_LOG"; exit "${DOCTOR_RC:-0}" ;;
+esac
 echo "partida" >> "$PARTIDAS"
 sleep 0.2
 exit 3
@@ -28,7 +31,7 @@ EOF
 chmod +x "$TMP/bin/sed"
 
 export PATH="$TMP/bin:$PATH" PARTIDAS="$TMP/partidas" GW_PORT=1 GW_PID_FILE="$TMP/gw.pid"
-export GW_ESPERA_BASE=0.1 GW_ESPERA_MAX=0.3
+export GW_ESPERA_BASE=0.1 GW_ESPERA_MAX=0.3 DOCTOR_LOG="$TMP/doctor.log" GW_DOCTOR_MARCA="$TMP/doctor.version"
 log() { echo "[teste] $*" >> "$TMP/log"; }
 export -f log
 # Remendo e chave falsos (spec 2026-10-11 §4.1): sem isto o laço chamaria o curl de verdade.
@@ -163,5 +166,22 @@ export GW_ESTADO_QUENTE="$TMP/warm-brain.json" CHAVE_FALSA=on
 ( . "$DIR/gateway_loop.sh"; preparar_remendo )
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["key"]=="on" and d["patched"] is True and d["at"]' "$TMP/warm-brain.json" \
   && ok "estado do cérebro quente gravado" || erro "warm-brain.json ausente ou errado"
+
+# ---- Migração do OpenClaw (P0 2026.11.3): `openclaw doctor --fix` uma vez por versão, antes da 1ª partida.
+rm -f "$DOCTOR_LOG" "$GW_DOCTOR_MARCA"
+export GW_DIST="$TMP/oc/dist"; mkdir -p "$GW_DIST"
+versao_oc() { printf '{"name": "openclaw", "version": "%s"}\n' "$1" > "$TMP/oc/package.json"; }
+versao_oc 2026.11.3
+( . "$DIR/gateway_loop.sh"; migrar_openclaw; migrar_openclaw )
+[ "$(grep -c -- "doctor --fix --non-interactive" "$DOCTOR_LOG" 2>/dev/null)" = 1 ] && [ "$(cat "$GW_DOCTOR_MARCA")" = "2026.11.3" ] \
+  && ok "doctor roda uma vez por versão e grava a marca" || erro "doctor: log '$(cat "$DOCTOR_LOG" 2>/dev/null)'"
+versao_oc 2026.12.1; ( . "$DIR/gateway_loop.sh"; migrar_openclaw )
+[ "$(grep -c doctor "$DOCTOR_LOG")" = 2 ] && ok "versão nova: doctor roda de novo" || erro "versão nova: doctor não rodou"
+rm -f "$DOCTOR_LOG" "$GW_DOCTOR_MARCA"
+( export DOCTOR_RC=1; . "$DIR/gateway_loop.sh"; migrar_openclaw ); rc=$?
+[ $rc -eq 0 ] && [ ! -e "$GW_DOCTOR_MARCA" ] && grep -q "doctor falhou" "$TMP/log" \
+  && ok "doctor falhou: sem marca, não derruba o laço, fica no log" || erro "doctor falhou: rc=$rc"
+rm -f "$TMP/oc/package.json" "$DOCTOR_LOG"; ( . "$DIR/gateway_loop.sh"; migrar_openclaw )
+[ ! -e "$DOCTOR_LOG" ] && grep -q "versão do OpenClaw ilegível" "$TMP/log" && ok "sem package.json: não roda o doctor" || erro "sem package.json: rodou"
 
 exit $falhou

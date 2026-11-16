@@ -30,6 +30,7 @@ LOG = logging.getLogger("friday_server_agent.ota")
 OTA_ROOT = "/srv/friday/ota"
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 RESULTS = ("installed", "rolled_back", "failed")
+REPORT_IDS_KEPT = 20  # per device: the newest report ids, to drop a resend
 BUILD_RETRY_S = 3600  # a release that failed to package is retried at most once an hour
 
 
@@ -47,8 +48,11 @@ def parse_report(data: dict) -> dict:
     proto = data.get("protocol", 1)
     if not isinstance(proto, int) or isinstance(proto, bool):
         raise ValueError("protocol")
+    rid = data.get("id")  # optional (agents before v0.3.6 send none): a resent report counts once
+    if rid is not None and (not isinstance(rid, str) or not re.match(r"^[0-9a-f]{8,64}$", rid)):
+        raise ValueError("id")
     return {"sat_id": sat, "tag": tag, "result": result, "stage": str(data.get("stage") or "")[:200],
-            "error": str(data.get("error") or "")[:200], "protocol": proto}
+            "error": str(data.get("error") or "")[:200], "protocol": proto, "id": rid}
 
 
 def offer_payload(tag: str | None, sat_id: str = "", sha: str = "", sha256: str = "", size: int = 0,
@@ -423,6 +427,12 @@ class Orchestrator:
         now = self._clock()
         with self.store.lock:
             d = self.store.device(r["sat_id"])
+            seen = d.setdefault("report_ids", [])
+            if r["id"] is not None:
+                if r["id"] in seen:
+                    return {"ok": True, "duplicate": True}
+                seen.append(r["id"])
+                del seen[:-REPORT_IDS_KEPT]
             d["last_report"] = {"at": now, **{k: r[k] for k in ("tag", "result", "stage", "error")}}
             alpha = d["channel"] == "alpha"
             if r["result"] == "installed":

@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "agents" / "server"))
 sys.path.insert(0, str(ROOT / "agents" / "common"))
+from friday_agent_core.ota.constants import CONTAINER_HEALTH_TIMEOUT_S, HEALTH_TIMEOUT_S  # noqa: E402
 from friday_agent_core.ota import manifest as mf  # noqa: E402
 from friday_server_agent.ota import server_install as si  # noqa: E402
 from friday_server_agent.ota import store as st  # noqa: E402
@@ -549,3 +550,19 @@ def test_container_failure_keeps_the_logs_off_the_vm_before_the_restore(tmp_path
     d = Path(w.paths["evidence"]) / seen["dirs"][0]
     assert "doctor --fix" in (d / "docker-friday.log").read_text()
     assert "health" in (d / "run.json").read_text()
+
+
+def test_container_waits_longer_than_a_light_component_for_health(tmp_path):
+    # OpenClaw migrates its databases on the first start of a new version (2026.11.3: 69 s on the VM), so the
+    # container switch gets CONTAINER_HEALTH_TIMEOUT_S, not the 180 s of a light component.
+    w = World(tmp_path, changed=["server/image/Dockerfile"], ready=False)
+    start, http = w.now, w.http
+
+    def late(method, url, token="", timeout=10):
+        if method == "GET" and w.now - start > HEALTH_TIMEOUT_S + 60:
+            w.ready = True
+        return http(method, url, token, timeout)
+    w.inst._http = late
+    out = w.inst.apply("v0.3.0", NEW, MANIFEST, manual=True)
+    assert out["result"] == "installed"
+    assert CONTAINER_HEALTH_TIMEOUT_S >= 600

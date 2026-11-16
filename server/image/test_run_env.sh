@@ -25,4 +25,8 @@ else
   out="$(FRIDAY_BASE="$T" timeout 10 bash "$DIR/run.sh" 2>&1)"; rc=$?
   { [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q 'secrets/ha_token'; } && ok "sem chave do HA: erro claro" || erro "sem chave do HA: rc=$rc"
 fi
+# P0 2026.11.3: a migração do estado vem antes do primeiro comando do openclaw no run.sh.
+m=$(grep -n '^migrar_openclaw' "$DIR/run.sh" | head -1 | cut -d: -f1)
+c=$(grep -n '^openclaw \|^  openclaw \|openclaw config set' "$DIR/run.sh" | head -1 | cut -d: -f1)
+[ -n "$m" ] && [ -n "$c" ] && [ "$m" -lt "$c" ] && ok "doctor antes do primeiro comando do openclaw" || erro "doctor depois do openclaw config (m=$m c=$c)"
 exit $falhou

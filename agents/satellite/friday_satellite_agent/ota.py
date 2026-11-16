@@ -25,6 +25,7 @@ import shutil
 import tarfile
 import tempfile
 import time
+import uuid
 from typing import Awaitable, Callable
 
 from friday_agent_core.ota import retry
@@ -149,15 +150,19 @@ class HttpClient:
         import aiohttp
         h = hashlib.sha256()
         part = dest + ".part"
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self._dt)) as s:
-            async with s.get(url, headers=self._h(token), ssl=self._ssl(fingerprint)) as r:
-                if r.status != 200:
-                    raise Failure("download", f"http {r.status}")
-                with open(part, "wb") as f:
-                    async for chunk in r.content.iter_chunked(1 << 16):
-                        h.update(chunk)
-                        f.write(chunk)
-        os.replace(part, dest)
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self._dt)) as s:
+                async with s.get(url, headers=self._h(token), ssl=self._ssl(fingerprint)) as r:
+                    if r.status != 200:
+                        raise Failure("download", f"http {r.status}")
+                    with open(part, "wb") as f:
+                        async for chunk in r.content.iter_chunked(1 << 16):
+                            h.update(chunk)
+                            f.write(chunk)
+            os.replace(part, dest)
+        except BaseException:
+            _rm(part)  # a cut download or a full SD card leaves nothing behind
+            raise
         return h.hexdigest()
 
 
@@ -215,6 +220,15 @@ class OtaClient:
                 return f.read().strip()
         except OSError:
             return ""
+
+    def _refused(self, err: BaseException) -> bool:
+        """A 401 from the VM: the token is no longer valid. Dropping it makes HA see `ota_credentials: false` and send
+        new ones (the silent credential), instead of retrying a dead token forever (ledger Final M4)."""
+        if not (isinstance(err, Failure) and err.error == "http 401"):
+            return False
+        _rm(self.token_file)
+        LOG.warning("OTA token refused by the VM: dropped, waiting for new credentials")
+        return True
 
     def has_credentials(self) -> bool:
         s = self.settings()
@@ -326,7 +340,7 @@ class OtaClient:
         del q[:-(MAX_UNSENT - 1)]  # the VM away for days: the newest reports are the ones that matter
         q.append(
             {"sat_id": self.sat_id, "tag": tag, "result": result, "stage": stage[:200], "error": error[:200],
-             "protocol": UPDATE_PROTOCOL})
+             "protocol": UPDATE_PROTOCOL, "id": uuid.uuid4().hex})  # the VM counts a resent report once (N4)
 
     async def _flush(self) -> None:
         q = self.data.get("unsent") or []
@@ -336,12 +350,26 @@ class OtaClient:
                 await self.http.post_json(s["url"] + "/v1/ota/report", q[0], self.token(), s["fingerprint"])
             except Exception as err:  # noqa: BLE001 - kept and re-sent on the next poll
                 LOG.warning("OTA report %s %s failed: %s", q[0].get("tag"), q[0].get("result"), type(err).__name__)
+                if self._refused(err):
+                    self._save()
+                    await self._changed()
                 break
             q.pop(0)
             self._save()
         if not q:
             self.data.pop("unsent", None)
             self._save()
+
+    @staticmethod
+    def _fresh(a: dict, res: dict) -> bool:
+        """The result belongs to this activation: same tag and written after it started. With `before` (the result
+        file's `at` when the activation started) any new write counts, whatever the clock did — a Pi 3 has no RTC and
+        can boot behind the activation's `at` (Task 14 N3). Without it (an older agent's state), the clock decides."""
+        if res.get("tag") != a["tag"]:
+            return False
+        if "before" in a:
+            return res.get("at") != a["before"]
+        return float(res.get("at") or 0) >= float(a.get("at") or 0) - 5
 
     def _activating(self) -> dict | None:
         a = self.data.get("activating")
@@ -353,13 +381,13 @@ class OtaClient:
         if not a:
             return
         res = _read_json(self.result_path)
-        fresh = res.get("tag") == a["tag"] and float(res.get("at") or 0) >= float(a.get("at") or 0) - 5
+        fresh = self._fresh(a, res)
         final = fresh and res.get("state") in ("installed", "rolled_back", "failed")
         if not final and self._clock() - float(a.get("at") or 0) > ACTIVATE_DEADLINE_S:
             if os.path.exists(self.helper_path):
                 await self._helper(["recover"])  # a cut activation goes back; then its result is read
                 res = _read_json(self.result_path)
-                fresh = res.get("tag") == a["tag"] and float(res.get("at") or 0) >= float(a.get("at") or 0) - 5
+                fresh = self._fresh(a, res)
                 final = fresh and res.get("state") in ("installed", "rolled_back", "failed")
             if not final and not (fresh and res.get("state") == "activating"):
                 res, final = {"state": "failed", "stage": "activate", "error": "lost"}, True
@@ -522,6 +550,8 @@ class OtaClient:
         except Exception as err:  # noqa: BLE001 - the VM may be down: try again next poll
             LOG.info("OTA offer unavailable: %s", type(err).__name__)
             self.manual_asked = self.manual_asked or asked
+            if self._refused(err):
+                await self._changed()
             return
         tag = offer.get("tag") if isinstance(offer, dict) else None
         if not isinstance(tag, str) or not TAG.match(tag):
@@ -577,7 +607,7 @@ class OtaClient:
         self.in_progress = True
         await self._changed()
         await self._ring({"acao": "ring", "state": "updating"})
-        self.data["activating"] = {"tag": tag, "at": self._clock()}
+        self.data["activating"] = {"tag": tag, "at": self._clock(), "before": _read_json(self.result_path).get("at")}
         self._save()
         try:
             rc, out = await self._helper(["activate", tag])
