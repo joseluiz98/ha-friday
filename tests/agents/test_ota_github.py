@@ -53,11 +53,12 @@ def test_network_error_raises():
     with pytest.raises(g.GitHubError):
         w.poll({})
 
-def _watcher(tag, sha, rs, calls, prerelease=False):
+def _watcher(tag, sha, rs, calls, prerelease=False, now=1794312000.0 + 3600):
     r = rel(tag)
     r["prerelease"] = prerelease
     return g.GitHubWatcher("o/r", fake({f"{BASE}/releases?per_page=30": [r],
-        f"{BASE}/commits/{tag}": {"sha": sha}, f"{BASE}/commits/{tag}/check-runs?per_page=100": rs}, calls))
+        f"{BASE}/commits/{tag}": {"sha": sha}, f"{BASE}/commits/{tag}/check-runs?per_page=100": rs}, calls),
+        clock=lambda: now)
 
 def test_pending_is_requeried_next_poll():
     first = _watcher("v0.5.0", "c" * 40, runs(("in_progress", None)), []).poll({})
@@ -81,7 +82,11 @@ def test_full_poll_notices_moved_tag_and_red_to_green():
     assert red["v0.4.0"].release.ci == "red"
     calls = []
     w = _watcher("v0.4.0", "d" * 40, runs(("completed", "success")), calls)
-    assert w.poll(red)["v0.4.0"].release.ci == "red"  # normal poll keeps the final CI
+    # FINDING 8 (16/11): a red CI is rechecked on every poll (a rerun turns it green); only green is final
+    assert w.poll(red)["v0.4.0"].release.ci == "green"
+    green = w.poll(red)
+    calls.clear()
+    w.poll(green)
     assert not any("check-runs" in u for u in calls)
     out = w.poll(red, full=True)["v0.4.0"].release
     assert out.ci == "green" and out.sha == "d" * 40
@@ -105,3 +110,11 @@ def test_tag_is_url_quoted():
     w = g.GitHubWatcher("o/r", fake({f"{BASE}/releases?per_page=30": [rel("v1/x y")],
         f"{BASE}/commits/v1%2Fx%20y": {"sha": "a" * 40}, f"{BASE}/commits/v1%2Fx%20y/check-runs?per_page=100": runs()}, calls))
     assert w.poll({})["v1/x y"].release.ci == "pending"
+
+
+def test_an_old_red_stays_final_on_normal_polls():
+    red = _watcher("v0.4.0", "b" * 40, runs(("completed", "failure")), []).poll({})
+    calls = []
+    w = _watcher("v0.4.0", "d" * 40, runs(("completed", "success")), calls, now=1794312000.0 + 3 * 86400)
+    assert w.poll(red)["v0.4.0"].release.ci == "red"
+    assert not any("check-runs" in u for u in calls)

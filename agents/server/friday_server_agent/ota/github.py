@@ -2,15 +2,16 @@
 
 One call lists the releases; only a release whose CI is not yet final (or that is new) costs more calls
 (commit sha + check-runs). Trade-off: a release with a final CI (green/red) is NOT re-queried in normal polls,
-because 31 calls per cycle would blow the 60 req/h unauthenticated quota. So a moved tag or a re-run that
-turned red into green goes unnoticed until `poll(known, full=True)`, which re-checks every release (used by
-the "check now" button).
+because 31 calls per cycle would blow the 60 req/h unauthenticated quota. A red CI is rechecked for
+`RED_RECHECK_S` after the release (a rerun turns it green); a moved tag or an older red goes unnoticed until
+`poll(known, full=True)`, which re-checks every release (used by the "check now" button).
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -25,6 +26,9 @@ _OK_CONCLUSIONS = ("success", "neutral", "skipped")
 # Transient outcomes (a cancelled run is usually re-run): pending, never a permanent red.
 _PENDING_CONCLUSIONS = (None, "cancelled", "timed_out", "stale", "action_required")
 _FINAL = ("green", "red")
+# FINDING 8 (16/11): a red CI of a recent release is rechecked on every poll, since a rerun of a flaky job turns it
+# green; past that window red is final again, so old red releases never eat the 60 req/h quota
+RED_RECHECK_S = 2 * 86400
 
 
 class GitHubError(RuntimeError):
@@ -68,9 +72,10 @@ def _ci(check_runs: list[dict]) -> str:
 
 
 class GitHubWatcher:
-    def __init__(self, repo: str, fetch: Callable[[str], dict | list] = _fetch_json):
+    def __init__(self, repo: str, fetch: Callable[[str], dict | list] = _fetch_json, clock: Callable[[], float] = time.time):
         self.repo = repo
         self._fetch = fetch
+        self._clock = clock
 
     def _get(self, path: str, label: str):
         try:
@@ -87,7 +92,9 @@ class GitHubWatcher:
                     continue
                 tag = r["tag_name"]
                 prev = known.get(tag)
-                if not full and prev is not None and prev.release.ci in _FINAL:
+                recheck = prev is not None and prev.release.ci == "red" and \
+                    self._clock() - prev.release.published_at < RED_RECHECK_S
+                if not full and prev is not None and prev.release.ci in _FINAL and not recheck:
                     out[tag] = prev
                     continue
                 q = urllib.parse.quote(tag, safe="")
