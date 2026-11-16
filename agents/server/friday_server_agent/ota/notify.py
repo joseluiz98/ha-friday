@@ -18,6 +18,12 @@ def format_exhausted(device: str, tag: str, stage: str, error: str, staying_on: 
             f"depois de 5 tentativas. {stay}")
 
 
+def format_withdrawn(device: str, tag: str, stage: str, error: str, staying_on: str | None) -> str:
+    stay = f"Segue na versão {staying_on}." if staying_on else "Segue na versão anterior."
+    return (f"F.R.I.D.A.Y.: a atualização {tag} de {device} falhou em {stage} ({error}) e voltou atrás. "
+            f"A {tag} saiu do canal alpha e não será oferecida de novo; a próxima versão substitui. {stay}")
+
+
 def format_rollback_failed(tag: str, error: str) -> str:
     return (f"F.R.I.D.A.Y.: a atualização {tag} do servidor falhou e a volta à versão anterior também ({error}). "
             "O servidor pode estar fora do ar; as tentativas automáticas pararam.")

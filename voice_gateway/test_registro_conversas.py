@@ -255,5 +255,27 @@ class TestGravadorEmFila(unittest.TestCase):
         self.assertEqual(os.listdir(reserva), [])
 
 
+class TestEntregaPeloTelegram(unittest.TestCase):
+    def test_enviada(self):
+        r = rc.linha_telegram("friday-satelite-sat-1", "voz-t", "sat-1", "pedido x", "resposta y", "telegram", t(9))
+        self.assertEqual(r["prompt"], "[resposta do cérebro a: pedido x]")
+        self.assertEqual(r["response"], "resposta y")
+        self.assertTrue(r["ok"])
+        self.assertIsNone(r["error"])
+        self.assertEqual(r["deliveredVia"], "telegram")
+
+    def test_pelo_cerebro_conta_como_enviada(self):
+        r = rc.linha_telegram("k", "s", "a", "p", "r", "cerebro", t(9))
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["deliveredVia"], "telegram")
+
+    def test_falhou(self):
+        r = rc.linha_telegram("k", "s", "a", "p", "r", "falhou", t(9), whisper=True)
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error"], "o Telegram falhou")
+        self.assertNotIn("deliveredVia", r)
+        self.assertTrue(r["whisper"])
+
+
 if __name__ == "__main__":
     unittest.main()
