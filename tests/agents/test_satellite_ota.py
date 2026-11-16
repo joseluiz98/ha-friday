@@ -239,8 +239,8 @@ async def test_reports_result_left_by_helper(tmp_path):
                          sudo=w.fake_sudo)
     await w2.c.startup()
     assert w2.helper.calls[0] == ["recover"]
-    assert w.http.reports == [{"sat_id": SAT, "tag": "v0.3.0", "result": "rolled_back", "stage": "health",
-                               "error": "program", "protocol": 1}]
+    assert [{k: v for k, v in r.items() if k != "id"} for r in w.http.reports] == [
+        {"sat_id": SAT, "tag": "v0.3.0", "result": "rolled_back", "stage": "health", "error": "program", "protocol": 1}]
     assert {"acao": "ring", "state": "off"} in w.program.commands
     state = json.loads((tmp_path / "state.json").read_text())
     assert "activating" not in state and state["attempts"]["failures"] == 1
@@ -567,3 +567,105 @@ async def test_a_running_program_that_does_not_answer_still_waits(tmp_path):
     w.c._program_stopped = _stopped(False)
     await w.c.step()
     assert "activate" not in w.verbs()
+
+
+# ---- v0.3.6 minors (ledger 2026-11-10-friday-ota: Final M1/M4, Task 14 N3/N4)
+async def test_a_401_drops_the_token_so_ha_issues_new_credentials(tmp_path):
+    class Refused(Http):
+        async def get_json(self, url, params, token, fingerprint=None):
+            raise ota.Failure("offer", "http 401")
+    w = World(tmp_path, Refused())
+    pushed = []
+
+    async def changed():
+        pushed.append(w.c.entity_state()["ota_credentials"])
+    w.c._on_change = changed
+    await w.c.step()
+    assert not (tmp_path / "etc" / "ota_token").exists() and w.c.has_credentials() is False
+    assert pushed == [False]  # HA sees ota_credentials false and sends new ones (the silent credential)
+
+
+async def test_a_401_on_a_report_also_drops_the_token(tmp_path):
+    class Refused(Http):
+        async def post_json(self, url, body, token, fingerprint=None):
+            raise ota.Failure("report", "http 401")
+    w = World(tmp_path, Refused())
+    w.c._queue("v0.3.0", "failed", "download", "x")
+    await w.c._flush()
+    assert w.c.has_credentials() is False and w.c.data["unsent"]  # the report waits for the new credentials
+
+
+async def test_other_http_errors_keep_the_token(tmp_path):
+    class Down(Http):
+        async def get_json(self, url, params, token, fingerprint=None):
+            raise ota.Failure("offer", "http 503")
+    w = World(tmp_path, Down())
+    await w.c.step()
+    assert w.c.has_credentials() is True
+
+
+async def test_a_result_written_after_a_clock_jump_back_is_still_this_activation(tmp_path):
+    # a Pi 3 has no RTC: after a power cut the clock can start behind the activation's `at`
+    w = World(tmp_path)
+    await w.c.step()
+    w.helper_result(tag="v0.3.0", previous="v0.2.1", state="rolled_back", stage="health", error="program",
+                    at=w.now - 3600)
+    await w.c.report_activation()
+    assert w.http.reports[-1]["result"] == "rolled_back"
+
+
+async def test_the_result_of_an_earlier_activation_of_the_same_tag_is_not_reused(tmp_path):
+    w = World(tmp_path)
+    w.helper_result(tag="v0.3.0", previous="v0.2.1", state="rolled_back", stage="health", error="old", at=5.0)
+    await w.c.step()  # activates; the file still holds the earlier attempt's result
+    await w.c.report_activation()
+    assert w.http.reports == []
+
+
+async def test_each_report_carries_an_id_kept_across_resends(tmp_path):
+    w = World(tmp_path)
+    w.http.down = True
+    w.c._queue("v0.3.0", "failed", "download", "x")
+    await w.c._flush()
+    rid = w.c.data["unsent"][0]["id"]
+    assert isinstance(rid, str) and len(rid) == 32
+    w.http.down = False
+    await w.c._flush()
+    assert w.http.reports[-1]["id"] == rid
+
+
+async def test_a_broken_download_leaves_no_part_file(tmp_path, monkeypatch):
+    import aiohttp
+
+    class Content:
+        async def iter_chunked(self, n):
+            yield b"half"
+            raise aiohttp.ClientPayloadError("cut")
+
+    class Resp:
+        status, content = 200, Content()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class Session:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def get(self, *a, **k):
+            return Resp()
+    monkeypatch.setattr(aiohttp, "ClientSession", Session)
+    monkeypatch.setattr(ota.HttpClient, "_ssl", staticmethod(lambda fp: None))
+    dest = tmp_path / "pkg.tar.gz"
+    with pytest.raises(aiohttp.ClientPayloadError):
+        await ota.HttpClient().download("https://vm/x", "tok", str(dest), FP)
+    assert not dest.exists() and not (tmp_path / "pkg.tar.gz.part").exists()

@@ -370,3 +370,22 @@ def test_alpha_rollback_that_withdraws_the_release_pushes_once(tmp_path):
     assert len(w.pushed) == 1 and "v0.4.0" in w.pushed[0] and "program not answering" in w.pushed[0]
     w.orch.report({"sat_id": "sat-0000a1", "tag": "v0.4.0", "result": "rolled_back", "stage": "health", "error": "e"})
     assert len(w.pushed) == 1
+
+
+def test_a_resent_report_counts_once(tmp_path):
+    # the VM processed it but the reply was lost: the satellite sends the same report again (Task 14 N4)
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    body = {"sat_id": SAT, "tag": "v0.3.0", "result": "failed", "stage": "download", "error": "x", "id": "a" * 32}
+    assert w.orch.report(dict(body)) == {"ok": True}
+    assert w.orch.report(dict(body)) == {"ok": True, "duplicate": True}
+    assert w.orch.store.attempts(SAT).failures == 1
+    w.orch.report({**body, "id": "b" * 32})
+    assert w.orch.store.attempts(SAT).failures == 2
+
+
+def test_a_report_id_must_be_hex(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    import pytest
+    with pytest.raises(ValueError, match="id"):
+        w.orch.report({"sat_id": SAT, "tag": "v0.3.0", "result": "failed", "id": "../x"})
