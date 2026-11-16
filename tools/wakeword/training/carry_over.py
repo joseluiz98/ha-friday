@@ -1,6 +1,6 @@
 """Ciclos cumulativos (26/10/2026): garante que nada usado num ciclo anterior se perde no ciclo novo. Roda no HA.
 
-Uso: carry_over.py <ciclo_novo> <ciclo_anterior>...   (pastas /share/wakeword-data/<modelo>/cycle-<data>)
+Uso: carry_over.py <ciclo_novo> <ciclo_anterior>...   (pastas /srv/nobackup/wakeword-data/<modelo>/cycle-<data> na VM)
 1. Item de TREINO de um ciclo anterior cujo arquivo de origem não está no manifest novo (a Pi apagou o áudio, ou
    ele saiu da coleta) -> o recorte enviado naquele ciclo (upload/<positive|negative>/) é copiado para o upload novo.
 2. Confere o vazamento: nenhum item que foi PROVA (e nenhum arquivo que foi todo prova) em ciclo anterior pode ser

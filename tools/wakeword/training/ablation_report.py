@@ -13,7 +13,7 @@ sys.path.insert(0, QUI)
 import eval_logic as el
 from replay_sexta import simular
 
-BASE = "/share/wakeword-data/sexta_feira"
+BASE = "/srv/nobackup/wakeword-data/sexta_feira"  # on the VM, out of every backup since 15/11/2026
 MANIFESTO_SESSOES = f"{BASE}/cycle-20261106b/manifest.ndjson"
 CHAMADAS = f"{BASE}/raw/20261105_ambient_calls/manifesto.json"
 NAT = ("cv27", "xtts", "xttsvar", "ambiente", "xttsneg")
