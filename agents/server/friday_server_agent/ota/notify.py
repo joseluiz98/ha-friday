@@ -29,6 +29,10 @@ def format_rollback_failed(tag: str, error: str) -> str:
             "O servidor pode estar fora do ar; as tentativas automáticas pararam.")
 
 
+def format_promoted(tag: str) -> str:
+    return f"F.R.I.D.A.Y. {tag} passou na prova do alpha e agora é a versão stable."
+
+
 class Notifier:
     def __init__(self, chat: str, run=subprocess.run, clock=time.time, tz=None):
         if not chat or not chat.strip():

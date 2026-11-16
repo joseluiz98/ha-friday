@@ -60,6 +60,8 @@ class ConexaoFriday:
         self._canal = None  # canal de dados do RTVI: respostas aos comandos (spec 2026-10-12 §4)
         self._fila_msgs = []  # client-messages pedidas antes de o canal abrir (revisão final 20/10)
         self._tarefas, self._fechando = [], False
+        self._cortada = False      # v0.3.7: `cortar_fala()`: o resto da fala dela é descartado
+        self._pessoa_falou = False
         self._silenciado = False  # `silenciar()`: conexão em descarte (botão vermelho), nada dela chega mais ao programa
         # Revisão final I2 (08/10): o bot manda áudio sem parar (silêncio inclusive); se parar por este tempo
         # com a conexão de pé, ele morreu (OOM/reinício) e o ICE só desistiria em ~30 s.
@@ -154,11 +156,26 @@ class ConexaoFriday:
         conversa seguinte."""
         self._silenciado = True
 
+    def cortar_fala(self):
+        """A palavra cortou o recado (v0.3.7): descarta o áudio dela até uma fala nova que comece depois de a pessoa
+        falar (`pessoa_falou`); as pausas dentro da fala cortada não a trazem de volta."""
+        self._cortada, self._pessoa_falou = True, False
+
+    def pessoa_falou(self):
+        if self._cortada:
+            self._pessoa_falou = True
+
+    def _entregar_audio(self, pcm):
+        if not self._silenciado and not self._cortada:
+            self.ao_audio(pcm)
+
     def _ao_mensagem(self, m):
         if self._fechando or self._silenciado:
             return
         if isinstance(m, str) and m.startswith("{"):
             ev = traduzir_rtvi(json.loads(m))
+            if ev and ev[0] == "ela_comecou" and self._cortada and self._pessoa_falou:
+                self._cortada = self._pessoa_falou = False
             if ev:
                 self.ao_evento(*ev)
 
@@ -171,8 +188,7 @@ class ConexaoFriday:
         try:
             while not self._fechando:
                 q = await asyncio.wait_for(trilha.recv(), self.silencio_max_s)
-                if not self._silenciado:
-                    self.ao_audio(q.to_ndarray().tobytes())  # aiortc entrega s16 48 kHz estéreo intercalado
+                self._entregar_audio(q.to_ndarray().tobytes())  # aiortc entrega s16 48 kHz estéreo intercalado
         except asyncio.TimeoutError:
             if not self._fechando and not self._silenciado:
                 self.ao_evento("caiu", None)

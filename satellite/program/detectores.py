@@ -169,6 +169,9 @@ class DetectorMudo:
         return None
 
 
+MUDO = 0x04  # = hardware.BIT_MUDO_JABRA (sem importar hardware, que só existe na Pi)
+
+
 class DetectorBotaoTelefone:
     """Botões de telefone do Jabra 410 (relatório HID 3, byte 1). O byte espelha o estado de telefone:
     bit 0x01 = fora do gancho, 0x10 = sinal de toque ("flash"). Devolve a COR do botão: "verde", "vermelho",
@@ -192,11 +195,13 @@ class DetectorBotaoTelefone:
         self._comandado, self._t_comando = byte, agora
 
     def relatorio(self, byte: int, agora: float):
+        byte &= ~MUDO  # v0.3.7: o bit do LED de mudo (0x04) não faz parte da tabela medida
+        comandado = self._comandado & ~MUDO
         if agora - self._t_comando < self.eco_s or agora - self._t_toque < self.toque_s:
             return None
-        if self._comandado == 0x10:
+        if comandado == 0x10:
             cor = "ambos"
-        elif self._comandado & 0x01:  # 0x11/0x01/0x41 (medido 08/10 e 04/11): o verde liga o 0x10
+        elif comandado & 0x01:  # 0x11/0x01/0x41 (medido 08/10 e 04/11): o verde liga o 0x10
             cor = "verde" if byte & 0x10 else ("vermelho" if byte == 0x00 else None)
         else:
             cor = "verde" if byte & 0x01 else ("vermelho" if byte == 0x00 else None)

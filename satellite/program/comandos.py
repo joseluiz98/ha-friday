@@ -87,10 +87,11 @@ def executar(cmd: dict, ctl, timers, agora: float, vozes=None, sons_dir=None, es
             r = {"played": len(caminhos)}
             efeitos.append(("tocar_frases", caminhos))
         elif acao == "ring":
-            if cmd.get("state") not in ring.ESTADOS:
+            previa = bool(cmd.get("preview"))  # v0.3.7: a prévia mostra um estado por vez; state None encerra
+            if cmd.get("state") not in ring.ESTADOS and not (previa and cmd.get("state") is None):
                 raise ValueError(f"state é um de {list(ring.ESTADOS)}")
             r = {}
-            efeitos.append(("anel", cmd["state"]))
+            efeitos.append(("anel_previa" if previa else "anel", cmd.get("state")))
         elif acao == "ring_countdown":  # 06/11: confirmação do reset de fábrica; seconds 0 cancela
             seg, atraso = cmd.get("seconds", 0), cmd.get("delay_s", 0)
             for v in (seg, atraso):

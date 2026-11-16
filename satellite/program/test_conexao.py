@@ -239,3 +239,36 @@ class TestPorta(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCortarFala(unittest.IsolatedAsyncioTestCase):
+    """v0.3.7: a palavra cortou o recado: o resto da fala dela é descartado até ela começar uma fala nova DEPOIS de
+    a pessoa falar (pausas no meio da fala cortada não a trazem de volta)."""
+    def _c(self, tocou):
+        from conexao import ConexaoFriday
+        return ConexaoFriday("https://x", {}, lambda *a: None, tocou.append)
+
+    def test_cut_drops_audio_until_a_new_turn_after_the_person_spoke(self):
+        tocou = []
+        c = self._c(tocou)
+        c._entregar_audio(b"a")
+        c.cortar_fala()
+        c._entregar_audio(b"b")
+        c._ao_mensagem('{"type": "bot-stopped-speaking"}')
+        c._ao_mensagem('{"type": "bot-started-speaking"}')  # pausa da fala cortada: continua descartando
+        c._entregar_audio(b"c")
+        c.pessoa_falou()
+        c._ao_mensagem('{"type": "bot-started-speaking"}')  # resposta nova
+        c._entregar_audio(b"d")
+        self.assertEqual(tocou, [b"a", b"d"])
+
+    def test_person_speaking_without_a_cut_changes_nothing(self):
+        tocou = []
+        c = self._c(tocou)
+        c.pessoa_falou()
+        c._entregar_audio(b"a")
+        self.assertEqual(tocou, [b"a"])
+
+
+if __name__ == "__main__":
+    unittest.main()

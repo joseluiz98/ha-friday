@@ -435,3 +435,21 @@ class TestRejeicaoEpisodio(unittest.TestCase):
     def test_um_resultado_por_episodio(self):
         out = self._rodar([(0.5, 0.1, False, False), (0.1, 0.1, False, False), (0.1, 0.1, False, False)])
         self.assertEqual(len(out), 1)
+
+
+class TestBotaoComBitDoMudo(unittest.TestCase):
+    """v0.3.7: com mudo, as luzes levam o bit 0x04; a tabela do botão foi medida sem ele."""
+    def test_alarm_with_the_mute_bit_is_still_ambos(self):
+        from detectores import DetectorBotaoTelefone
+        d = DetectorBotaoTelefone()
+        d.comandou(0x10 | 0x04, 0.0)
+        self.assertEqual(d.relatorio(0x00, 5.0), "ambos")
+
+    def test_red_with_the_mute_bit_echoed(self):
+        from detectores import DetectorBotaoTelefone
+        d = DetectorBotaoTelefone()
+        d.comandou(0x41 | 0x04, 0.0)
+        self.assertEqual(d.relatorio(0x04, 5.0), "vermelho")
+        d2 = DetectorBotaoTelefone()
+        d2.comandou(0x00 | 0x04, 0.0)
+        self.assertEqual(d2.relatorio(0x05, 5.0), "verde")

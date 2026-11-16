@@ -22,6 +22,7 @@ from friday_agent_core.ota import order
 from friday_agent_core.ota import retry
 from friday_agent_core.ota.constants import KEEP_RELEASES, SOAK_S
 
+from . import github as gh
 from . import notify as nt
 from . import packages as pk
 from . import wheels as wh
@@ -32,6 +33,7 @@ TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 RESULTS = ("installed", "rolled_back", "failed")
 REPORT_IDS_KEPT = 20  # per device: the newest report ids, to drop a resend
 BUILD_RETRY_S = 3600  # a release that failed to package is retried at most once an hour
+PROMOTE_RETRY_S = 3600  # a failed promotion on GitHub is retried at most once an hour
 
 
 def parse_report(data: dict) -> dict:
@@ -77,7 +79,7 @@ def _newer(tag: str, installed: str | None) -> bool:
 class Orchestrator:
     def __init__(self, store, tokens, watcher, repo, vault, notifier, build: Callable = pk.build_release,
                  wheels: Callable = wh.build, root: str = OTA_ROOT, clock: Callable[[], float] = time.time,
-                 prune: Callable = pk.prune_packages, installer=None, images=None):
+                 prune: Callable = pk.prune_packages, installer=None, images=None, publisher=None):
         self.store, self.tokens, self.watcher, self.repo = store, tokens, watcher, repo
         self.vault, self.notifier, self._build, self._wheels = vault, notifier, build, wheels
         self.root, self._clock, self._prune = root, clock, prune
@@ -87,6 +89,8 @@ class Orchestrator:
         self._build_lock = threading.Lock()
         self.installer = installer
         self.images = images
+        self.publisher = publisher  # None (no GitHub token file): no automatic promotion
+        self._promote_tried: dict[str, float] = {}
 
     # ---- reads under the state lock
     def _eligible(self) -> list[ch.Release]:
@@ -172,6 +176,10 @@ class Orchestrator:
                 self.store.save()
         except Exception as err:  # noqa: BLE001
             LOG.warning("OTA: GitHub poll failed: %s", type(err).__name__)
+        try:
+            self._promote_step()
+        except Exception as err:  # noqa: BLE001 - the rest of the cycle must go on
+            LOG.error("OTA: promote step failed: %s", type(err).__name__)
         built = []
         for t in sorted(self._targets(), key=ch.version_key):
             if self._package(t):
@@ -199,6 +207,55 @@ class Orchestrator:
                 LOG.warning("OTA: prune failed: %s", type(err).__name__)
         self._flush_pushes()
         return {"targets": {c: self.target(c) for c in ch.CHANNELS}, "built": built}
+
+    def _promote_step(self) -> None:
+        """A pre-release that passed the alpha soak becomes the stable release on GitHub (the release page is then the
+        truth for the stable channel too). Once per tag; a newer stable release supersedes an older soaked one."""
+        pub = self.publisher
+        if pub is None:
+            return
+        now = self._clock()
+        with self.store.lock:
+            promotions = self.store.data.setdefault("promotions", {})
+            soak = self.store.soak()
+            infos = self.store.release_infos()
+            candidates = [r for r in self._eligible()
+                          if r.prerelease and ch.promoted(r, soak, now) and r.tag not in promotions]
+            # newest stable: releases GitHub reports as stable, plus the tags this agent promoted (the stored flag
+            # stays pre-release until a full poll)
+            stable_keys = [ch.version_key(i.release.tag) for i in infos.values()
+                           if not i.release.prerelease and ch.eligible([i.release])]
+            stable_keys += [ch.version_key(t) for t, p in promotions.items()
+                            if isinstance(p, dict) and p.get("result") == "promoted"]
+            newest_stable = max(stable_keys, default=None)
+            best = max(candidates, key=lambda r: ch.version_key(r.tag), default=None)
+            if best is not None and newest_stable is not None and ch.version_key(best.tag) <= newest_stable:
+                best = None
+            # only the newest candidate is promoted; every other one is superseded (recomputed on each call, so a
+            # failed older tag is never promoted after a newer one, which would move GitHub "latest" backwards)
+            todo = [best] if best is not None else []
+            for r in candidates:
+                if r is not best:
+                    promotions[r.tag] = {"at": now, "result": "superseded"}
+            if len(candidates) > len(todo):
+                self.store.save()
+        for r in todo:
+            if now - self._promote_tried.get(r.tag, -PROMOTE_RETRY_S) < PROMOTE_RETRY_S:
+                continue
+            self._promote_tried[r.tag] = now
+            try:
+                pub.promote(r.tag)  # network: outside the state lock
+            except gh.GitHubError as err:
+                LOG.warning("OTA: promotion of %s failed: %s", r.tag, err)
+                continue
+            with self.store.lock:
+                self.store.data.setdefault("promotions", {})[r.tag] = {"at": now, "result": "promoted"}
+                self.notifier.queue(nt.format_promoted(r.tag), self.store.data["pushes"])
+                try:
+                    self.store.event("server", r.tag, "promoted")
+                except OSError as err:
+                    LOG.warning("OTA: event log failed: %s", type(err).__name__)
+                self.store.save()
 
     # ---- server side
     def _server_step(self) -> None:

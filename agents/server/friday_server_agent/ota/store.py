@@ -37,7 +37,7 @@ def _write_json(path: str, data, mode: int = 0o644) -> None:
 
 def _empty() -> dict:
     return {"releases": {}, "soak": {}, "devices": {}, "server": {}, "server_ota": {}, "auto_install": True, "pushes": [],
-            "server_protocol": 1}
+            "server_protocol": 1, "promotions": {}}
 
 
 def _coerce(raw) -> dict | None:
@@ -57,6 +57,7 @@ def _coerce(raw) -> dict | None:
     data["devices"] = {k: v for k, v in data["devices"].items() if isinstance(v, dict)}
     data["releases"] = {k: v for k, v in data["releases"].items() if isinstance(v, dict) and "tag" in v}
     data["soak"] = {k: v for k, v in data["soak"].items() if isinstance(v, dict)}
+    data["promotions"] = {k: v for k, v in data["promotions"].items() if isinstance(v, dict)}
     data["pushes"] = [p for p in data["pushes"] if isinstance(p, dict) and isinstance(p.get("text"), str)]
     return data
 
