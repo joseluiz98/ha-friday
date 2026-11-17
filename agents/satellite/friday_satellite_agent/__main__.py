@@ -108,6 +108,21 @@ class VoiceSwitch:
         return res if not res.get("ok") else {"ok": True}
 
 
+async def read_program(program, mapper, memo: dict) -> dict | None:
+    """What the voice program says now, as state changes; None = it answered but could not be read (keep the last).
+    A program that does not answer gives `program_state: off` and None for every key that came from it."""
+    status = await program.status()
+    if status is None:
+        memo["cfg"] = None
+        return mapper.down_state()
+    try:
+        memo["cfg"] = await program.get_config()
+        memo["ww"] = await program.wakewords()
+    except (ProgramError, OSError):
+        return None
+    return mapper.state(memo["cfg"], memo["ww"], status)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     token, program_port = _read_settings()
@@ -226,23 +241,18 @@ async def main() -> None:
         await core.push_capabilities()
 
     async def refresh(origin: str) -> None:
-        status = await program.status()
-        if status is None:
-            memo["cfg"] = None
-            changes = {"program_state": "off"}
-        else:
-            try:
-                memo["cfg"] = await program.get_config()
-                memo["ww"] = await program.wakewords()
-            except (ProgramError, OSError):
-                return
-            changes = mapper.state(memo["cfg"], memo["ww"], status)
+        changes = await read_program(program, mapper, memo)
+        if changes is None:
+            return
         voice.derive(changes)
         timers = await asyncio.to_thread(read_timers)
         if timers is not None:
             changes.update(cap.timers_state(timers))
         changes.update(tracker.counters())
         memo["state"].update(changes)
+        for key in mapper.program_keys:  # the program stopped: no value, so none in the hello either
+            if key in changes and changes[key] is None:
+                memo["state"].pop(key, None)
         await core.push_state(changes, origin)
 
     async def do_set(cmd: dict) -> dict:

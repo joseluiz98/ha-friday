@@ -167,3 +167,58 @@ async def test_a_newer_command_replaces_the_pending_start_wait(tmp_path):
     await asyncio.sleep(0)
     assert first.cancelled() or first.done()
     await asyncio.gather(*sw._tasks)
+
+
+class ProgramStub:
+    """The program's local API as the agent sees it: `up` False = nothing answers (status None)."""
+
+    def __init__(self):
+        self.up = True
+        self.cfg = {"mudo": True, "nao_perturbe": True, "sons_turno": False, "music_duck_percent": 30,
+                    "whisper_min_ratio_db": -20, "continuacao_s": 8, "volume": 3}
+        self.ww = [{"nome": "friday", "modo": "ativa", "limiar": 0.5}]
+
+    async def status(self):
+        return {"estado": "ocioso", "mudo": False} if self.up else None
+
+    async def get_config(self):
+        return self.cfg
+
+    async def wakewords(self):
+        return self.ww
+
+
+async def test_program_down_makes_every_program_derived_key_unavailable():
+    """Owner rule: a switch shows the real state; with the program stopped there is none, so None (unavailable)."""
+    from friday_satellite_agent import __main__ as m
+    from friday_satellite_agent import capabilities as cap
+
+    prog, mapper = ProgramStub(), cap.Mapper()
+    memo = {"cfg": None, "ww": [], "state": {"program_state": "off", "sw_version": "x"}}
+
+    up = await m.read_program(prog, mapper, memo)
+    assert up["mute"] is True and up["do_not_disturb"] is True and up["wakeword_friday_mode"] is not None
+    memo["state"].update(up)
+
+    prog.up = False
+    down = await m.read_program(prog, mapper, memo)
+    derived = {k for k in up if k != "program_state"}
+    assert {"mute", "do_not_disturb", "ducking", "whisper_mode", "follow_up_mode", "turn_sounds", "volume",
+            "wakeword_friday_mode"} <= derived
+    assert down["program_state"] == "off"
+    assert all(down[k] is None for k in derived), {k: down.get(k) for k in derived}
+    assert memo["cfg"] is None
+
+    prog.up = True
+    again = await m.read_program(prog, mapper, memo)
+    assert again["mute"] is True and again["turn_sounds"] is False  # the real values are back
+
+
+async def test_program_down_from_the_start_publishes_only_program_state():
+    from friday_satellite_agent import __main__ as m
+    from friday_satellite_agent import capabilities as cap
+
+    prog = ProgramStub()
+    prog.up = False
+    memo = {"cfg": None, "ww": [], "state": {}}
+    assert await m.read_program(prog, cap.Mapper(), memo) == {"program_state": "off"}

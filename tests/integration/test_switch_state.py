@@ -111,3 +111,22 @@ async def test_server_switches_follow_the_same_rule(hass):
     await _push(hass, agent, {"voice": True})
     await wait_for(lambda: hass.states.get("switch.friday_server_voice").state == "on")
     await _stop(hass, entry, agent)
+
+
+async def test_program_stopping_greys_the_settings_but_not_the_voice_switch(hass):
+    """The agent pushes None for every program-derived key when the program stops (I2 of the final review): the
+    switches go `unavailable` instead of showing the last value, and `voice_enabled` (False) stays usable."""
+    dnd = {"key": "do_not_disturb", "platform": "switch", "name": "Do not disturb"}
+    agent = FakeAgent(_hello("satellite", "sat1", [MUTE, dnd, VOICE_ENABLED],
+                             {"mute": True, "do_not_disturb": False, "voice_enabled": True}))
+    entry = await _setup(hass, agent, "satellite")
+    assert hass.states.get("switch.friday_sat1_mute").state == "on"
+    assert hass.states.get("switch.friday_sat1_do_not_disturb").state == "off"
+    await _push(hass, agent, {"program_state": "off", "mute": None, "do_not_disturb": None, "voice_enabled": False})
+    await wait_for(lambda: hass.states.get("switch.friday_sat1_mute").state == "unavailable")
+    assert hass.states.get("switch.friday_sat1_do_not_disturb").state == "unavailable"
+    assert hass.states.get("switch.friday_sat1_voice_enabled").state == "off"
+    await _push(hass, agent, {"program_state": "idle", "mute": True, "do_not_disturb": False, "voice_enabled": True})
+    await wait_for(lambda: hass.states.get("switch.friday_sat1_mute").state == "on")
+    assert hass.states.get("switch.friday_sat1_voice_enabled").state == "on"
+    await _stop(hass, entry, agent)
