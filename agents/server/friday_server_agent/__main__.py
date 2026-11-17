@@ -13,6 +13,7 @@ import urllib.request
 
 from aiohttp import web
 
+from friday_agent_core.cpu import CpuUsage
 from friday_agent_core.server import AgentCore
 
 from . import collectors as c
@@ -85,6 +86,9 @@ def _proc(name: str) -> str:
         return f.read()
 
 
+CPU = CpuUsage()  # one per process: the first sample after a start has no delta (CPU Usage unknown)
+
+
 def sample_vm() -> dict:
     v = os.statvfs("/")
     try:
@@ -93,7 +97,7 @@ def sample_vm() -> dict:
         stamp = None
     return {**c.vm_metrics(_proc("meminfo"), _proc("loadavg"),
                            (v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail),
-                           _proc("uptime"), os.cpu_count() or 1),
+                           _proc("uptime"), os.cpu_count() or 1, cpu_pct=CPU.update(_proc("stat"))),
             **c.memory_index_metrics(stamp),
             **c.wakeword_pipeline_metrics(_mtime(WAKEWORD_SYNC_STAMP), _mtime(WAKEWORD_CACHE_STAMP))}
 
