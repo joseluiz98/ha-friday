@@ -345,7 +345,7 @@ def test_every_descriptor_is_placed(kind, main):
 
 ---
 
-### Task 7: Suíte completa, versão e PR (para no gate do dono)
+### Task 7: Suíte completa, versão e PR pronto (merge e tag só com o OK do dono)
 
 **Files:**
 - Modify: `custom_components/friday/manifest.json` (`version`)
@@ -356,15 +356,26 @@ def test_every_descriptor_is_placed(kind, main):
   `chore(release): bump manifest to v0.3.8`.
 - [ ] **Step 2:** `bash secret-sweep.sh` e `FRIDAY_TEST_DIR=ha-friday-wt-diag bash scripts/test-all.sh` — esperado
   `ALL GREEN`.
-- [ ] **Step 3:** push do branch e PR **draft** para `master` (inglês). Descrição: o resumo, a tabela de chaves
-  antigas → novas, as notas de compatibilidade do spec e a linha `Merge gate: the owner's OK; live check on the alpha
-  (Task 8) gates promotion to stable`. Terminar aí: merge e tag do alpha só com o OK do dono.
+- [ ] **Step 3:** push do branch e PR **pronto (não draft)** para `master` (inglês), aberto só com o CI verde e o
+  `test-all.sh` em `ALL GREEN`. Regra do ha-friday com OTA: código de satélite só se testa ao vivo no pre-release
+  alpha, que é tagueado na master depois do merge; por isso não há "Merge gate". A descrição traz o resumo, a tabela
+  de chaves antigas → novas e a linha `Promotion gate (stable):` com as verificações ao vivo da prova de 48 h do alpha
+  (as do Step 5 da Tarefa 8: seções das páginas, CPU Usage 0–100 nos dois aparelhos, contador de subtensão igual ao
+  `journalctl` e estável após restart do agente, switches cinza sem raios com o programa parado, registros antigos
+  removidos).
+- [ ] **Step 4:** rascunhar as notas do release v0.3.8 no estilo do Home Assistant (no PR, para o dono revisar):
+  destaques; mudanças por área (satélite, servidor, integração); **Breaking changes / Compatibility**: os `entity_id`
+  de CPU Usage e Memory Usage mudam (`…_cpu_load` → `…_cpu_usage`, `…_memory_available` → `…_memory_usage`,
+  `…_vm_cpu_load_pct` → `…_vm_cpu_usage_pct`, `…_host_available_mb` → `…_host_memory_usage_pct`), as estatísticas
+  antigas ficam órfãs (Ferramentas do desenvolvedor → Estatísticas), sensores passam para Diagnóstico, e switches sem
+  valor passam a `unavailable`. Terminar aí: merge e tag `v0.3.8` (pre-release, canal alpha) só com o OK do dono.
 
 ---
 
 ### Task 8: Depois do alpha instalado — consumidores em `/config` e prova ao vivo
 
-Só depois de o dono aprovar o merge e o alpha estar instalado na VM, na integração e no MK1. Estes arquivos são da
+Só depois do merge, da tag v0.3.8 (alpha) e da instalação na VM, na integração e no MK1. Os resultados do Step 5
+  são o "Promotion gate (stable)" do PR. Estes arquivos são da
 casa, fora do repo.
 
 **Files:**
@@ -437,14 +448,13 @@ async def test_voice_enabled_has_its_own_value(hass):  # mirrors 17/11: voice_en
   — PASS (o teste documenta o comportamento atual).
 - [ ] **Step 4:** listar no spec todos os booleanos controláveis da integração (switches do satélite e do servidor:
   `voice`, `ota_auto_install`) e quando cada um pode ficar sem valor. Commit
-  `test(integration): switches without a value stay available and unknown`. Relatar ao dono o achado e as opções
-  A/B/C do spec, com a recomendação A.
+  `test(integration): switches without a value stay available and unknown`. Registrar o achado no spec (a decisão já é A).
 
 ---
 
-### Task 10: Correção dos dois raios — **BLOQUEADA até a resposta do dono**
+### Task 10: Switch sem valor fica `unavailable` (opção A, aprovada em 17/11)
 
-Não começar sem a escolha do dono entre as opções do spec. Se ele escolher **A (recomendada)**:
+Vem antes da Tarefa 7 na execução (entra na v0.3.8). Depende da Tarefa 9 só para o arquivo de teste.
 
 **Files:**
 - Modify: `custom_components/friday/switch.py` (`FridaySwitch.available`)
@@ -459,4 +469,30 @@ Não começar sem a escolha do dono entre as opções do spec. Se ele escolher *
   parado → switches cinza, sem raios).
 - [ ] **Step 5: Commit** `fix(integration): a switch without a value is unavailable, not unknown`
 
-Se ele escolher **B**, reescrever esta tarefa (memória do último estado no agente do satélite) antes de executar.
+
+---
+
+### Task 11: Sinal de "Voice Program" ligado sem o programa rodar — **BLOQUEADA até a resposta do dono**
+
+Fora da v0.3.8, a menos que o dono escolha antes de a execução começar. Opções e recomendação no spec (seção
+"Voice Program mostra a intenção"). Se ele escolher **(a)**:
+
+**Files:**
+- Modify: `agents/satellite/friday_satellite_agent/__main__.py` (estado `voice_enabled_attributes`, chave nova)
+- Modify: `agents/satellite/friday_satellite_agent/capabilities.py` (descriptor novo)
+- Test: `tests/agents/test_satellite_power.py`, `tests/agents/test_entity_placement.py` (a chave nova é Diagnóstico)
+
+**Interfaces:**
+- Produces: `voice_program_mismatch(enabled: bool, program_state: str | None, off_since: float | None, now: float,
+  grace_s: float) -> bool` (pura); estado `voice_enabled_attributes = {"running": bool}`; descriptor
+  `{"key": "voice_program_not_running", "platform": "binary_sensor", "name": "Voice program not running",
+  "device_class": "problem", "category": "diagnostic"}`. `grace_s` = N minutos: **o dono escolhe N** (sugestão: 5).
+
+- [ ] **Step 1: Failing tests:** intenção `on` + `program_state` `off` há menos de N → `False`; há N ou mais → `True`;
+  intenção `off` → sempre `False`; programa volta (`idle`) → `False` e `running` `True`.
+- [ ] **Step 2: Run** `FRIDAY_TEST_DIR=ha-friday-wt-diag bash scripts/test.sh tests/agents/test_satellite_power.py` — FAIL.
+- [ ] **Step 3: Implement** no laço de `refresh` do agente (onde `program_state` é calculado), guardando desde quando
+  o programa está `off`.
+- [ ] **Step 4: Run** — PASS. **Step 5: Commit** `feat(satellite): flag Voice Program on while the program is not running`
+
+Se ele escolher **(b)**, reescrever esta tarefa antes de executar.

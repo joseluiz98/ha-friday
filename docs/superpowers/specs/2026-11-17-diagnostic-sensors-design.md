@@ -121,7 +121,7 @@ Apagar estatísticas antigas; mexer em `sensor.cpu_utilizacao` do HA; novas mét
   usuário do satélite.
 - **Versão:** o release é **v0.3.8** (a última tag é v0.3.7; o bump anterior para 0.3.8 foi revertido).
 
-## Liga/desliga que vira dois raios (investigação; decisão do dono em aberto)
+## Liga/desliga que vira dois raios (decidido: opção A, 17/11)
 
 **Sintoma:** às vezes um booleano da integração aparece como interruptor e às vezes como dois botões de raio
 (ligar/desligar), e o dono detesta os raios. Evidência de 17/11: com o programa do MK1 parado (sem Jabra; o
@@ -136,7 +136,7 @@ disponível com estado `unknown` é exatamente o caso da hipótese.
 **Hipótese a confirmar no código do frontend da nossa versão:** a interface desenha os dois botões quando o estado é
 `unknown` **ou** quando `assumed_state` é verdadeiro; com `unavailable` ela desenha o interruptor cinza e travado.
 
-**Opções (o dono decide):**
+**Opções consideradas:**
 
 | Opção | O que aparece com o programa parado | Custo |
 |---|---|---|
@@ -144,6 +144,22 @@ disponível com estado `unknown` é exatamente o caso da hipótese.
 | B. manter o último valor conhecido (o agente guarda o último estado do programa e o reenvia) | interruptor no último valor | mostra um valor que pode não ser verdade; precisa de memória no agente |
 | C. não mudar nada | dois raios | o que o dono não quer |
 
-**Recomendação do coordenador:** A (honesto, cinza, sem raios). A mesma regra vale para todo booleano controlável
-que a integração expõe, inclusive no servidor (`voice`, `ota_auto_install`). Implementação só depois da resposta
-(Tarefa 10 do plano, bloqueada).
+**Decisão do dono (17/11): A.** Um switch sem valor fica `unavailable` (cinza, sem raios). A regra vale para todo
+booleano controlável que a integração expõe, inclusive no servidor (`voice`, `ota_auto_install`). Tarefa 10 do plano.
+
+## "Voice Program" mostra a intenção, não o programa (decisão do dono em aberto)
+
+**Achado (17/11):** o switch `voice_enabled` ("Voice Program") do satélite publica o arquivo de intenção
+`~/.friday-agent/voice-enabled` (`agents/satellite/friday_satellite_agent/power.py`, lido em `__main__.py`), não se
+o programa está rodando. Hoje ele mostra `on` com o programa parado: o `ExecCondition` do systemd (só com Jabra) pula
+o serviço, e `program_state` está `off`. Quem olha a página acha que a voz está ligada.
+
+**Opções (o dono decide):**
+
+| Opção | O que muda | Custo |
+|---|---|---|
+| (a) o switch continua sendo a intenção, e um sinal de divergência aparece: atributo `running` no switch e um `binary_sensor` de problema "Voice program not running" (Diagnóstico), ligado quando a intenção é `on` e `program_state` está `off` há mais de N minutos | a intenção fica clara e a falha também | uma entidade a mais; escolher N |
+| (b) o switch mostra se o programa roda de fato | o que se vê é a verdade | ao ligar com o programa impedido de subir, o switch volta sozinho para `off`, sem explicar por quê |
+
+**Recomendação do coordenador:** (a). **Fora da v0.3.8**, a menos que o dono responda antes de a execução começar
+(Tarefa 11 do plano, bloqueada).
