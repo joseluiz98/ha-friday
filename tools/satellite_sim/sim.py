@@ -29,6 +29,9 @@ PRESENCE_EVERY_S = 4.0  # same cadence as the Pi client
 POLL_EVERY_S = 0.02
 CLAIM_TIMEOUT_S = 1.0
 MIN_TOKEN_LEN = 32
+# what an idle keep-alive connection closed by the server looks like on the next use
+STALE_CONNECTION_ERRORS = (http.client.RemoteDisconnected, http.client.BadStatusLine, http.client.CannotSendRequest,
+                           BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 _SAO_PAULO = ZoneInfo("America/Sao_Paulo")
 
 
@@ -98,7 +101,7 @@ def claim_for_foreign_rounds(records, own_sid, sender, voice_dbfs, score, delay_
     results = []
     for rec in records:
         round_id = rec.get("round_id")
-        if rec.get("sid") == own_sid or round_id in seen:
+        if not round_id or rec.get("sid") == own_sid or round_id in seen:
             continue
         seen.add(round_id)
         if delay_ms:
@@ -129,6 +132,8 @@ class GatewayClient:
         self._token = token
         self._timeout_s = timeout_s
         self._conn = None
+        self._lock = threading.Lock()
+        self._last_error = None
         parsed = urllib.parse.urlparse(gateway)
         self._host, self._port = parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
         self._https = parsed.scheme == "https"
@@ -151,12 +156,23 @@ class GatewayClient:
                 pass
 
     def post(self, path, body):
+        """One POST. A REUSED connection that fails at connection level (the server closed it while idle) is retried
+        once on a fresh one; a fresh connection is never retried. The lock serializes the threads sharing a client."""
+        with self._lock:
+            reused = self._conn is not None
+            result = self._post_once(path, body)
+            if result is None and reused:
+                result = self._post_once(path, body)
+            return result if result is not None else (None, {"error": self._last_error})
+
+    def _post_once(self, path, body):
+        """(status, dict), or None on a connection-level failure that deserves a retry when reused. Other failures
+        return (None, {"error": <class>}). Never exposes the token."""
         headers = {"Authorization": f"Bearer {self._token}", "Content-Type": "application/json"}
-        payload = json.dumps(body)
         try:
             if self._conn is None:
                 self._conn = self._factory()
-            self._conn.request("POST", path, body=payload, headers=headers)
+            self._conn.request("POST", path, body=json.dumps(body), headers=headers)
             resp = self._conn.getresponse()
             raw = resp.read()
             try:
@@ -166,7 +182,10 @@ class GatewayClient:
             return resp.status, data if isinstance(data, dict) else {}
         except Exception as e:
             self.close()  # connection state unknown: the next call reconnects
-            return None, {"error": type(e).__name__}
+            self._last_error = type(e).__name__
+            if isinstance(e, STALE_CONNECTION_ERRORS):
+                return None
+            return None, {"error": self._last_error}
 
 
 def presence_loop(client, stop, every_s=PRESENCE_EVERY_S, quiet=False):
@@ -183,9 +202,8 @@ def presence_loop(client, stop, every_s=PRESENCE_EVERY_S, quiet=False):
 
 def run_claim_loop(args, token):
     stop = threading.Event()
-    presence_client = GatewayClient(args.gateway, token)
-    threading.Thread(target=presence_loop, args=(presence_client, stop), daemon=True).start()
-    claim_client = GatewayClient(args.gateway, token)
+    claim_client = GatewayClient(args.gateway, token)  # presence shares it (locked): warms the connection every 4 s
+    threading.Thread(target=presence_loop, args=(claim_client, stop), daemon=True).start()
     tail, seen = RoundLogTail(args.arbitration_dir), set()
     print(json.dumps({"claim_loop": "watching", "dir": args.arbitration_dir, "own_sid": args.sid}), flush=True)
     try:
