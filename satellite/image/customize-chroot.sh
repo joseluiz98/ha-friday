@@ -78,6 +78,10 @@ PY
   install -D -m 0644 $U/jabra.conf /etc/friday-satelite/asound/jabra.conf
   install -D -m 0644 $U/xvf3800.conf /etc/friday-satelite/asound/xvf3800.conf
   ln -sfn /etc/friday-satelite/asound/jabra.conf /etc/asound.conf
+  install -m 0755 $U/friday-audio-select /usr/local/sbin/friday-audio-select
+  install -m 0644 $U/90-friday-audio.rules /etc/udev/rules.d/90-friday-audio.rules
+  install -D -m 0644 $U/audio-board.conf /etc/systemd/system/sendspin-cli.service.d/audio-board.conf
+  install -m 0644 $U/friday-silence.service /etc/systemd/system/friday-silence.service
   install -m 0755 $U/sync_recordings.sh $H/satelite-sync/sync_recordings.sh
 else
   # old layout (a manual stage without --package): program in ~/satelite, agent in /opt/friday-satellite-agent

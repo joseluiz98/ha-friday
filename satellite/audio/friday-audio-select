@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Picks the satellite's audio board (spec 2026-11-17-xvf3800-support).
+
+Runs as root in the ExecCondition of the voice program and of the Sendspin player (and so again on every hotplug, since
+the udev rule restarts them). XVF3800 (2886:001a) wins over the Jabra Speak 410 (0b0e:0410). It points /etc/asound.conf
+at the board's file in /etc/friday-satelite/asound/, writes audio_board and mic, and starts or stops the silence feeder.
+
+  friday-audio-select --check   exit 0 = a board is present and the voice is wanted (the unit starts), 1 = skip
+  friday-audio-select           just select and print the board
+
+No board keeps the Jabra file in place (programs that open ALSA still find a valid config) and skips the units, so the
+Pi, the agent and the OTA keep working without any audio hardware. Stdlib only.
+"""
+import os
+import subprocess
+import sys
+
+BOARDS = {("2886", "001a"): "xvf3800", ("0b0e", "0410"): "jabra"}
+PRIORITY = ("xvf3800", "jabra")
+MIC = {"xvf3800": "xvf3800", "jabra": "jabra-speak-410"}
+
+
+def detect(sys_usb: str = "/sys/bus/usb/devices") -> str:
+    found = set()
+    try:
+        names = os.listdir(sys_usb)
+    except OSError:
+        return "none"
+    for n in names:
+        try:
+            with open(os.path.join(sys_usb, n, "idVendor")) as f:
+                vid = f.read().strip().lower()
+            with open(os.path.join(sys_usb, n, "idProduct")) as f:
+                pid = f.read().strip().lower()
+        except OSError:
+            continue
+        if (vid, pid) in BOARDS:
+            found.add(BOARDS[(vid, pid)])
+    return next((b for b in PRIORITY if b in found), "none")
+
+
+def _write(path: str, text: str) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text + "\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def _read(path: str) -> str | None:
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def apply(board: str, root: str = "", run=subprocess.run) -> bool:
+    """Points /etc/asound.conf and writes audio_board/mic. True when anything changed."""
+    etc = os.path.join(root, "etc/friday-satelite")
+    target = f"/etc/friday-satelite/asound/{board if board != 'none' else 'jabra'}.conf"
+    link = os.path.join(root, "etc/asound.conf")
+    changed = False
+    if not (os.path.islink(link) and os.readlink(link) == target):
+        if os.path.exists(link) and not os.path.islink(link):
+            bak = link + ".bak.audio-select"
+            if not os.path.exists(bak):
+                os.replace(link, bak)
+        tmp = link + ".tmp"
+        if os.path.lexists(tmp):
+            os.remove(tmp)
+        os.symlink(target, tmp)
+        os.replace(tmp, link)
+        changed = True
+    if _read(os.path.join(etc, "audio_board")) != board:
+        _write(os.path.join(etc, "audio_board"), board)
+        changed = True
+    if board in MIC and _read(os.path.join(etc, "mic")) != MIC[board]:
+        _write(os.path.join(etc, "mic"), MIC[board])
+        changed = True
+    return changed
+
+
+def voice_wanted(root: str = "") -> bool:
+    """The agent's stored intent (power.read_enabled): missing or anything but "off" means on."""
+    return _read(os.path.join(root, "home/jose/.friday-agent/voice-enabled")) != "off"
+
+
+def check(sys_usb: str = "/sys/bus/usb/devices", root: str = "", run=subprocess.run) -> int:
+    board = detect(sys_usb)
+    apply(board, root, run)
+    up = board != "none" and voice_wanted(root)
+    run(["systemctl", "--no-block", "start" if board != "none" else "stop", "friday-silence.service"])
+    return 0 if up else 1
+
+
+def main(argv) -> int:
+    root = os.environ.get("FRIDAY_OTA_ROOT", "")
+    if "--check" in argv:
+        return check(root=root)
+    board = detect()
+    apply(board, root)
+    print(board)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

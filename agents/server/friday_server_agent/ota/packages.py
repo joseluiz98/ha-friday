@@ -30,7 +30,9 @@ SERVER_PATHS = ["agents", "server", "voice_gateway", "brain", "scripts", "tools/
                 "vault/manifest.json"]
 # repo path (file or folder) -> folder inside system/; only unit files, helpers and configs the Pi installs as root
 SYSTEM_SOURCES = ["satellite/program", "satellite/sync", "satellite/audio/jabra.conf",
-                  "satellite/audio/xvf3800.conf",
+                  "satellite/audio/xvf3800.conf", "satellite/audio/friday-audio-select",
+                  "satellite/audio/90-friday-audio.rules", "satellite/audio/audio-board.conf",
+                  "satellite/audio/friday-silence.service",
                   "agents/satellite/friday-satellite-agent.service", "agents/satellite/sudoers.friday-satellite-agent",
                   "agents/satellite/friday-agent-apply", "agents/satellite/friday-wifi-apply",
                   "agents/satellite/friday-ota-apply"]

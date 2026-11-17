@@ -1,0 +1,12 @@
+# Keeps the satellite's audio output flowing with silence (spec 2026-11-17-xvf3800-support): with the player holding a
+# paused stream the XVF3800 capture fell to ~1/5 of real time (17/11). Started and stopped by friday-audio-select.
+[Unit]
+Description=F.R.I.D.A.Y. satellite - silence on the audio output
+After=sound.target
+
+[Service]
+User=jose
+Nice=10
+ExecStart=/usr/bin/aplay -q -D voice -t raw -f S16_LE -r 48000 -c 2 /dev/zero
+Restart=always
+RestartSec=5
