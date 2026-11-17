@@ -164,7 +164,7 @@ class ArbiterTest(unittest.IsolatedAsyncioTestCase):
         by = {c["sid"]: c for c in rec["candidates"]}
         self.assertEqual(set(by), {"A", "B"})
         self.assertEqual(by["A"], {"sid": "A", "claim_id": "a1", "wake_word": "friday", "score": 0.8,
-                                   "voice_dbfs": -30, "offset_db": 2, "busy": True})
+                                   "voice_dbfs": -30, "offset_db": 2, "busy": True, "other_busy": False})
         self.assertFalse(by["B"]["busy"])
 
     async def test_round_opened_is_logged(self):
@@ -247,6 +247,61 @@ class SetBusyTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(arb.claim("A", claim("a2", -30)), arb.claim("B", claim("b2", -20)))
         rec = next(r for r in logs if "candidates" in r)
         self.assertFalse(any(c["busy"] for c in rec["candidates"]))
+
+
+class OtherBusyTest(unittest.IsolatedAsyncioTestCase):
+    """Spec §5.3 `outro_falando` (log name `other_busy`): at claim time, is ANY other satellite in a conversation?
+    Log only: never changes the winner or the verdict."""
+
+    def make(self, sids=("A", "B")):
+        self.clock, self.logs = FakeClock(), []
+        arb = Arbiter(clock=self.clock, window_s=0.05, log=self.logs.append)
+        for s in sids:
+            arb.presence(s)
+        return arb
+
+    def record(self):
+        return next(r for r in self.logs if "candidates" in r)
+
+    async def test_round_marks_other_busy_per_candidate(self):
+        arb = self.make()
+        arb.set_busy("A", True)
+        ra, rb = await asyncio.gather(arb.claim("A", claim("a1", -30)), arb.claim("B", claim("b1", -20)))
+        flags = {c["sid"]: c["other_busy"] for c in self.record()["candidates"]}
+        self.assertEqual(flags, {"A": False, "B": True})  # A's own conversation does not count for A
+        self.assertEqual((ra["verdict"], rb["verdict"]), ("lost", "go"))  # unchanged: the loudest wins
+        self.assertNotIn("other_busy", ra)
+
+    async def test_none_busy_is_false(self):
+        arb = self.make()
+        await asyncio.gather(arb.claim("A", claim("a1", -30)), arb.claim("B", claim("b1", -20)))
+        self.assertEqual({c["other_busy"] for c in self.record()["candidates"]}, {False})
+
+    async def test_alone_record_carries_other_busy(self):
+        arb = self.make(sids=("B",))
+        arb.set_busy("A", True)  # A has a conversation but stopped sending presence
+        r = await arb.claim("B", claim("b1", -20))
+        self.assertEqual(r["reason"], "alone")
+        self.assertTrue(self.record()["candidates"][0]["other_busy"])
+
+    async def test_record_only_carries_other_busy(self):
+        arb = self.make(sids=("B",))
+        await arb.claim("B", claim("b1", -20, record_only=True))
+        self.assertFalse(self.record()["candidates"][0]["other_busy"])
+        self.logs.clear()
+        arb.set_busy("A", True)
+        await arb.claim("B", claim("b2", -20, record_only=True))
+        self.assertTrue(self.record()["candidates"][0]["other_busy"])
+
+    async def test_other_busy_is_taken_at_claim_time(self):
+        arb = self.make()
+        arb.set_busy("A", True)
+        tb = asyncio.ensure_future(arb.claim("B", claim("b1", -20)))
+        await asyncio.sleep(0)
+        arb.set_busy("A", False)  # A's conversation closed during the window
+        await asyncio.gather(tb, arb.claim("A", claim("a1", -30)))
+        flags = {c["sid"]: c["other_busy"] for c in self.record()["candidates"]}
+        self.assertEqual(flags, {"A": False, "B": True})
 
 
 class LoadOffsetsTest(unittest.TestCase):
