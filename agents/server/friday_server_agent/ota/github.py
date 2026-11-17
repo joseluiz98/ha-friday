@@ -143,6 +143,19 @@ class GitHubPublisher:
             raise GitHubError("no_token")
         return token
 
+    def check(self) -> str:
+        """For the boot log (M8): "ok", "missing" (no file or empty: promotion waits; the file is read again before
+        each try, so adding it later needs no restart) or "open_permissions" (group/others can read it: 600)."""
+        try:
+            st = os.stat(self._token_file)
+            with open(self._token_file, encoding="utf-8") as f:
+                empty = not f.read().strip()
+        except OSError:
+            return "missing"
+        if empty:
+            return "missing"
+        return "open_permissions" if st.st_mode & 0o077 else "ok"
+
     def _call(self, method: str, path: str, token: str, body: dict | None = None):
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                    "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "friday-server-agent"}

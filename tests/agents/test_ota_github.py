@@ -169,3 +169,37 @@ def test_promote_http_error_has_no_token_in_message(tmp_path):
     with pytest.raises(g.GitHubError) as ei:
         pub.promote("v0.3.7")
     assert "s3cret" not in str(ei.value)
+
+
+def test_publisher_check_for_the_boot_log(tmp_path):  # M8
+    f = tmp_path / "github_token"
+    p = g.GitHubPublisher("o/r", str(f))
+    assert p.check() == "missing"
+    f.write_text("\n")
+    assert p.check() == "missing"
+    f.write_text("github_pat_x\n")
+    f.chmod(0o644)
+    assert p.check() == "open_permissions"
+    f.chmod(0o600)
+    assert p.check() == "ok"
+
+
+def test_token_added_after_boot_is_used_without_a_restart(tmp_path):  # M8
+    f = tmp_path / "github_token"
+    calls = []
+    def request(method, url, headers, body):
+        calls.append(method)
+        return {"id": 7} if method == "GET" else {}
+    p = g.GitHubPublisher("o/r", str(f), request=request)
+    with pytest.raises(g.GitHubError, match="no_token"):
+        p.promote("v0.3.7")
+    f.write_text("github_pat_x")
+    p.promote("v0.3.7")
+    assert calls == ["GET", "PATCH"]
+
+
+def test_agent_always_builds_the_publisher_and_logs_it():  # M8
+    import pathlib
+    src = (pathlib.Path(g.__file__).parents[1] / "__main__.py").read_text()
+    assert "if os.path.exists(gh_token_file) else None" not in src
+    assert "automatic promotion" in src and "publisher.check()" in src

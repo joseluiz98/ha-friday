@@ -188,8 +188,10 @@ async def main() -> None:
         LOG.warning("OTA: no Proxmox snapshot access (%s)", type(err).__name__)
         snapshots = None
     gh_token_file = os.environ.get("FRIDAY_GITHUB_TOKEN_FILE", "/srv/friday/state/github_token")
-    publisher = (otagh.GitHubPublisher(otagh.repo_from_env(), gh_token_file)
-                 if os.path.exists(gh_token_file) else None)  # no token file: no automatic promotion
+    publisher = otagh.GitHubPublisher(otagh.repo_from_env(), gh_token_file)  # token read again on every promotion
+    LOG.info("OTA: automatic promotion: %s", {
+        "ok": "on", "missing": "waiting for the GitHub token file (read again before each try)",
+        "open_permissions": "on, but the GitHub token file is readable by others (chmod 600)"}[publisher.check()])
     installer = otasrv.ServerInstaller(ota_store, ota_repo, snapshots, lambda: status_token)
     orch = otaorc.Orchestrator(ota_store, otastore.TokenBook(),
                                otagh.GitHubWatcher(os.environ.get("FRIDAY_OTA_REPO", "joseluiz98/ha-friday")),
