@@ -114,7 +114,36 @@ seção não quebra automação nem dashboard.
 
 Apagar estatísticas antigas; mexer em `sensor.cpu_utilizacao` do HA; novas métricas além do contador de subtensão.
 
-## Questão aberta (só o dono responde)
+## Respostas do dono (17/11, depois do primeiro rascunho)
 
-`room_pressure` (pressão do cômodo, só em satélite com sensor BME280) não está na lista de 17/11. Fica na principal,
-junto de temperatura e umidade, até o dono decidir; mover depois é uma linha no allowlist e no descriptor.
+- **`room_pressure`:** suportada e mostrada exatamente como `room_temperature`/`room_humidity` (seção principal,
+  mesmo tratamento de `device_class`/`state_class`); quem não quiser desativa na interface. Entra no allowlist de
+  usuário do satélite.
+- **Versão:** o release é **v0.3.8** (a última tag é v0.3.7; o bump anterior para 0.3.8 foi revertido).
+
+## Liga/desliga que vira dois raios (investigação; decisão do dono em aberto)
+
+**Sintoma:** às vezes um booleano da integração aparece como interruptor e às vezes como dois botões de raio
+(ligar/desligar), e o dono detesta os raios. Evidência de 17/11: com o programa do MK1 parado (sem Jabra; o
+`ExecCondition` só deixa o serviço subir com o Jabra), todos os switches do satélite (`mute`, `do_not_disturb`,
+`ducking`, `whisper_mode`, `follow_up_mode`, `turn_sounds`) estão `unknown`, sem `assumed_state`, enquanto
+`voice_enabled` (que o agente lê de um arquivo próprio) está `on`.
+
+**O que o nosso código faz (conferido):** `FridaySwitch.is_on` devolve `None` quando a chave não está no estado →
+o HA grava `unknown`; `available` = agente conectado e `descriptor.available` → continua `True`. Um switch
+disponível com estado `unknown` é exatamente o caso da hipótese.
+
+**Hipótese a confirmar no código do frontend da nossa versão:** a interface desenha os dois botões quando o estado é
+`unknown` **ou** quando `assumed_state` é verdadeiro; com `unavailable` ela desenha o interruptor cinza e travado.
+
+**Opções (o dono decide):**
+
+| Opção | O que aparece com o programa parado | Custo |
+|---|---|---|
+| A. `unavailable` quando o valor falta (o switch diz `available = False` se a chave não está no estado ou se o programa está parado) | interruptor cinza, sem raios; automações veem `unavailable` | a pessoa não consegue mudar o ajuste enquanto o programa está parado (hoje o comando também não teria efeito) |
+| B. manter o último valor conhecido (o agente guarda o último estado do programa e o reenvia) | interruptor no último valor | mostra um valor que pode não ser verdade; precisa de memória no agente |
+| C. não mudar nada | dois raios | o que o dono não quer |
+
+**Recomendação do coordenador:** A (honesto, cinza, sem raios). A mesma regra vale para todo booleano controlável
+que a integração expõe, inclusive no servidor (`voice`, `ota_auto_install`). Implementação só depois da resposta
+(Tarefa 10 do plano, bloqueada).

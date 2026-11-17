@@ -36,7 +36,8 @@ Outras worktrees do mesmo repo são de outras sessões: não tocar.
 - Subtensão: `journalctl -k -b -o cat --no-pager --show-cursor`, linhas contendo `Undervoltage detected`;
   `state_class: "total_increasing"`, `category: "diagnostic"`, ícone `mdi:flash-alert`.
 - Principal do satélite (allowlist exata): `volume`, `do_not_disturb`, `mute`, `activation`, `timer`, `next_timer`,
-  `room_temperature`, `room_humidity`, `room_pressure` (pressão: provisório, questão aberta no spec). `next_reminder` e
+  `room_temperature`, `room_humidity`, `room_pressure` (pressão aprovada pelo dono em 17/11: mesmo tratamento de
+  temperatura e umidade). `next_reminder` e
   `reminder` são criadas pela integração.
 - Principal do servidor (allowlist exata): `voice`, `cost_today_brl`, `cost_month_brl`, `cost_month_projection_brl`,
   `cost_month_over_budget`, `restart_friday`.
@@ -290,7 +291,10 @@ def test_every_descriptor_is_placed(kind, main):
     bad = [d["key"] for d in shown
            if (d["key"] in main) == (d.get("category") in ("config", "diagnostic"))]
     assert bad == []          # main keys have no category; every other key declares one
-    assert main <= {d["key"] for d in shown}   # the allowlist never goes stale
+    assert main <= {d["key"] for d in shown}   # the allowlist never goes stale    if kind == "satellite":   # 17/11: pressure shown exactly like temperature and humidity
+        by = {d["key"]: d for d in shown}
+        assert by["room_pressure"]["state_class"] == by["room_humidity"]["state_class"] == "measurement"
+        assert "category" not in by["room_pressure"] and by["room_pressure"]["device_class"] == "pressure"
 ```
 
   A mensagem do `assert` (comentário no topo do arquivo) explica a regra e aponta `docs/protocol.md#entity-placement`.
@@ -347,8 +351,9 @@ def test_every_descriptor_is_placed(kind, main):
 - Modify: `custom_components/friday/manifest.json` (`version`)
 
 - [ ] **Step 1:** `git fetch origin && git merge origin/master` se a master andou (nunca rebase depois do push).
-  Conferir a última release com `gh release list -L 3` e o `manifest.json` da master; **perguntar ao dono a versão**
-  antes de mudar (em 16/11 subimos para 0.3.8 por engano). Commit `chore(release): bump manifest to vX.Y.Z`.
+  Versão decidida pelo dono: **0.3.8** (última tag v0.3.7; o bump anterior foi revertido). Conferir com
+  `gh release list -L 3` que v0.3.8 ainda não existe; se existir, parar e avisar. Commit
+  `chore(release): bump manifest to v0.3.8`.
 - [ ] **Step 2:** `bash secret-sweep.sh` e `FRIDAY_TEST_DIR=ha-friday-wt-diag bash scripts/test-all.sh` — esperado
   `ALL GREEN`.
 - [ ] **Step 3:** push do branch e PR **draft** para `master` (inglês). Descrição: o resumo, a tabela de chaves
@@ -398,3 +403,60 @@ def test_guarda_de_ram_le_o_atributo_em_mb(self):
     removidos; as estatísticas antigas ficam (não apagar).
 - [ ] **Step 6:** atualizar a memória `project_friday_ha_integration` com as chaves novas e a regra; relatar ao dono
   para a promoção a stable.
+
+---
+
+### Task 9: Investigação — por que um switch vira dois raios
+
+Pode rodar em paralelo às Tarefas 1–6 (não depende delas). Nada de mudança de comportamento aqui.
+
+**Files:**
+- Create: `tests/integration/test_switch_state.py`
+- Modify: `docs/superpowers/specs/2026-11-17-diagnostic-sensors-design.md` (seção "Liga/desliga que vira dois raios":
+  substituir "Hipótese a confirmar" pelo achado, com arquivo e linha do frontend)
+
+- [ ] **Step 1: Frontend.** Descobrir a versão do frontend do HA de produção (`/api/config` → `version`; o frontend
+  vem fixado no `manifest.json` de `homeassistant/components/frontend` dessa versão, `home-assistant-frontend==…`).
+  Baixar o pacote dessa versão do PyPI na VM (como em 17/11: `curl` do JSON do PyPI, sem pip) e ler o fonte
+  compilado de `ha-entity-toggle` e da linha de toggle do Lovelace (`hui-toggle-entity-row` /
+  `entity-rows`); se o pacote só tiver JS minificado, ler o fonte do repositório `home-assistant/frontend` na tag
+  correspondente. Registrar a condição exata que escolhe os dois botões (esperado: `stateObj.attributes.assumed_state`
+  ou estado `unknown`/não `on`/`off`) e o que acontece com `unavailable`.
+- [ ] **Step 2: Write the test that reproduces o lado do servidor**
+
+```python
+async def test_switch_without_value_is_unknown_and_available(hass):
+    # satellite hello with the "mute" switch descriptor and NO "mute" key in state
+    st = hass.states.get("switch.friday_sat1_mute")
+    assert st.state == "unknown" and "assumed_state" not in st.attributes
+async def test_switch_with_value_is_on(hass):  # state {"mute": True} -> "on"
+async def test_voice_enabled_has_its_own_value(hass):  # mirrors 17/11: voice_enabled on while the others unknown
+```
+
+- [ ] **Step 3: Run** `FRIDAY_TEST_DIR=ha-friday-wt-diag bash scripts/test.sh tests/integration/test_switch_state.py`
+  — PASS (o teste documenta o comportamento atual).
+- [ ] **Step 4:** listar no spec todos os booleanos controláveis da integração (switches do satélite e do servidor:
+  `voice`, `ota_auto_install`) e quando cada um pode ficar sem valor. Commit
+  `test(integration): switches without a value stay available and unknown`. Relatar ao dono o achado e as opções
+  A/B/C do spec, com a recomendação A.
+
+---
+
+### Task 10: Correção dos dois raios — **BLOQUEADA até a resposta do dono**
+
+Não começar sem a escolha do dono entre as opções do spec. Se ele escolher **A (recomendada)**:
+
+**Files:**
+- Modify: `custom_components/friday/switch.py` (`FridaySwitch.available`)
+- Test: `tests/integration/test_switch_state.py`
+
+- [ ] **Step 1: Failing tests:** switch com descriptor e sem chave no estado → `state == "unavailable"`; a chave
+  chega (`push_state {"mute": False}`) → `"off"` e volta a disponível; `None` explícito no estado → `"unavailable"`;
+  switch do servidor (`voice`) segue a mesma regra; agente desconectado continua `unavailable` (regra atual).
+- [ ] **Step 2: Run** — FAIL.
+- [ ] **Step 3: Implement** `available` = `super().available and self._value is not None`. Nada de `assumed_state`.
+- [ ] **Step 4: Run** a suíte de integração — PASS; atualizar a nota da Tarefa 8 com a prova ao vivo (programa do MK1
+  parado → switches cinza, sem raios).
+- [ ] **Step 5: Commit** `fix(integration): a switch without a value is unavailable, not unknown`
+
+Se ele escolher **B**, reescrever esta tarefa (memória do último estado no agente do satélite) antes de executar.
