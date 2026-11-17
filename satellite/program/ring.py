@@ -12,12 +12,15 @@ import contextlib, io, math, os, sys, threading
 ESTADOS = ("off", "listen", "think", "speak", "dnd", "alarm", "setup", "updating", "error", "muted", "net_error",
            "update_pending")
 
+# o que os comandos de fora (agente: OTA, setup) põem na camada externa; o resto só como prévia (M7)
+ESTADOS_DE_FORA = ("off", "setup", "updating", "error")
+
 # a base de maior prioridade primeiro (spec 2026-11-16); o mudo não entra: é indicador por cima
 PRIORIDADE = ("alarm", "updating", "error", "setup", "speak", "listen", "think", "net_error", "dnd", "update_pending",
               "off")
 
 # nomes do maestro (hardware.BITS_DO_ANEL) -> estado
-ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "cerebro": "think", "nao_perturbe": "dnd", "alarme": "alarm",
+ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "falando": "speak", "cerebro": "think", "nao_perturbe": "dnd", "alarme": "alarm",
                      "rede_esgotada": "net_error"}
 
 # calibrar na chegada (18–27/11): valores de partida, não medidos
@@ -188,7 +191,8 @@ class Contagem:
 
 
 # Jabra: estado -> nome do relatório HID de hoje (hardware.BITS_DO_ANEL)
-_JABRA = {"off": "parada", "listen": "ouvindo", "speak": "ouvindo", "think": "cerebro", "dnd": "nao_perturbe",
+# speak = recado do cérebro com o microfone fechado (M4): a luz do cérebro, não a de ouvindo
+_JABRA = {"off": "parada", "listen": "ouvindo", "speak": "cerebro", "think": "cerebro", "dnd": "nao_perturbe",
           "alarm": "alarme", "setup": "cerebro", "updating": "cerebro", "error": "alarme", "muted": "parada",
           "net_error": "alarme", "update_pending": "cerebro"}  # o Jabra não tem amarelo: update_pending = luz do setup
 
@@ -354,6 +358,8 @@ class Xvf3800Ring(_Composto):
             return 0
         if base == "listen":
             return COR_PONTEIRO
+        if base == "dnd":  # M9: o mesmo brilho baixo do não perturbe sem mudo
+            return escalar(_XVF["dnd"][1], DND_LOW)
         return _XVF[base][1]
 
     def _draw(self, base, mudo, direction):

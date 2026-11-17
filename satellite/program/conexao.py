@@ -158,8 +158,10 @@ class ConexaoFriday:
 
     def cortar_fala(self):
         """A palavra cortou o recado (v0.3.7): descarta o áudio dela até uma fala nova que comece depois de a pessoa
-        falar (`pessoa_falou`); as pausas dentro da fala cortada não a trazem de volta."""
+        falar (`pessoa_falou`); as pausas dentro da fala cortada não a trazem de volta. O bot é avisado (M6): ele
+        descarta o resto da geração cortada até o próprio Gemini marcar o fim dela."""
         self._cortada, self._pessoa_falou = True, False
+        self.enviar_mensagem("cortar_fala", None)
 
     def pessoa_falou(self):
         if self._cortada:

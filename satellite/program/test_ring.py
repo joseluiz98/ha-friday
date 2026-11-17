@@ -228,8 +228,14 @@ class TestJabra(unittest.TestCase):
         r = ring.JabraRing(j)
         for estado in ("off", "listen", "speak", "think", "dnd", "alarm", "setup", "updating", "error", "muted"):
             r.show(estado, 90)
-        self.assertEqual(j.nomes, ["parada", "ouvindo", "ouvindo", "cerebro", "nao_perturbe", "alarme", "cerebro",
-                                   "cerebro", "alarme", "parada"])
+        self.assertEqual(j.nomes, ["parada", "ouvindo", "cerebro", "cerebro", "nao_perturbe", "alarme", "cerebro",
+                                   "cerebro", "alarme", "parada"])  # M4: speak (recado, mic fechado) = luz do cérebro
+
+    def test_delivery_light_from_the_maestro(self):  # M4
+        self.assertEqual(ring.ESTADO_DO_MAESTRO["falando"], "speak")
+        j = Jabra()
+        ring.JabraRing(j).show_maestro(ring.ESTADO_DO_MAESTRO["falando"])
+        self.assertEqual(j.nomes, ["cerebro"])
 
     def test_update_pending_is_a_known_state(self):
         self.assertEqual(ring.ESTADOS[-1], "update_pending")
@@ -472,6 +478,13 @@ class TestComposicaoXvf(unittest.TestCase):
         self.assertEqual(quadro[1][0], 0xFF0000)
         self.assertEqual(set(quadro[1][1:]), {0x0000FF})
         self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 5))
+
+    def test_xvf_mute_over_dnd_keeps_dnd_low(self):  # M9: mudo + não perturbe não fica mais forte que o DND sozinho
+        self.r.show_maestro("dnd")
+        self.t.chamadas.clear()
+        self.r.set_muted(True)
+        quadro = self.t.chamadas[0]
+        self.assertEqual(set(quadro[1][1:]), {ring.escalar(0x8000FF, ring.DND_LOW)})
 
     def test_xvf_mute_over_off_lights_only_the_mute_leds(self):
         self.r.show_maestro("off")

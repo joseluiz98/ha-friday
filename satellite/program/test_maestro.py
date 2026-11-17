@@ -186,7 +186,7 @@ class TestCerebro(Base):
     def test_entrega_reabre_com_som_de_inicio(self):
         self.aguardando()
         self.assertEqual(tipos(self.m.evento("cerebro_entregando", 40.0)),
-                         ["som:inicio", "luz:ouvindo", "microfone:False"])  # v0.3.7: o recado sai com o mic fechado
+                         ["som:inicio", "luz:falando", "microfone:False"])  # v0.3.7: o recado sai com o mic fechado
         self.m.evento("ela_comecou", 40.5)
         self.m.evento("cerebro_pendente", 40.6, 0)
         self.m.evento("ela_parou", 45.0)
@@ -230,7 +230,7 @@ class TestCerebro(Base):
         # 06/10: resposta do cérebro dentro da janela de 8 s chega sem "cerebro_entregando".
         self.aguardando()
         self.m.evento("cerebro_pendente", 30.0, 0)
-        self.assertEqual(tipos(self.m.evento("ela_comecou", 31.0)), ["som:inicio", "luz:ouvindo", "microfone:False"])  # v0.3.7: recado com mic fechado
+        self.assertEqual(tipos(self.m.evento("ela_comecou", 31.0)), ["som:inicio", "luz:falando", "microfone:False"])  # v0.3.7: recado com mic fechado
         self.assertEqual(self.m.estado, "ouvindo")
         self.m.evento("ela_parou", 35.0)
         self.assertIn(("microfone", True), self.m.evento("tique", 36.6))  # v0.3.7: fim do recado (pausa de 1,5 s)
@@ -294,7 +294,7 @@ class TestCerebroDevolveComConversaAberta(unittest.TestCase):
 
     def test_fala_dela_reabre_a_conversa(self):
         self.m.evento("tique", 45.7)
-        self.assertEqual(tipos(self.m.evento("ela_comecou", 46.5)), ["som:inicio", "luz:ouvindo", "microfone:False"])  # v0.3.7: recado com mic fechado
+        self.assertEqual(tipos(self.m.evento("ela_comecou", 46.5)), ["som:inicio", "luz:falando", "microfone:False"])  # v0.3.7: recado com mic fechado
 
     def test_sem_fala_fecha_calado_em_cerebro_fim_s_a_partir_da_resposta(self):
         self.m.evento("tique", 45.7)
@@ -944,6 +944,21 @@ class TestRecadoSoAPalavraInterrompe(TestCerebro):
 
     def test_delivery_closes_mic_while_she_speaks(self):
         self.assertNotIn(("microfone", True), self.recado())
+
+    def test_delivery_light_says_speaking_until_the_mic_opens(self):  # M4
+        self.aguardando()
+        self.assertIn(("luz", "falando"), self.m.evento("cerebro_entregando", 40.0))
+        self.m.evento("ela_comecou", 40.5)
+        self.assertEqual(self.m._luz_do_estado(), "falando")
+        self.m.evento("ela_parou", 45.0)
+        self.assertIn(("luz", "ouvindo"), self.m.evento("tique", 46.6))
+        self.assertEqual(self.m._luz_do_estado(), "ouvindo")
+
+    def test_pi_delivery_light_says_speaking(self):  # M4
+        self.m.mudo = False
+        _, acoes = self.m.campainha("e1abcdef", 0.0)
+        self.assertIn(("luz", "falando"), acoes)
+        self.assertNotIn(("luz", "ouvindo"), acoes)
 
     def test_answer_arriving_in_the_window_also_closes_the_mic(self):
         self.aguardando()

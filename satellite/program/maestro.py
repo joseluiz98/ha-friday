@@ -263,10 +263,8 @@ class Maestro:
         return [("alarme", "pausar")] + self._abrir_propria(agora, "timer", {"timer": self._alarme["timer"]})
 
     def _abrir_entrega(self, agora, entrega_id):
-        acoes = [("volume_alerta", True), ("som", "lembrete")] + self._abrir_propria(
-            agora, "entrega", {"entrega": entrega_id})
-        self._recado = True
-        return acoes
+        return self._fechar_mic_do_recado([("volume_alerta", True), ("som", "lembrete")] + self._abrir_propria(
+            agora, "entrega", {"entrega": entrega_id}))
 
     def _proxima_da_fila(self, agora):
         if self._fila_alarmes:
@@ -304,6 +302,8 @@ class Maestro:
         return "nao_perturbe" if self.nao_perturbe else "parada"
 
     def _luz_do_estado(self):
+        if self._recado and self.estado in ABERTO:
+            return "falando"
         return {CONECTANDO: "ouvindo", OUVINDO: "ouvindo", AGUARDANDO: "cerebro", ALARME: "alarme",
                 CADASTRO: "ouvindo", TESTE_PALAVRA: "ouvindo"}.get(
             self.estado, self._repouso())
@@ -586,9 +586,11 @@ class Maestro:
         return []
 
     def _fechar_mic_do_recado(self, acoes):
-        """v0.3.7: a resposta pendente sai com o microfone fechado (a palavra segue ouvida pela Pi)."""
+        """v0.3.7: a resposta pendente sai com o microfone fechado (a palavra segue ouvida pela Pi) e a luz diz que ela
+        está falando, não ouvindo (M4): fala no cômodo não é ouvida até o fim do recado."""
         self._recado = True
-        return [("microfone", False) if a == ("microfone", True) else a for a in acoes]
+        troca = (((("microfone", True)), ("microfone", False)), (("luz", "ouvindo"), ("luz", "falando")))
+        return [next((novo for velho, novo in troca if a == velho), a) for a in acoes]
 
     def _falando_segura(self, motivo):
         """Com o cérebro pendente (ou a resposta ainda não falada), quem está falando segura o microfone aberto; o
