@@ -278,7 +278,7 @@ class OtaClient:
 
     @staticmethod
     def descriptors() -> list[dict]:
-        return [{"key": KEY, "platform": "update", "name": "Software"},
+        return [{"key": KEY, "platform": "update", "name": "Software", "category": "diagnostic"},
                 {"key": "ota_channel", "platform": "select", "name": "Update channel", "category": "config",
                  "options": list(CHANNELS), "icon": "mdi:source-branch", "hidden": True}]  # Advanced step (14/11)
 

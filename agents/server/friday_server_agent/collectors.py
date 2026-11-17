@@ -9,12 +9,16 @@ from . import cost, reminders
 from .commands import RESTART_DESCRIPTOR
 from .voice_switch import DESCRIPTOR
 from friday_agent_core import version as _version
+from friday_agent_core.cpu import parse_loadavg
 
 VERSION = _version.installed_version(_version.FILE)
 
 
-def vm_metrics(meminfo: str, loadavg: str, statvfs: tuple, uptime: str, ncpu: int) -> dict:
-    """statvfs = (f_frsize, f_blocks, f_bfree, f_bavail); percentage computed like df."""
+def vm_metrics(meminfo: str, loadavg: str, statvfs: tuple, uptime: str, ncpu: int,
+               cpu_pct: float | None = None) -> dict:
+    """statvfs = (f_frsize, f_blocks, f_bfree, f_bavail); percentage computed like df.
+    cpu_pct = CPU Usage from the /proc/stat delta (None on the first sample); the load average is only an attribute.
+    `ncpu` stays in the signature for the callers (no longer used)."""
     mem = {}
     for line in meminfo.splitlines():
         m = re.match(r"(MemTotal|MemAvailable):\s+(\d+)\s*kB", line)
@@ -22,14 +26,16 @@ def vm_metrics(meminfo: str, loadavg: str, statvfs: tuple, uptime: str, ncpu: in
             mem[m.group(1)] = int(m.group(2))
     total = mem.get("MemTotal", 0)
     mem_pct = round(100 * (total - mem.get("MemAvailable", 0)) / total, 1) if total else None
-    cpu = round(100 * float(loadavg.split()[0]) / max(ncpu, 1), 1)
+    mem_attrs = ({"available_mb": mem.get("MemAvailable", 0) // 1024, "total_mb": total // 1024}
+                 if total else None)
     _, blocks, bfree, bavail = statvfs
     used = blocks - bfree
     disk = round(100 * used / (used + bavail), 1) if used + bavail else None
     since = datetime.now(timezone.utc) - timedelta(seconds=float(uptime.split()[0]))
     since = since.replace(second=0, microsecond=0)
-    return {"vm_memory_pct": mem_pct, "vm_cpu_load_pct": cpu, "vm_disk_pct": disk,
-            "vm_uptime_since": since.isoformat()}
+    return {"vm_memory_pct": mem_pct, "vm_memory_pct_attributes": mem_attrs,
+            "vm_cpu_usage_pct": cpu_pct, "vm_cpu_usage_pct_attributes": parse_loadavg(loadavg),
+            "vm_disk_pct": disk, "vm_uptime_since": since.isoformat()}
 
 
 def conversation_open(log_text: str) -> bool:
@@ -129,13 +135,16 @@ def proxmox_metrics(node_status: dict, smart: dict, last_vzdump: dict, backup_ru
                     storage: dict | None = None, guests: dict | None = None) -> dict:
     mem = (node_status.get("data") or {}).get("memory") or {}
     avail = mem.get("available", mem.get("free"))
-    mb = round(avail / 1048576) if isinstance(avail, (int, float)) else None
+    total = mem.get("total")
+    ok = isinstance(avail, (int, float)) and isinstance(total, (int, float)) and total > 0
+    mem_pct = round(100 * (total - avail) / total, 1) if ok else None
+    mem_attrs = {"available_mb": int(avail // 1048576), "total_mb": int(total // 1048576)} if ok else None
     found = re.findall(r"Temperature:\s+(\d+)", (smart.get("data") or {}).get("text") or "")
     data = last_vzdump.get("data") or []
     end = data[0].get("endtime") if data else None
     backup = datetime.fromtimestamp(end, timezone.utc).isoformat() if end else None
     status = data[0].get("status") if data else None
-    return {"host_available_mb": mb, "nvme_temperature": int(found[0]) if found else None,
+    return {"host_memory_usage_pct": mem_pct, "host_memory_usage_pct_attributes": mem_attrs, "nvme_temperature": int(found[0]) if found else None,
             "last_backup": backup, "last_backup_attributes": {"status": status} if status else None,
             **backup_guest_metrics(backup_runs or [], guests or {}), **backup_storage_metrics(storage or {})}
 
@@ -206,27 +215,29 @@ def capabilities(proxmox: bool) -> list[dict]:
     diag = {"category": "diagnostic"}
     m = {"state_class": "measurement"}
     return [
-        s("vm_memory_pct", "VM memory", unit="%", icon="mdi:memory", **m),
-        s("vm_cpu_load_pct", "VM CPU load", unit="%", icon="mdi:cpu-64-bit", **m),
-        s("vm_disk_pct", "VM disk", unit="%", icon="mdi:harddisk", **m),
+        s("vm_memory_pct", "Memory Usage", unit="%", icon="mdi:memory", **m, **diag),
+        s("vm_cpu_usage_pct", "CPU Usage", unit="%", icon="mdi:cpu-64-bit", **m, **diag),
+        s("vm_disk_pct", "VM disk", unit="%", icon="mdi:harddisk", **m, **diag),
         s("vm_uptime_since", "VM up since", device_class="timestamp", **diag),
-        s("brain_ready", "Brain ready", platform="binary_sensor", device_class="connectivity"),
-        s("brain_last_dream", "Brain last dream", device_class="timestamp"),
+        s("brain_ready", "Brain ready", platform="binary_sensor", device_class="connectivity", **diag),
+        s("brain_last_dream", "Brain last dream", device_class="timestamp", **diag),
         s("brain_restarted_in_process", "Brain restarted in process", platform="binary_sensor", **diag),
         s("brain_version", "Brain version", **diag),
-        s("lucid_last_run", "Lucid Dreaming last run", device_class="timestamp"),
+        s("lucid_last_run", "Lucid Dreaming last run", device_class="timestamp", **diag),
         s("memory_views_mode", "Memory views mode", **diag),
         s("memory_index_last_success", "Memory index last success", device_class="timestamp", **diag),
         s("wakeword_sync_last_ok", "Wake word recordings sync last OK", device_class="timestamp", **diag),
         s("wakeword_cache_last_ok", "Wake word feature cache last OK", device_class="timestamp", **diag),
-        s("conversation_open", "Conversation open", platform="binary_sensor"),
-        s("host_available_mb", "Proxmox host available memory", unit="MB", available=proxmox, **m),
+        s("conversation_open", "Conversation open", platform="binary_sensor", **diag),
+        s("host_memory_usage_pct", "Proxmox host memory usage", unit="%", icon="mdi:memory",
+          available=proxmox, **m, **diag),
         s("nvme_temperature", "Proxmox NVMe temperature", unit="°C", device_class="temperature",
-          available=proxmox, **m),
-        s("last_backup", "Proxmox backup job last run", device_class="timestamp", available=proxmox),
-        s("backup_oldest_guest", "Proxmox backup oldest guest", device_class="timestamp", available=proxmox),
+          available=proxmox, **m, **diag),
+        s("last_backup", "Proxmox backup job last run", device_class="timestamp", available=proxmox, **diag),
+        s("backup_oldest_guest", "Proxmox backup oldest guest", device_class="timestamp", available=proxmox,
+          **diag),
         s("backup_storage_used_pct", "Proxmox backup storage used", unit="%", icon="mdi:harddisk",
-          available=proxmox, **m),
+          available=proxmox, **m, **diag),
         *cost.descriptors(),
         cost.BUDGET_DESCRIPTOR,
         {**VOICE_DESCRIPTOR, "available": True},
@@ -234,7 +245,7 @@ def capabilities(proxmox: bool) -> list[dict]:
         reminders.DESCRIPTOR,
         s("ota_auto_install", "Automatic updates", platform="switch", category="config", icon="mdi:update"),
         s("ota_check_now", "Check for updates", platform="button", category="config", icon="mdi:cloud-refresh"),
-        s("ota_server", "Server software", platform="update"),
+        s("ota_server", "Server software", platform="update", **diag),
         s("image_build", "Build provisioning image", platform="button", category="config", icon="mdi:sd"),
-        s("image_latest", "Provisioning image", icon="mdi:sd"),
+        s("image_latest", "Provisioning image", icon="mdi:sd", **diag),
     ]

@@ -11,6 +11,7 @@ import secrets
 
 from aiohttp import web
 
+from friday_agent_core.cpu import CpuUsage
 from friday_agent_core.server import AgentCore
 
 from . import capabilities as cap
@@ -61,6 +62,67 @@ def _sat_id() -> str:
         return f.read().strip()
 
 
+class VoiceSwitch:
+    """The "Voice Program" switch. Its state is whether the program really runs (derived from `program_state`),
+    not the intent file: the systemd ExecCondition can skip the service (no supported audio device) while the
+    intent says on (spec 2026-11-17-diagnostic-sensors). The intent file stays the agent's memory of what was asked."""
+
+    def __init__(self, power: Power, refresh) -> None:
+        self.power = power
+        self._refresh = refresh  # async (origin) -> None: re-reads the program and publishes the real state
+        self._tasks: list[asyncio.Task] = []  # the background wait of the last command (courtesy or start)
+
+    @staticmethod
+    def derive(changes: dict) -> dict:
+        """Adds `voice_enabled` to the changes of a refresh (the program's state is in them)."""
+        changes["voice_enabled"] = power_mod.voice_running(changes.get("program_state"))
+        return changes
+
+    async def _voice_off(self) -> None:
+        try:
+            await self.power.set_voice(False)
+            await self._refresh("ha")  # the courtesy wait is over and the program stopped: publish it
+        except Exception as err:  # noqa: BLE001
+            LOG.warning("voice off failed: %s", type(err).__name__)
+
+    async def _voice_on(self) -> None:
+        try:
+            await self.power.await_start()  # logs why when the program never comes up
+            await self._refresh("ha")
+        except Exception as err:  # noqa: BLE001
+            LOG.warning("voice on wait failed: %s", type(err).__name__)
+
+    async def set(self, enabled: bool) -> dict:
+        for t in self._tasks:
+            t.cancel()  # a newer command replaces a pending wait
+        self._tasks.clear()
+        res = {"ok": True}
+        if enabled:
+            res = await self.power.set_voice(True)  # returns once the service is started: HA waits 10 s for a reply
+            if res.get("ok"):
+                self._tasks.append(asyncio.create_task(self._voice_on()))
+        else:
+            self.power.persist(False)  # durable before the (up to 120 s) wait
+            self._tasks.append(asyncio.create_task(self._voice_off()))
+        await self._refresh("ha")  # publishes what is true now, not what was asked
+        return res if not res.get("ok") else {"ok": True}
+
+
+async def read_program(program, mapper, memo: dict) -> dict | None:
+    """What the voice program says now, as state changes; None = it answered but could not be read (keep the last).
+    A program that does not answer gives `program_state: off` and None for every key that came from it."""
+    status = await program.status()
+    if status is None:
+        memo["cfg"] = None
+        return mapper.down_state()
+    try:
+        memo["cfg"] = await program.get_config()
+        memo["ww"] = await program.wakewords()
+    except (ProgramError, OSError):
+        return None
+    return mapper.state(memo["cfg"], memo["ww"], status)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     token, program_port = _read_settings()
@@ -85,29 +147,18 @@ async def main() -> None:
     async def power_log(message: str) -> None:
         await core.push_log(message, {})
 
-    power = Power(program_state=lambda: memo["state"].get("program_state"), log=power_log)
-    preview = ring_preview.RingPreview(program.command, lambda: memo["state"].get("program_state"))
-    memo["state"]["voice_enabled"] = power.enabled
-    off_task: list[asyncio.Task] = []
-
-    async def voice_off() -> None:
+    async def sleep_and_refresh(seconds: float) -> None:
+        """Power waits on the program coming up or going down: re-read it each second instead of the 20 s poll."""
+        await asyncio.sleep(seconds)
         try:
-            await power.set_voice(False)
-        except Exception as err:  # noqa: BLE001
-            LOG.warning("voice off failed: %s", type(err).__name__)
+            await refresh("agent")
+        except Exception as err:  # noqa: BLE001 - a failed read must not break the wait
+            LOG.warning("refresh during wait failed: %s", type(err).__name__)
 
-    async def set_voice(enabled: bool) -> dict:
-        for t in off_task:
-            t.cancel()  # a newer command replaces a pending courtesy wait
-        off_task.clear()
-        memo["state"]["voice_enabled"] = enabled
-        await core.push_state({"voice_enabled": enabled}, "ha")
-        if enabled:
-            await power.set_voice(True)
-        else:
-            power.persist(False)  # durable before the (up to 120 s) wait
-            off_task.append(asyncio.create_task(voice_off()))
-        return {"ok": True}
+    power = Power(program_state=lambda: memo["state"].get("program_state"), log=power_log, sleep=sleep_and_refresh)
+    preview = ring_preview.RingPreview(program.command, lambda: memo["state"].get("program_state"))
+    voice = VoiceSwitch(power, lambda origin: refresh(origin))
+    memo["state"]["voice_enabled"] = power_mod.voice_running(memo["state"]["program_state"])
 
     async def apply_agent(stage: str) -> int:
         return await power_mod.run_command(APPLY_AGENT + [stage])
@@ -190,27 +241,23 @@ async def main() -> None:
         await core.push_capabilities()
 
     async def refresh(origin: str) -> None:
-        status = await program.status()
-        if status is None:
-            memo["cfg"] = None
-            changes = {"program_state": "off"}
-        else:
-            try:
-                memo["cfg"] = await program.get_config()
-                memo["ww"] = await program.wakewords()
-            except (ProgramError, OSError):
-                return
-            changes = mapper.state(memo["cfg"], memo["ww"], status)
+        changes = await read_program(program, mapper, memo)
+        if changes is None:
+            return
+        voice.derive(changes)
         timers = await asyncio.to_thread(read_timers)
         if timers is not None:
             changes.update(cap.timers_state(timers))
         changes.update(tracker.counters())
         memo["state"].update(changes)
+        for key in mapper.program_keys:  # the program stopped: no value, so none in the hello either
+            if key in changes and changes[key] is None:
+                memo["state"].pop(key, None)
         await core.push_state(changes, origin)
 
     async def do_set(cmd: dict) -> dict:
         if cmd.get("key") == "voice_enabled":
-            return await set_voice(bool(cmd.get("value")))
+            return await voice.set(bool(cmd.get("value")))
         if cmd.get("key") == "ota_channel":
             res = await asyncio.to_thread(updater.set_channel, cmd.get("value"))
             await ota_changed()
@@ -330,9 +377,12 @@ async def main() -> None:
             await asyncio.sleep(POLL_S)
 
     async def hardware_loop() -> None:
+        cpu_usage = CpuUsage()  # one for the whole run: CPU Usage is the difference between two samples
+        undervoltage = hw.UndervoltageCounter()
         while True:
             try:
-                changes = await hw.sample_async(with_network=wifi.nmcli_available())
+                changes = await hw.sample_async(with_network=wifi.nmcli_available(), cpu=cpu_usage,
+                                                undervoltage=undervoltage)
                 memo["state"].update(changes)
                 await core.push_state(changes, "agent")
             except Exception as err:  # noqa: BLE001

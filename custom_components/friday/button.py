@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.util import slugify
@@ -76,6 +77,7 @@ class RebootVmButton(ButtonEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_name = "Reboot VM"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = "restart"
     _attr_icon = "mdi:server-network"
 

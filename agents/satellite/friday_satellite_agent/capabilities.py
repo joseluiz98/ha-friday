@@ -91,7 +91,7 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
                       min=0.05, max=0.99, step=0.01, mode="box", hidden=True))
     out += [
         _d("program_state", "sensor", "Program state", device_class="enum",
-           options=["off", "idle", "listening", "conversation"]),
+           options=["off", "idle", "listening", "conversation"], category="diagnostic"),
         _d("activations_today", "sensor", "Activations today", category="diagnostic"),
         _d("rejected_today", "sensor", "Rejected today", category="diagnostic"),
         _d("last_activation", "sensor", "Last activation", device_class="timestamp", category="diagnostic"),
@@ -136,11 +136,17 @@ class Mapper:
     def __init__(self) -> None:
         self.last_duck = DUCK_DEFAULT
         self.last_follow_up = FOLLOW_UP_DEFAULT
+        self.program_keys: set[str] = set()  # every key a program answer produced: all go None when it stops
+
+    def down_state(self) -> dict:
+        """The program does not answer: its state is unknown, so every key that came from it is None (unavailable in HA,
+        never the last value shown as if it were live)."""
+        return {"program_state": "off", **{k: None for k in self.program_keys if k != "program_state"}}
 
     def state(self, cfg: dict | None, wakewords: list[dict], status: dict | None) -> dict:
         """Protocol state from the program's config; None cfg = program down."""
         if cfg is None:
-            return {"program_state": "off"}
+            return self.down_state()
         duck = cfg.get("music_duck_percent")
         if isinstance(duck, int) and duck > 0:
             self.last_duck = duck
@@ -179,6 +185,7 @@ class Mapper:
             st[f"wakeword_{w['nome']}_sensitivity"] = w.get("limiar")
         if status:
             st["program_state"] = STATES.get(str(status.get("estado")), "idle")
+        self.program_keys = set(st)
         return st
 
     def to_program(self, cfg: dict, key: str, value) -> dict | None:

@@ -74,6 +74,9 @@ the test container uses `python:3.14-slim`.
 
 Run `bash secret-sweep.sh` before every commit or push.
 
+New entities must follow the placement rule (main section = what a resident uses; the rest is Diagnostic or
+Config): see "Entity placement" in `docs/protocol.md`. `tests/agents/test_entity_placement.py` enforces it.
+
 ## Restart and reboot actions
 
 - **Restart F.R.I.D.A.Y.** (Server button): refuses while a conversation is open (read from the container

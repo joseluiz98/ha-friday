@@ -18,11 +18,22 @@ FAILS_NEEDED = 3
 CONNECT_TIMEOUT_S = 5
 
 
-def server_target(config_path: str) -> tuple[str, int] | None:
-    """(host, port) of `endereco_friday`, or None when the key is missing or unusable."""
+HOUSE = "/etc/friday-satelite/house.json"  # the VM address the image writes at build time
+
+
+def _address(path: str):
     try:
-        with open(config_path, encoding="utf-8") as f:
-            url = json.load(f).get("endereco_friday")
+        with open(path, encoding="utf-8") as f:
+            return json.load(f).get("endereco_friday")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def server_target(config_path: str, house_path: str = HOUSE) -> tuple[str, int] | None:
+    """(host, port) of `endereco_friday`, or None when the key is missing or unusable. config.json wins; a missing or
+    null value there (firstboot writes null, 17/11) falls back to house.json, like the program's own loader."""
+    url = _address(config_path) or _address(house_path)
+    try:
         parsed = urlparse(url)
         host = parsed.hostname
         port = parsed.port or (443 if parsed.scheme in ("https", "wss") else 80)

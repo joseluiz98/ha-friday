@@ -23,6 +23,16 @@ def cfg(tmp_path, url="https://192.0.2.251:7443"):
     return str(p)
 
 
+def test_null_in_config_falls_back_to_house_json(tmp_path):
+    # 17/11: firstboot writes endereco_friday null into config.json; the address lives in house.json (image build)
+    conf = cfg(tmp_path, None)
+    house = tmp_path / "house.json"
+    house.write_text(json.dumps({"endereco_friday": "https://192.0.2.251:7443"}))
+    assert sw.server_target(conf, str(house)) == ("192.0.2.251", 7443)
+    assert sw.server_target(conf, str(tmp_path / "nohouse.json")) is None
+    assert sw.server_target(cfg(tmp_path, "https://vm.local"), str(house)) == ("vm.local", 443)
+
+
 def test_target_comes_from_endereco_friday(tmp_path):
     assert sw.server_target(cfg(tmp_path)) == ("192.0.2.251", 7443)
     assert sw.server_target(cfg(tmp_path, "https://vm.local")) == ("vm.local", 443)

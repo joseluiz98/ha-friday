@@ -29,6 +29,7 @@ def test_every_installed_server_dir_is_in_the_server_component():
     for d in dirs:
         assert f"server/{d}" in man.components["server"], d
     assert m.changed_components(man, ["server/browser/browser_idle.py"]) == ["server"]
+    assert m.changed_components(man, ["server/images/images_http.py"]) == ["server"]
 
 def test_drift_checks_every_installed_server_dir():
     import importlib.util

@@ -9,9 +9,13 @@ MEMINFO = "MemTotal:       4000000 kB\nMemFree: 100 kB\nMemAvailable:   1000000 
 
 
 def test_vm_metrics_from_proc_samples():
-    m = c.vm_metrics(MEMINFO, "2.00 1.0 0.5 1/100 42", (4096, 1000, 400, 400), "86400.5 100.0", 4)
-    assert m["vm_memory_pct"] == round(100 * (4000000 - 1000000) / 4000000, 1)
-    assert m["vm_cpu_load_pct"] == 50.0
+    m = c.vm_metrics(MEMINFO, "2.00 1.0 0.5 1/100 42", (4096, 1000, 400, 400), "86400.5 100.0", 4, cpu_pct=12.5)
+    assert m["vm_memory_pct"] == 75.0 and m["vm_memory_pct_attributes"] == {"available_mb": 976, "total_mb": 3906}
+    assert m["vm_cpu_usage_pct"] == 12.5
+    assert m["vm_cpu_usage_pct_attributes"] == {"load_1m": 2.0, "load_5m": 1.0, "load_15m": 0.5}
+    assert "vm_cpu_load_pct" not in m
+    # first sample after start: no CPU Usage yet, never a false 0
+    assert c.vm_metrics(MEMINFO, "0 0 0", (1, 1, 1, 1), "1 1", 1)["vm_cpu_usage_pct"] is None
     assert m["vm_disk_pct"] == 60.0
     assert m["vm_uptime_since"].endswith("+00:00")
 
@@ -39,16 +43,19 @@ def test_conversation_open_logic():
 
 
 def test_proxmox_metrics_maps_fields():
-    node = {"data": {"memory": {"available": 2 * 1048576 * 1000}}}
+    node = {"data": {"memory": {"total": 8589934592, "available": 2097152000}}}
     smart = {"data": {"text": "x\nTemperature:     47 Celsius\n"}}
     vz = {"data": [{"endtime": 1761700000, "status": "OK"}]}
     m = c.proxmox_metrics(node, smart, vz)
-    assert m["host_available_mb"] == 2000
+    assert m["host_memory_usage_pct"] == 75.6
+    assert m["host_memory_usage_pct_attributes"] == {"available_mb": 2000, "total_mb": 8192}
+    assert c.proxmox_metrics({"data": {"memory": {"available": 1}}}, {}, {})["host_memory_usage_pct"] is None
+    assert c.proxmox_metrics({"data": {"memory": {"total": 8589934592}}}, {}, {})["host_memory_usage_pct"] is None
     assert m["nvme_temperature"] == 47
     assert m["last_backup"].startswith("2025-10-29")
     assert m["last_backup_attributes"] == {"status": "OK"}
     empty = c.proxmox_metrics({}, {}, {})
-    assert empty == {"host_available_mb": None, "nvme_temperature": None, "last_backup": None,
+    assert empty == {"host_memory_usage_pct": None, "host_memory_usage_pct_attributes": None, "nvme_temperature": None, "last_backup": None,
                      "last_backup_attributes": None, "backup_oldest_guest": None,
                      "backup_oldest_guest_attributes": None, "backup_storage_used_pct": None,
                      "backup_storage_used_pct_attributes": None}
@@ -113,10 +120,23 @@ def test_capabilities_keys_match_metrics():
 
 def test_proxmox_unavailable_without_token():
     caps = {d["key"]: d for d in c.capabilities(proxmox=False)}
-    assert caps["host_available_mb"]["available"] is False
+    assert caps["host_memory_usage_pct"]["available"] is False
     assert caps["vm_memory_pct"]["available"] is True
     caps = {d["key"]: d for d in c.capabilities(proxmox=True)}
     assert caps["nvme_temperature"]["available"] is True
+
+
+def test_capabilities_names_units_and_retired_keys():
+    caps = {d["key"]: d for d in c.capabilities(proxmox=True)}
+    assert caps["vm_cpu_usage_pct"]["name"] == "CPU Usage" and caps["vm_memory_pct"]["name"] == "Memory Usage"
+    assert caps["vm_cpu_usage_pct"]["unit"] == "%" and caps["vm_cpu_usage_pct"]["state_class"] == "measurement"
+    assert caps["host_memory_usage_pct"]["name"] == "Proxmox host memory usage"
+    assert caps["host_memory_usage_pct"]["unit"] == "%" and caps["host_memory_usage_pct"]["available"] is True
+    assert not {"vm_cpu_load_pct", "host_available_mb"} & set(caps)
+    for k in ("vm_memory_pct", "vm_cpu_usage_pct", "vm_disk_pct", "brain_ready", "brain_last_dream", "lucid_last_run",
+              "conversation_open", "host_memory_usage_pct", "nvme_temperature", "last_backup",
+              "backup_oldest_guest", "backup_storage_used_pct", "image_latest", "ota_server"):
+        assert caps[k]["category"] == "diagnostic", k
 
 
 def test_source_nulls_keys_after_three_failures_and_recovers():
