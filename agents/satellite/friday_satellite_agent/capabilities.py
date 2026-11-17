@@ -91,7 +91,7 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
                       min=0.05, max=0.99, step=0.01, mode="box", hidden=True))
     out += [
         _d("program_state", "sensor", "Program state", device_class="enum",
-           options=["off", "idle", "listening", "conversation"]),
+           options=["off", "idle", "listening", "conversation"], category="diagnostic"),
         _d("activations_today", "sensor", "Activations today", category="diagnostic"),
         _d("rejected_today", "sensor", "Rejected today", category="diagnostic"),
         _d("last_activation", "sensor", "Last activation", device_class="timestamp", category="diagnostic"),

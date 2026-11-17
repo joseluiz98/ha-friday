@@ -50,6 +50,18 @@ Sent right after connecting.
   limits, conversation timings) as `hidden`; the integration still reads their `min`/`max`/`step`/`options` and
   writes them through its settings forms and the `friday.set_setting` service.
 
+### Entity placement
+
+Every agent and every integration entity follows one rule (17/11/2026): the main section of a device page only
+holds what a resident uses or wants to see (controls, the next timer, room climate, daily cost). Hardware, network,
+versions and maintenance/infra go to `"diagnostic"`; settings go to `"config"`. The agent decides it through
+`category` in the descriptor; the integration maps it to Home Assistant's `EntityCategory`.
+
+A new key without a category must be added to the allowlist (`SATELLITE_MAIN` or `SERVER_MAIN`) in
+`tests/agents/test_entity_placement.py`, otherwise CI fails; a shown (not `hidden`) descriptor outside the allowlist
+must declare `diagnostic` or `config`. Entities the integration creates by itself follow the same rule (test in
+`tests/integration/test_entity_placement.py`).
+
 ### Platform `update`
 
 An OTA (firmware or software) update. Descriptor: `{"key":"<k>","platform":"update","name":"..."}`; the state under
