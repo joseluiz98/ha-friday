@@ -47,14 +47,18 @@ O Sendspin (`sendspin-cli`) entra se o tarball for passado ao `stage.sh` (pelo p
 `../sendspin/README.md`, `output = music_vol`). Sem ele a imagem sai sem player de música e o build avisa.
 
 ## Gravar (no PC)
-1. Servir a imagem na LAN, só enquanto grava: na VM `cd /srv/nobackup/images && python3 -m http.server 8088 --bind <VM>`
-   (o `url` do manifesto aponta para `http://<VM>:8088/`; mude com `FRIDAY_IMG_URL=… ./build.sh`).
-2. Raspberry Pi Imager 2.x → dispositivo Raspberry Pi 3 → sistema operacional **Use custom** → escolha o `.json`
-   (ou `rpi-imager --repo friday-satellite-AAAAMMDD.json`).
-3. Customização: **Wi-Fi da rede de 2,4 GHz** (a Pi 3 não tem 5 GHz), hostname livre (apelido humano, p. ex.
+O servidor das imagens já está no ar: a unidade `friday-images-http.service` (instalada pelo `server/install.sh`) serve,
+só para leitura e só na LAN, a pasta das imagens da VM na porta 8088. O `url` do manifesto aponta para
+`http://<VM>:8088/` (mude com `FRIDAY_IMG_URL=… ./build.sh`). Conferir: `curl -sI http://<VM>:8088/<imagem>.img.xz`
+devolve 200.
+1. Raspberry Pi Imager 2.x → **Opções da aplicação → Repositório de conteúdo → editar → arquivo local** = o `.json`
+   do Samba (`media\friday\imagens`). Depois: dispositivo **Raspberry Pi 3** → o item **F.R.I.D.A.Y. Satellite** da
+   lista de sistemas. **Não use "Use custom"** na lista: ele é só para `.img` e pula a customização (o Imager ignora
+   Wi-Fi, usuário e hostname, e o Pi OS abre o cadastro de usuário).
+2. Customização: **Wi-Fi da rede de 2,4 GHz** (a Pi 3 não tem 5 GHz), hostname livre (apelido humano, p. ex.
    `friday-satellite2`; o id vem do número de série). Deixe o usuário em branco ou `jose`: o usuário `jose` já existe,
    sem senha, só com a chave pública do HA (`/data/.ssh/id_ed25519.pub`; a privada nunca sai do HA).
-4. Gravar, ligar, esperar a Pi falar o código. Meta: da tomada ao "descoberto no HA" em até 10 min.
+3. Gravar, ligar, esperar a Pi falar o código. Meta: da tomada ao "descoberto no HA" em até 10 min.
 
 ## O que validar depois de gravar
 - Hostname e Wi-Fi do Imager **persistiram** (`hostname`, `nmcli`), a Pi aparece em Configurações → Dispositivos (F.R.I.D.A.Y.).

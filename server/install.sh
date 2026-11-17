@@ -32,5 +32,6 @@ if [ "${FRIDAY_NO_SYSTEMCTL:-}" != 1 ]; then
   systemctl daemon-reload
   systemctl restart friday-status
   systemctl enable --now friday-browser-idle.timer   # idle Chromium closer (the other timers were enabled by hand)
+  systemctl enable --now friday-images-http.service  # satellite images for the Imager manifest (read-only, LAN)
 fi
 echo "server services $LINE installed in $OPT"

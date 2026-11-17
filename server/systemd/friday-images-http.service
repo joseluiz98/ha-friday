@@ -1,0 +1,18 @@
+# Serves the satellite images read-only on the LAN. The Raspberry Pi Imager manifest (the .json next to the images, on
+# the Samba share media\friday\imagens) points at http://<VM>:8088/<image>.img.xz; without this server the owner cannot
+# write a card, and writing the bare .img makes the Imager skip Wi-Fi/user/hostname (no cloud-init customization).
+# http.server only answers GET/HEAD: read-only. No --bind: the unit cannot know the VM's own address; the port is only
+# reachable on the LAN. Plan 2026-11-17-diagnostic-sensors, Task 12.
+[Unit]
+Description=F.R.I.D.A.Y. - satellite images over HTTP (read-only, LAN)
+RequiresMountsFor=/mnt/haos/media/friday/imagens
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 -m http.server 8088 --directory /mnt/haos/media/friday/imagens
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
