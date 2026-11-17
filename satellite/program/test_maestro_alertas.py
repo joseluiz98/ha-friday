@@ -31,6 +31,23 @@ class Base(unittest.TestCase):
 
 
 class TestAlarme(Base):
+    def test_lost_word_ends_the_alarm_silently(self):
+        """Final review 16/11: another satellite answered the word; here it still stops the alarm, without a
+        conversation (no conectar, no start sound)."""
+        self.m.mudo = False
+        self.alarme()
+        acoes = self.m.evento("palavra_perdida", 1.0)
+        self.assertEqual(self.m.estado, "parada")
+        self.assertIn(("alarme", "parar"), acoes)
+        self.assertEqual(achar(acoes, "registrar_timer")["como_parou"], "palavra")
+        self.assertNotIn("conectar", [a[0] for a in acoes])
+        self.assertNotIn(("som", "inicio"), acoes)
+
+    def test_lost_word_outside_the_alarm_does_nothing(self):
+        self.m.mudo = False
+        self.assertEqual(self.m.evento("palavra_perdida", 1.0), [])
+        self.assertEqual(self.m.estado, "parada")
+
     def test_timer_vencido_toca_alarme_no_volume_de_alertas(self):
         self.assertEqual(nomes(self.alarme()), ["volume_alerta:True", "alarme:tocar", "luz:alarme"])
         self.assertEqual(self.m.estado, "alarme")
