@@ -129,6 +129,9 @@ TOKEN_REMINDER_ARQ = os.environ.get("FRIDAY_TOKEN_REMINDER", "/srv/friday/state/
 # Arbitragem entre satélites (spec 2026-11-16-satellite-arbitration): um árbitro por processo do gateway.
 ARBITRO = Arbiter(offsets=load_offsets(cc.arbitration_offsets_path()), log=cc.write_arbitration_record)
 ARBITRO_OFFSETS = cc.OffsetsReloader()
+# Presence (every 4 s per satellite) and claims (0.3 s budget) authenticate against this in-memory copy, refreshed in
+# the background; they never wait for the SMB read (final review 16/11).
+REGISTRO_SATELITES = cc.SatelliteRegistryCache(SATELITES_ARQ, SATELITES_CACHE)
 ATIVIDADE = act.Activity(os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json"))
 VOICE_ENABLED_ARQ = os.environ.get("FRIDAY_VOICE_ENABLED_FILE", "/srv/friday/state/voice-enabled")  # global voice switch (HA integration)
 TELEGRAM_JOSE = os.environ.get("FRIDAY_TELEGRAM_JOSE", "")
@@ -695,13 +698,13 @@ def registrar_rotas(app):
 
     @app.post("/satellite_presence")
     async def rota_presenca(request: Request):
-        sats = await cc.read_satellites_without_blocking(SATELITES_ARQ, SATELITES_CACHE)
+        sats = REGISTRO_SATELITES.current()
         status, saida = await cc.handle_presence(ARBITRO, sats, request.headers.get("authorization"))
         return JSONResponse(saida, status_code=status)
 
     @app.post("/wake_claim")
     async def rota_disputa(request: Request):
-        sats = await cc.read_satellites_without_blocking(SATELITES_ARQ, SATELITES_CACHE)
+        sats = REGISTRO_SATELITES.current()
         ARBITRO_OFFSETS.apply(ARBITRO)
         status, saida = await cc.handle_wake_claim(ARBITRO, sats, request.headers.get("authorization"),
                                                    await corpo_json(request))

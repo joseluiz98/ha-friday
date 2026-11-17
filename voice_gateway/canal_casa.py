@@ -1,7 +1,7 @@
 """Canal da casa (spec 2026-10-12 §3): o cérebro entrega mensagens pelo satélite (POST /deliver) e o satélite
 avisa o dono de timer não atendido (POST /satellite_alert → Telegram). Lógica pura com IO injetado: roda sem o
 Pipecat e sem rede (test_canal_casa.py). Quem liga isto ao servidor do bot é o bot.py."""
-import asyncio, hmac, json, logging, math, os, re, secrets, time
+import asyncio, concurrent.futures, hmac, json, logging, math, os, re, secrets, time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -125,6 +125,53 @@ async def read_satellites_without_blocking(primary: str, cache: str, timeout_s: 
         return await asyncio.wait_for(asyncio.to_thread(read, primary, cache), timeout_s)
     except asyncio.TimeoutError:
         return ler_satelites(cache)
+
+
+REGISTRY_REFRESH_S = 45.0
+
+
+class SatelliteRegistryCache:
+    """In-memory copy of the satellite registry for the hot routes (/satellite_presence every 4 s per satellite,
+    /wake_claim inside a 0.3 s budget). `current()` never awaits: it returns the copy and, when the copy is older
+    than `refresh_s`, starts ONE background refresh (ler_satelites_com_cache on a dedicated thread). With Samba down
+    the refresh parks that one thread ~25 s instead of one default-executor thread per request (final review
+    16/11). A failed or empty refresh keeps the old copy. The first call seeds from the local cache file."""
+
+    def __init__(self, primary: str, cache: str, read=ler_satelites_com_cache, seed=ler_satelites,
+                 clock=time.monotonic, refresh_s: float = REGISTRY_REFRESH_S):
+        self._primary, self._cache, self._read, self._seed = primary, cache, read, seed
+        self._clock, self._refresh_s = clock, refresh_s
+        self._sats: dict | None = None
+        self._last: float | None = None
+        self._task: asyncio.Task | None = None
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="sat-registry")
+
+    def current(self) -> dict:
+        if self._sats is None:
+            try:
+                self._sats = self._seed(self._cache) or {}
+            except Exception:
+                self._sats = {}
+        now = self._clock()
+        if (self._last is None or now - self._last >= self._refresh_s) and (self._task is None or self._task.done()):
+            self._last = now
+            self._task = asyncio.get_running_loop().create_task(self._refresh())
+        return self._sats
+
+    async def _refresh(self) -> None:
+        try:
+            dados = await asyncio.get_running_loop().run_in_executor(self._executor, self._read, self._primary,
+                                                                     self._cache)
+        except Exception as e:
+            logging.warning(f"satellite registry: refresh failed, keeping the old copy: {e!r}")
+            return
+        if dados:
+            self._sats = dados
+
+    async def wait_idle(self) -> None:
+        """Tests: wait for the refresh in flight, if any."""
+        if self._task is not None:
+            await self._task
 
 
 def _bearer(cabecalho):
