@@ -139,6 +139,13 @@ formatBCE, que faz o mesmo; comandos conferidos na tabela do `xvf_host.py` do fi
   fixo ligado, ele ainda escolhe o feixe livre (que segue a TV). Teste de 5 min (pesquisa §4.4): travar na posição A,
   falar da B, ver se `AEC_AZIMUTH_VALUES[3]` fica em A, gravar o canal 1. Se não ficar, a trava também roteia o canal 1
   para o feixe travado (`AUDIO_MGR_OP_R 7 0`) e devolve `7 3` ao soltar.
+- **Regra da trava (dono, 17/11; a mesma do ESPHome):** trava na palavra, fica travada durante o **primeiro pedido**
+  depois da palavra e **solta quando a pessoa para de falar** (fim da fala detectado pelo programa); no resto da
+  conversa vale o comportamento de fábrica do XVF (feixe livre + seleção automática), que acompanha quem anda falando.
+  As proteções de soltar (partida, fim da conversa, erro, teto de 90 s) continuam.
+- **Switch "Beam lock"** (configuração no HA, ligado por padrão): desligado, nunca trava (só o comportamento de fábrica).
+  O dono compara os dois no uso com a TV. Limitação conhecida da trava: quem anda **durante o primeiro pedido** sai do
+  feixe. Evolução registrada: pesquisar como outros alto-falantes (sobretudo as Echos) tratam direção e ruído.
 - Aceite de hoje: ativação básica (palavra de duas posições, conversa abre, trava e solta no log). Aceite real: uso
   diário com a TV; o dono garante correções nos primeiros dias.
 - Achado da pesquisa: no repo, `ring.py` ainda tem `LED_OFFSET = 0`/`MUTE_LEDS = (0,)`; a calibração de 17/11 entra
