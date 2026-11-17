@@ -59,7 +59,7 @@ Outras worktrees do mesmo repo são de outras sessões: não tocar.
 5. **Sufixo de chave aposentada que pega chave viva** (`_remove_retired_entities` compara pelo fim do `unique_id`):
    nenhuma chave anunciada termina com `_<chave aposentada>` — teste na Tarefa 6.
 
-**Ordem de execução:** 1 → 2 → 3 → 4 → 5 → 6 → 9 → 10 → 11 → 7 (Steps 1–2). O push, o PR e as notas (Steps 3–4
+**Ordem de execução:** 1 → 2 → 3 → 4 → 5 → 6 → 9 → 10 → 11 → 12 → 7 (Steps 1–2). O push, o PR e as notas (Steps 3–4
 da Tarefa 7) ficam com a sessão principal, depois da revisão final. A Tarefa 8 só depois do alpha instalado.
 
 ---
@@ -533,3 +533,38 @@ programa roda").
 - [ ] **Step 6 (na prova do alpha, Tarefa 8):** no MK1 sem Jabra, ligar o switch → volta a `off` em ~30 s e o logbook
   do aparelho mostra "Voice program did not start: voice program skipped: start condition not met (no supported
   audio device)". Acrescentar esta linha ao "Promotion gate (stable)" do PR.
+
+---
+
+### Task 12: Imagens do satélite servidas sempre na rede local (opção A, aprovada em 17/11)
+
+Por quê: o `.json` do Imager (no Samba, `media\friday\imagens`) aponta para `http://<VM>:8088/<imagem>.img.xz`, mas
+esse servidor só existia ligado à mão (passo 1 do `satellite/image/README.md`). Sem ele o dono não consegue gravar um
+cartão; gravar o `.img` direto faz o Imager ignorar Wi-Fi/usuário/hostname (sem `init_format: cloudinit-rpi`) e o Pi OS
+abre o cadastro de usuário (visto em 17/11). Decisão do dono: um servidor só de leitura, sempre ligado, só da pasta
+das imagens.
+
+**Files:**
+- Create: `server/systemd/friday-images-http.service`
+- Modify: `server/install.sh` (habilitar e iniciar a unidade)
+- Modify: `satellite/image/README.md` (seção "Gravar": o passo 1 manual sai; o servidor já está no ar)
+- Test: `tests/agents/test_images_http_unit.py` (ou o arquivo de testes do `server/install.sh`, se existir)
+
+- [ ] **Step 1: Failing tests**
+  - A unidade: `ExecStart=/usr/bin/python3 -m http.server 8088 --directory /mnt/haos/media/friday/imagens`
+    (`http.server` só atende GET/HEAD: leitura), `RequiresMountsFor=/mnt/haos/media/friday/imagens`,
+    `After=network-online.target`, `Wants=network-online.target`, `Restart=always`, `RestartSec=30`,
+    `[Install] WantedBy=multi-user.target`; comentário no topo explicando o porquê (o `.json` do Imager).
+    Sem `--bind` (a VM não sabe o próprio IP na unidade; a porta só é alcançável na LAN).
+  - `server/install.sh` com `FRIDAY_NO_SYSTEMCTL=1` copia a unidade para `$FRIDAY_UNITS`; o texto do script contém
+    `systemctl enable --now friday-images-http.service` dentro do bloco de systemctl.
+- [ ] **Step 2: Run** — FAIL.
+- [ ] **Step 3: Implement** a unidade, a linha no `install.sh` e o README (gravação, confirmada pelo dono em 17/11: Imager 2.x → **Opções da aplicação → Repositório de conteúdo →
+  editar → arquivo local** = o `.json` do Samba; depois Raspberry Pi 3 → o item "F.R.I.D.A.Y. Satellite" da lista →
+  Wi-Fi 2,4 GHz e hostname; usuário em branco ou `jose`, sem senha. "Use custom" na lista de sistemas é só para `.img`
+  e não serve: pula a customização).
+- [ ] **Step 4: Run** os testes do servidor — PASS.
+- [ ] **Step 5: Commit** `feat(server): serve satellite images on the LAN for the Imager manifest`
+- [ ] **Na prova do alpha (Tarefa 8):** `curl -sI http://<VM>:8088/<imagem atual>.img.xz` → 200 depois de um reboot
+  da VM; parar a unidade transitória `img-http-8088` (ligada à mão em 17/11) antes da instalação, senão a porta está
+  ocupada. Acrescentar ao "Promotion gate (stable)".
