@@ -11,6 +11,7 @@ import secrets
 
 from aiohttp import web
 
+from friday_agent_core.cpu import CpuUsage
 from friday_agent_core.server import AgentCore
 
 from . import capabilities as cap
@@ -330,9 +331,10 @@ async def main() -> None:
             await asyncio.sleep(POLL_S)
 
     async def hardware_loop() -> None:
+        cpu_usage = CpuUsage()  # one for the whole run: CPU Usage is the difference between two samples
         while True:
             try:
-                changes = await hw.sample_async(with_network=wifi.nmcli_available())
+                changes = await hw.sample_async(with_network=wifi.nmcli_available(), cpu=cpu_usage)
                 memo["state"].update(changes)
                 await core.push_state(changes, "agent")
             except Exception as err:  # noqa: BLE001

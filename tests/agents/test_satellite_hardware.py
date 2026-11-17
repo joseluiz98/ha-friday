@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agents" / "satellite"))
 
+from friday_agent_core.cpu import CpuUsage  # noqa: E402
 from friday_satellite_agent import capabilities as cap  # noqa: E402
 from friday_satellite_agent import hardware as hw  # noqa: E402
 
@@ -17,10 +18,10 @@ def test_cpu_temperature_parse():
     assert hw.parse_cpu_temperature("garbage") is None
 
 
-def test_cpu_load_parse_like_the_server():
-    # same formula as the server's vm_cpu_load_pct: 1-min load average / cores, in %
-    assert hw.parse_cpu_load("1.36 1.22 1.16 2/240 1234\n", 4) == 34.0
-    assert hw.parse_cpu_load("", 4) is None
+def test_memory_usage_like_windows():
+    pct, attrs = hw.parse_memory_usage(FILES[hw.MEMINFO])
+    assert pct == 41.5 and attrs == {"available_mb": 531, "total_mb": 907}
+    assert hw.parse_memory_usage("") is None
 
 
 def test_throttled_parse():
@@ -52,7 +53,7 @@ FILES = {hw.THERMAL: "51000", hw.UPTIME: "3600.0 1.0", hw.LOADAVG: "2.00 1.50 1.
          hw.MEMINFO: "MemTotal:         929456 kB\nMemFree:  100 kB\nMemAvailable:     543744 kB\n"}
 ST = type("St", (), {"f_blocks": 1000, "f_bfree": 550, "f_bavail": 500, "f_frsize": 4096})()
 LEGACY = {"undervoltage_now": False, "undervoltage_since_boot": False, "heat_limited": False, "cpu_clock": 1200,
-          "memory_available": 531, "memory_total": 907, "sd_usage": 47}
+          "sd_usage": 47}
 
 
 def fake_run(devices):
@@ -77,11 +78,23 @@ def fake_run(devices):
 
 def test_sample_wifi_only():
     out = hw.sample(read=FILES.__getitem__, run=fake_run("eth0:ethernet:unavailable\nwlan0:wifi:connected\n"),
-                    now=lambda: NOW, cores=lambda: 4, statvfs=lambda: ST)
-    assert out == {"cpu_temperature": 51.0, "cpu_load": 50.0, "throttled": False,
+                    now=lambda: NOW, statvfs=lambda: ST)
+    assert out == {"cpu_temperature": 51.0, "throttled": False, "memory_usage": 41.5,
+                   "memory_usage_attributes": {"available_mb": 531, "total_mb": 907},
                    "uptime_since": "2026-10-29T11:00:00+00:00", **LEGACY,
                    "network_interface": "wifi", "ip_address": "192.0.2.15", "wifi_ip_address": "192.0.2.15",
                    "mac_address": "B8:27:EB:00:00:01", "wifi_ssid": "ExampleNet", "wifi_signal": -48}
+
+
+def test_sample_cpu_usage_needs_two_samples():
+    files = dict(FILES, **{hw.STAT: "cpu  100 0 100 700 100 0 0 0 0 0\n"})
+    u = CpuUsage()
+    first = hw.sample(read=files.__getitem__, run=fake_run(""), now=lambda: NOW, cpu=u, with_network=False)
+    assert "cpu_usage" not in first and "cpu_usage_attributes" not in first
+    files[hw.STAT] = "cpu  150 0 150 750 150 0 0 0 0 0\n"
+    second = hw.sample(read=files.__getitem__, run=fake_run(""), now=lambda: NOW, cpu=u, with_network=False)
+    assert second["cpu_usage"] == 50.0
+    assert second["cpu_usage_attributes"] == {"load_1m": 2.0, "load_5m": 1.5, "load_15m": 1.0}
 
 
 def test_sample_signal_falls_back_to_nmcli_percent():
@@ -132,9 +145,8 @@ def test_sample_survives_missing_sources():
 
 def test_descriptors_network_only_with_nmcli():
     keys = {d["key"] for d in hw.descriptors(network=False)}
-    assert keys == {"cpu_temperature", "cpu_load", "throttled", "uptime_since", "undervoltage_now",
-                    "undervoltage_since_boot", "heat_limited", "cpu_clock", "memory_available", "memory_total",
-                    "sd_usage"}
+    assert keys == {"cpu_temperature", "cpu_usage", "throttled", "uptime_since", "undervoltage_now",
+                    "undervoltage_since_boot", "heat_limited", "cpu_clock", "memory_usage", "sd_usage"}
     d = {x["key"]: x for x in hw.descriptors(network=True)}
     assert d["throttled"]["platform"] == "binary_sensor" and d["throttled"]["device_class"] == "problem"
     assert d["wifi_signal"]["device_class"] == "signal_strength" and d["wifi_signal"]["unit"] == "dBm"
@@ -160,3 +172,13 @@ def test_wifi_ssid_is_diagnostic_and_disabled_by_default():
     d = {x["key"]: x for x in hw.descriptors(network=True)}
     assert d["wifi_ssid"]["category"] == "diagnostic" and d["wifi_ssid"]["enabled_default"] is False
     assert d["wifi_signal"].get("enabled_default", True) is True
+
+
+def test_hardware_descriptors_names_and_categories():
+    d = {x["key"]: x for x in hw.descriptors(network=True)}
+    assert d["cpu_usage"]["name"] == "CPU Usage" and d["cpu_usage"]["unit"] == "%"
+    assert d["cpu_usage"]["state_class"] == "measurement"
+    assert d["memory_usage"]["name"] == "Memory Usage" and d["memory_usage"]["unit"] == "%"
+    assert not {"cpu_load", "memory_available", "memory_total"} & set(d)
+    shown = [x for x in d.values() if not x.get("hidden")]  # the hidden Wi-Fi button is a command, not a sensor
+    assert all(x.get("category") in ("config", "diagnostic") for x in shown)

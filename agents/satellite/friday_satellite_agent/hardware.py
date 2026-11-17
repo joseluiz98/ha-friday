@@ -1,5 +1,8 @@
 """Hardware and network readings of the satellite (Raspberry Pi), sampled every 30 s.
 
+CPU Usage and Memory Usage follow the Windows Task Manager: percent of time busy (from /proc/stat deltas, see
+friday_agent_core.cpu) and percent of memory in use; the load average only survives as an attribute of CPU Usage.
+
 Everything that touches the system goes through injectable readers so the parsing is testable.
 """
 
@@ -11,12 +14,15 @@ import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 
+from friday_agent_core.cpu import CpuUsage, parse_loadavg
+
 from .wifi import _split, nmcli_available
 
 SAMPLE_S = 30
 THERMAL = "/sys/class/thermal/thermal_zone0/temp"
 UPTIME = "/proc/uptime"
 LOADAVG = "/proc/loadavg"
+STAT = "/proc/stat"
 WIRELESS = "/proc/net/wireless"
 MEMINFO = "/proc/meminfo"
 IFACE_TYPES = {"ethernet": "ethernet", "wifi": "wifi"}
@@ -26,14 +32,6 @@ def parse_cpu_temperature(text: str) -> float | None:
     try:
         return round(int(text.strip()) / 1000, 1)
     except ValueError:
-        return None
-
-
-def parse_cpu_load(text: str, ncpu: int) -> float | None:
-    """1-min load average as % of the cores: the same formula as the server's vm_cpu_load_pct."""
-    try:
-        return round(100 * float(text.split()[0]) / max(ncpu, 1), 1)
-    except (ValueError, IndexError):
         return None
 
 
@@ -60,14 +58,28 @@ def parse_clock_mhz(text: str) -> int | None:
     return None if m is None else int(m.group(1)) // 1_000_000
 
 
-def parse_meminfo_mb(text: str, field: str) -> int | None:
+def _meminfo_kb(text: str, field: str) -> int | None:
     for line in text.splitlines():
         if line.startswith(field + ":"):
             try:
-                return int(line.split()[1]) // 1024
+                return int(line.split()[1])
             except (IndexError, ValueError):
                 return None
     return None
+
+
+def parse_meminfo_mb(text: str, field: str) -> int | None:
+    kb = _meminfo_kb(text, field)
+    return None if kb is None else kb // 1024
+
+
+def parse_memory_usage(meminfo: str) -> tuple[float, dict] | None:
+    """Memory in use like the Task Manager: (MemTotal - MemAvailable) / MemTotal in %, plus the MB as attributes."""
+    total = _meminfo_kb(meminfo, "MemTotal")
+    available = _meminfo_kb(meminfo, "MemAvailable")
+    if not total or available is None:
+        return None
+    return round(100 * (total - available) / total, 1), {"available_mb": available // 1024, "total_mb": total // 1024}
 
 
 def disk_usage_pct(st) -> int | None:
@@ -138,8 +150,12 @@ def _run(argv: list[str]) -> str:
 
 
 def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), with_network=True,
-           cores=os.cpu_count, statvfs=lambda: os.statvfs("/")) -> dict:
-    """One reading. A missing source simply leaves its key out (the entity stays at its last value)."""
+           statvfs=lambda: os.statvfs("/"), *, cpu: CpuUsage | None = None) -> dict:
+    """One reading. A missing source simply leaves its key out (the entity stays at its last value).
+
+    `cpu` keeps the previous /proc/stat sample between calls; without it (or on the first call) there is no
+    `cpu_usage` key, so the entity is never fed a made-up 0.
+    """
     out: dict = {}
 
     def attempt(key, fn):
@@ -151,7 +167,16 @@ def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), wi
             out[key] = value
 
     attempt("cpu_temperature", lambda: parse_cpu_temperature(read(THERMAL)))
-    attempt("cpu_load", lambda: parse_cpu_load(read(LOADAVG), cores() or 1))
+    if cpu is not None:
+        try:
+            usage = cpu.update(read(STAT))
+            load = parse_loadavg(read(LOADAVG)) if usage is not None else None
+        except Exception:  # noqa: BLE001
+            usage = load = None
+        if usage is not None:
+            out["cpu_usage"] = usage
+            if load is not None:
+                out["cpu_usage_attributes"] = load
     try:
         throttled = run(["vcgencmd", "get_throttled"])  # one call feeds the summary and the flags
     except Exception:  # noqa: BLE001
@@ -160,8 +185,12 @@ def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), wi
     out.update(parse_throttle_flags(throttled))
     attempt("uptime_since", lambda: parse_boot_time(read(UPTIME), now()))
     attempt("cpu_clock", lambda: parse_clock_mhz(run(["vcgencmd", "measure_clock", "arm"])))
-    attempt("memory_available", lambda: parse_meminfo_mb(read(MEMINFO), "MemAvailable"))
-    attempt("memory_total", lambda: parse_meminfo_mb(read(MEMINFO), "MemTotal"))
+    try:
+        memory = parse_memory_usage(read(MEMINFO))
+    except Exception:  # noqa: BLE001
+        memory = None
+    if memory is not None:
+        out["memory_usage"], out["memory_usage_attributes"] = memory
     attempt("sd_usage", lambda: disk_usage_pct(statvfs()))
     if not with_network:
         return out
@@ -206,38 +235,38 @@ def descriptors(network: bool | None = None) -> list[dict]:
     network = nmcli_available() if network is None else network
     d = [
         {"key": "cpu_temperature", "platform": "sensor", "name": "CPU temperature", "unit": "°C",
-         "device_class": "temperature", "state_class": "measurement"},
-        {"key": "cpu_load", "platform": "sensor", "name": "CPU load", "unit": "%", "icon": "mdi:cpu-64-bit",
-         "state_class": "measurement"},
-        {"key": "throttled", "platform": "binary_sensor", "name": "Throttled", "device_class": "problem"},
-        {"key": "uptime_since", "platform": "sensor", "name": "Up since", "device_class": "timestamp"},
+         "device_class": "temperature", "state_class": "measurement", "category": "diagnostic"},
+        {"key": "cpu_usage", "platform": "sensor", "name": "CPU Usage", "unit": "%", "icon": "mdi:cpu-64-bit",
+         "state_class": "measurement", "category": "diagnostic"},
+        {"key": "throttled", "platform": "binary_sensor", "name": "Throttled", "device_class": "problem",
+         "category": "diagnostic"},
+        {"key": "uptime_since", "platform": "sensor", "name": "Up since", "device_class": "timestamp",
+         "category": "diagnostic"},
         # from the old status page (satelite-status.sh, retired 16/11)
         {"key": "undervoltage_now", "platform": "binary_sensor", "name": "Undervoltage", "device_class": "problem",
-         "icon": "mdi:flash-alert"},
+         "icon": "mdi:flash-alert", "category": "diagnostic"},
         {"key": "undervoltage_since_boot", "platform": "binary_sensor", "name": "Undervoltage since boot",
          "device_class": "problem", "icon": "mdi:flash-alert-outline", "category": "diagnostic"},
         {"key": "heat_limited", "platform": "binary_sensor", "name": "Limited by heat", "device_class": "problem",
-         "icon": "mdi:thermometer-alert"},
+         "icon": "mdi:thermometer-alert", "category": "diagnostic"},
         {"key": "cpu_clock", "platform": "sensor", "name": "CPU clock", "unit": "MHz", "device_class": "frequency",
          "state_class": "measurement", "category": "diagnostic"},
-        {"key": "memory_available", "platform": "sensor", "name": "Memory available", "unit": "MB",
-         "device_class": "data_size", "state_class": "measurement", "icon": "mdi:memory"},
-        {"key": "memory_total", "platform": "sensor", "name": "Memory total", "unit": "MB",
-         "device_class": "data_size", "category": "diagnostic", "enabled_default": False},
+        {"key": "memory_usage", "platform": "sensor", "name": "Memory Usage", "unit": "%", "icon": "mdi:memory",
+         "state_class": "measurement", "category": "diagnostic"},
         {"key": "sd_usage", "platform": "sensor", "name": "SD card usage", "unit": "%", "icon": "mdi:sd",
-         "state_class": "measurement"},
+         "state_class": "measurement", "category": "diagnostic"},
     ]
     if network:
         d += [
             {"key": "network_interface", "platform": "sensor", "name": "Network interface",
-             "device_class": "enum", "options": ["ethernet", "wifi"]},
-            {"key": "ip_address", "platform": "sensor", "name": "IP address"},
+             "device_class": "enum", "options": ["ethernet", "wifi"], "category": "diagnostic"},
+            {"key": "ip_address", "platform": "sensor", "name": "IP address", "category": "diagnostic"},
             {"key": "mac_address", "platform": "sensor", "name": "MAC address", "category": "diagnostic"},
             {"key": "wifi_ip_address", "platform": "sensor", "name": "Wi-Fi IP address", "category": "diagnostic"},
             {"key": "wifi_ssid", "platform": "sensor", "name": "Wi-Fi network", "category": "diagnostic",
              "enabled_default": False},
             {"key": "wifi_signal", "platform": "sensor", "name": "Wi-Fi signal", "unit": "dBm",
-             "device_class": "signal_strength", "state_class": "measurement"},
+             "device_class": "signal_strength", "state_class": "measurement", "category": "diagnostic"},
             {"key": "wifi_change", "platform": "sensor", "name": "Wi-Fi change", "device_class": "enum",
              "options": ["idle", "running", "ok", "rolled_back"], "category": "diagnostic"},
             {"key": "wifi_set", "platform": "button", "name": "Change Wi-Fi", "hidden": True,
