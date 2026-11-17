@@ -254,10 +254,9 @@ class Satelite:
                 veredito = {"verdict": "go", "reason": "error"}
             self._espera_disputa_s = time.monotonic() - t0
             if veredito.get("verdict") == "lost":
-                if self._estado_do_claim == "alarme" and self.maestro.estado == "alarme":
-                    self._despachar("palavra_perdida", valor)  # a outra responde; aqui o alarme para, sem conversa
-                else:
-                    self._restaurar_luz()  # com conversa aberta nada mudou: a luz já é a dela
+                # o perdedor age como se nunca tivesse ouvido a palavra, em qualquer estado: com alarme tocando ele
+                # segue tocando (a luz já é a do alarme; _restaurar_luz só age parada, pelo filtro do mudo)
+                self._restaurar_luz()
             elif not self._palavra_ainda_vale(valor):
                 # durante a espera o mundo mudou (campainha, timer, mudo, conversa que fechou): a palavra ficou velha
                 print(json.dumps({"arbitration": "stale", "estado": self.maestro.estado}), flush=True)
