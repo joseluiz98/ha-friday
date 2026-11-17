@@ -17,7 +17,7 @@ PRIORIDADE = ("alarm", "updating", "error", "setup", "speak", "listen", "think",
               "off")
 
 # nomes do maestro (hardware.BITS_DO_ANEL) -> estado
-ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "cerebro": "think", "nao_perturbe": "dnd", "alarme": "alarm",
+ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "falando": "speak", "cerebro": "think", "nao_perturbe": "dnd", "alarme": "alarm",
                      "rede_esgotada": "net_error"}
 
 # calibrar na chegada (18–27/11): valores de partida, não medidos
@@ -188,7 +188,8 @@ class Contagem:
 
 
 # Jabra: estado -> nome do relatório HID de hoje (hardware.BITS_DO_ANEL)
-_JABRA = {"off": "parada", "listen": "ouvindo", "speak": "ouvindo", "think": "cerebro", "dnd": "nao_perturbe",
+# speak = recado do cérebro com o microfone fechado (M4): a luz do cérebro, não a de ouvindo
+_JABRA = {"off": "parada", "listen": "ouvindo", "speak": "cerebro", "think": "cerebro", "dnd": "nao_perturbe",
           "alarm": "alarme", "setup": "cerebro", "updating": "cerebro", "error": "alarme", "muted": "parada",
           "net_error": "alarme", "update_pending": "cerebro"}  # o Jabra não tem amarelo: update_pending = luz do setup
 

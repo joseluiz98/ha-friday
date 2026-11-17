@@ -228,8 +228,14 @@ class TestJabra(unittest.TestCase):
         r = ring.JabraRing(j)
         for estado in ("off", "listen", "speak", "think", "dnd", "alarm", "setup", "updating", "error", "muted"):
             r.show(estado, 90)
-        self.assertEqual(j.nomes, ["parada", "ouvindo", "ouvindo", "cerebro", "nao_perturbe", "alarme", "cerebro",
-                                   "cerebro", "alarme", "parada"])
+        self.assertEqual(j.nomes, ["parada", "ouvindo", "cerebro", "cerebro", "nao_perturbe", "alarme", "cerebro",
+                                   "cerebro", "alarme", "parada"])  # M4: speak (recado, mic fechado) = luz do cérebro
+
+    def test_delivery_light_from_the_maestro(self):  # M4
+        self.assertEqual(ring.ESTADO_DO_MAESTRO["falando"], "speak")
+        j = Jabra()
+        ring.JabraRing(j).show_maestro(ring.ESTADO_DO_MAESTRO["falando"])
+        self.assertEqual(j.nomes, ["cerebro"])
 
     def test_update_pending_is_a_known_state(self):
         self.assertEqual(ring.ESTADOS[-1], "update_pending")
