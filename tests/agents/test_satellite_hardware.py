@@ -1,5 +1,6 @@
 """Hardware/network readings, mute and turn-sounds mapping of the satellite agent."""
 
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -146,7 +147,8 @@ def test_sample_survives_missing_sources():
 def test_descriptors_network_only_with_nmcli():
     keys = {d["key"] for d in hw.descriptors(network=False)}
     assert keys == {"cpu_temperature", "cpu_usage", "throttled", "uptime_since", "undervoltage_now",
-                    "undervoltage_since_boot", "heat_limited", "cpu_clock", "memory_usage", "sd_usage"}
+                    "undervoltage_since_boot", "heat_limited", "cpu_clock", "memory_usage", "sd_usage",
+                    "undervoltage_events"}
     d = {x["key"]: x for x in hw.descriptors(network=True)}
     assert d["throttled"]["platform"] == "binary_sensor" and d["throttled"]["device_class"] == "problem"
     assert d["wifi_signal"]["device_class"] == "signal_strength" and d["wifi_signal"]["unit"] == "dBm"
@@ -182,3 +184,102 @@ def test_hardware_descriptors_names_and_categories():
     assert not {"cpu_load", "memory_available", "memory_total"} & set(d)
     shown = [x for x in d.values() if not x.get("hidden")]  # the hidden Wi-Fi button is a command, not a sensor
     assert all(x.get("category") in ("config", "diagnostic") for x in shown)
+
+
+J1 = "x\nhwmon hwmon1: Undervoltage detected!\ny\nhwmon hwmon1: Undervoltage detected!\n-- cursor: s=1;i=10\n"
+J2 = "hwmon hwmon1: Undervoltage detected!\n-- cursor: s=1;i=11\n"
+BASE = ["journalctl", "-k", "-b", "-o", "cat", "--no-pager", "--show-cursor"]
+
+
+def journal(*outputs):
+    """A fake `run` that answers each call with the next output and records the argv."""
+    calls, queue = [], list(outputs)
+
+    def run(argv):
+        calls.append(argv)
+        out = queue.pop(0)
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+    run.calls = calls
+    return run
+
+
+def counter(tmp_path, run, boot="boot-a"):
+    return hw.UndervoltageCounter(run=run, read=lambda p: boot, path=str(tmp_path / "uv.json"))
+
+
+def test_parse_journal():
+    assert hw.parse_journal(J1) == (2, "s=1;i=10")
+    assert hw.parse_journal("") == (0, None)
+
+
+def test_counts_incrementally_after_cursor(tmp_path):
+    run = journal(J1, J2)
+    c = counter(tmp_path, run)
+    assert c.sample() == 2
+    assert c.sample() == 3
+    assert run.calls[0] == BASE
+    assert run.calls[1] == BASE + ["--after-cursor", "s=1;i=10"]
+
+
+def test_no_new_lines_keeps_count_and_cursor(tmp_path):
+    run = journal(J1, "", "")
+    c = counter(tmp_path, run)
+    assert c.sample() == 2
+    assert c.sample() == 2
+    assert c.sample() == 2
+    assert run.calls[2] == BASE + ["--after-cursor", "s=1;i=10"]
+    assert json.loads((tmp_path / "uv.json").read_text()) == {"boot_id": "boot-a", "cursor": "s=1;i=10", "count": 2}
+
+
+def test_unreadable_kernel_log_is_none_not_zero(tmp_path):
+    # no permission to read the kernel log (user without the adm group): empty output and no cursor
+    c = counter(tmp_path, journal(""))
+    assert c.sample() is None
+    assert not (tmp_path / "uv.json").exists()
+
+
+def test_resumes_after_agent_restart(tmp_path):
+    assert counter(tmp_path, journal(J1)).sample() == 2
+    run = journal(J2)
+    assert counter(tmp_path, run).sample() == 3  # never re-reads from boot
+    assert run.calls[0] == BASE + ["--after-cursor", "s=1;i=10"]
+
+
+def test_new_boot_starts_from_zero(tmp_path):
+    counter(tmp_path, journal(J1), boot="boot-a").sample()
+    run = journal(J2)
+    assert counter(tmp_path, run, boot="boot-b").sample() == 1
+    assert run.calls[0] == BASE
+
+
+def test_corrupt_state_file_starts_over(tmp_path):
+    (tmp_path / "uv.json").write_text("{not json")
+    run = journal(J1)
+    assert counter(tmp_path, run).sample() == 2
+    assert run.calls[0] == BASE
+
+
+def test_run_failure_is_none(tmp_path):
+    counter(tmp_path, journal(J1)).sample()
+    before = (tmp_path / "uv.json").read_text()
+    assert counter(tmp_path, journal(OSError("journalctl"))).sample() is None
+    assert (tmp_path / "uv.json").read_text() == before
+
+
+def test_sample_reports_undervoltage_events(tmp_path):
+    out = hw.sample(read=FILES.__getitem__, run=fake_run(""), now=lambda: NOW, with_network=False,
+                    undervoltage=counter(tmp_path, journal(J1)))
+    assert out["undervoltage_events"] == 2
+    out = hw.sample(read=FILES.__getitem__, run=fake_run(""), now=lambda: NOW, with_network=False,
+                    undervoltage=counter(tmp_path / "x", journal("")))
+    assert "undervoltage_events" not in out
+
+
+def test_undervoltage_events_descriptor():
+    d = {x["key"]: x for x in hw.descriptors(network=False)}
+    assert d["undervoltage_events"] == {
+        "key": "undervoltage_events", "platform": "sensor", "name": "Undervoltage events",
+        "state_class": "total_increasing", "icon": "mdi:flash-alert", "category": "diagnostic"}

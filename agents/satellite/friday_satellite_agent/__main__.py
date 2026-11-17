@@ -332,9 +332,11 @@ async def main() -> None:
 
     async def hardware_loop() -> None:
         cpu_usage = CpuUsage()  # one for the whole run: CPU Usage is the difference between two samples
+        undervoltage = hw.UndervoltageCounter()
         while True:
             try:
-                changes = await hw.sample_async(with_network=wifi.nmcli_available(), cpu=cpu_usage)
+                changes = await hw.sample_async(with_network=wifi.nmcli_available(), cpu=cpu_usage,
+                                                undervoltage=undervoltage)
                 memo["state"].update(changes)
                 await core.push_state(changes, "agent")
             except Exception as err:  # noqa: BLE001

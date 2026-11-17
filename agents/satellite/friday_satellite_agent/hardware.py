@@ -9,6 +9,7 @@ Everything that touches the system goes through injectable readers so the parsin
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import subprocess
@@ -25,6 +26,8 @@ LOADAVG = "/proc/loadavg"
 STAT = "/proc/stat"
 WIRELESS = "/proc/net/wireless"
 MEMINFO = "/proc/meminfo"
+BOOT_ID = "/proc/sys/kernel/random/boot_id"
+UNDERVOLTAGE_STATE = os.path.expanduser("~/.friday-agent/undervoltage.json")
 IFACE_TYPES = {"ethernet": "ethernet", "wifi": "wifi"}
 
 
@@ -149,8 +152,69 @@ def _run(argv: list[str]) -> str:
     return subprocess.run(argv, capture_output=True, text=True, timeout=5, check=False).stdout
 
 
+def parse_journal(text: str) -> tuple[int, str | None]:
+    """(lines saying `Undervoltage detected`, cursor of the last `-- cursor: <c>` line or None)."""
+    count, cursor = 0, None
+    for line in text.splitlines():
+        if line.startswith("-- cursor: "):
+            cursor = line[len("-- cursor: "):].strip() or None
+        elif "Undervoltage detected" in line:
+            count += 1
+    return count, cursor
+
+
+class UndervoltageCounter:
+    """Kernel `Undervoltage detected` messages since boot, read incrementally from the journal.
+
+    State {boot_id, cursor, count} survives an agent restart (every OTA restarts it): the count resumes from the
+    saved cursor instead of re-reading the whole boot, since a smaller recount (journald rotated) would look like a
+    reset to the total_increasing statistics. A new boot starts again from zero. No permission to read the kernel
+    log gives empty output with no cursor: the value is then None (unknown), never 0.
+    """
+
+    BASE = ["journalctl", "-k", "-b", "-o", "cat", "--no-pager", "--show-cursor"]
+
+    def __init__(self, run=_run, read=_read_file, path: str = UNDERVOLTAGE_STATE) -> None:
+        self._run, self._read, self._path = run, read, path
+
+    def _load(self, boot_id: str) -> tuple[str | None, int]:
+        try:
+            with open(self._path, encoding="utf-8") as f:
+                st = json.load(f)
+            if st["boot_id"] == boot_id and isinstance(st["cursor"], str) and isinstance(st["count"], int):
+                return st["cursor"], st["count"]
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        return None, 0
+
+    def _save(self, boot_id: str, cursor: str, count: int) -> None:
+        try:
+            os.makedirs(os.path.dirname(self._path), exist_ok=True)
+            tmp = self._path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"boot_id": boot_id, "cursor": cursor, "count": count}, f)
+            os.replace(tmp, self._path)
+        except OSError:
+            pass  # the next sample resumes from the older cursor: the same total, just read again
+
+    def sample(self) -> int | None:
+        try:
+            boot_id = self._read(BOOT_ID).strip()
+            cursor, count = self._load(boot_id)
+            argv = self.BASE + (["--after-cursor", cursor] if cursor else [])
+            found, new_cursor = parse_journal(self._run(argv))
+        except Exception:  # noqa: BLE001 - journalctl missing, timeout, unreadable boot id
+            return None
+        if new_cursor is None:
+            return count if cursor else None  # nothing new since the saved cursor / kernel log unreadable
+        count += found
+        self._save(boot_id, new_cursor, count)
+        return count
+
+
 def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), with_network=True,
-           statvfs=lambda: os.statvfs("/"), *, cpu: CpuUsage | None = None) -> dict:
+           statvfs=lambda: os.statvfs("/"), *, cpu: CpuUsage | None = None,
+           undervoltage: UndervoltageCounter | None = None) -> dict:
     """One reading. A missing source simply leaves its key out (the entity stays at its last value).
 
     `cpu` keeps the previous /proc/stat sample between calls; without it (or on the first call) there is no
@@ -192,6 +256,8 @@ def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), wi
     if memory is not None:
         out["memory_usage"], out["memory_usage_attributes"] = memory
     attempt("sd_usage", lambda: disk_usage_pct(statvfs()))
+    if undervoltage is not None:
+        attempt("undervoltage_events", undervoltage.sample)
     if not with_network:
         return out
     devices = parse_devices(run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"]))
@@ -255,6 +321,8 @@ def descriptors(network: bool | None = None) -> list[dict]:
          "state_class": "measurement", "category": "diagnostic"},
         {"key": "sd_usage", "platform": "sensor", "name": "SD card usage", "unit": "%", "icon": "mdi:sd",
          "state_class": "measurement", "category": "diagnostic"},
+        {"key": "undervoltage_events", "platform": "sensor", "name": "Undervoltage events",
+         "state_class": "total_increasing", "icon": "mdi:flash-alert", "category": "diagnostic"},
     ]
     if network:
         d += [
