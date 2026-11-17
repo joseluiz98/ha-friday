@@ -18,6 +18,7 @@ THERMAL = "/sys/class/thermal/thermal_zone0/temp"
 UPTIME = "/proc/uptime"
 LOADAVG = "/proc/loadavg"
 WIRELESS = "/proc/net/wireless"
+MEMINFO = "/proc/meminfo"
 IFACE_TYPES = {"ethernet": "ethernet", "wifi": "wifi"}
 
 
@@ -40,6 +41,40 @@ def parse_throttled(text: str) -> bool | None:
     """`throttled=0x50005` -> True; `throttled=0x0` -> False (problem = any flag set)."""
     m = re.search(r"0x([0-9a-fA-F]+)", text)
     return None if m is None else int(m.group(1), 16) != 0
+
+
+def parse_throttle_flags(text: str) -> dict:
+    """The bits the old status page showed (vcgencmd get_throttled): 0 undervoltage now, 16 undervoltage since boot,
+    1-3 clock limited / throttled / soft temperature limit now (at ~85 °C bit 1 is the heat, not the power supply)."""
+    m = re.search(r"0x([0-9a-fA-F]+)", text)
+    if m is None:
+        return {}
+    v = int(m.group(1), 16)
+    return {"undervoltage_now": bool(v & 0x1), "undervoltage_since_boot": bool(v & 0x10000),
+            "heat_limited": bool(v & 0xE)}
+
+
+def parse_clock_mhz(text: str) -> int | None:
+    """`frequency(48)=1200000000` -> 1200."""
+    m = re.search(r"=(\d+)", text)
+    return None if m is None else int(m.group(1)) // 1_000_000
+
+
+def parse_meminfo_mb(text: str, field: str) -> int | None:
+    for line in text.splitlines():
+        if line.startswith(field + ":"):
+            try:
+                return int(line.split()[1]) // 1024
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+def disk_usage_pct(st) -> int | None:
+    """Used % of the root filesystem, like `df` (blocks free to non-root users count as free)."""
+    used = (st.f_blocks - st.f_bfree) * st.f_frsize
+    avail = st.f_bavail * st.f_frsize
+    return None if used + avail <= 0 else round(100 * used / (used + avail))
 
 
 def parse_boot_time(uptime_text: str, now: datetime) -> str | None:
@@ -103,7 +138,7 @@ def _run(argv: list[str]) -> str:
 
 
 def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), with_network=True,
-           cores=os.cpu_count) -> dict:
+           cores=os.cpu_count, statvfs=lambda: os.statvfs("/")) -> dict:
     """One reading. A missing source simply leaves its key out (the entity stays at its last value)."""
     out: dict = {}
 
@@ -117,14 +152,28 @@ def sample(read=_read_file, run=_run, now=lambda: datetime.now(timezone.utc), wi
 
     attempt("cpu_temperature", lambda: parse_cpu_temperature(read(THERMAL)))
     attempt("cpu_load", lambda: parse_cpu_load(read(LOADAVG), cores() or 1))
-    attempt("throttled", lambda: parse_throttled(run(["vcgencmd", "get_throttled"])))
+    try:
+        throttled = run(["vcgencmd", "get_throttled"])  # one call feeds the summary and the flags
+    except Exception:  # noqa: BLE001
+        throttled = ""
+    attempt("throttled", lambda: parse_throttled(throttled))
+    out.update(parse_throttle_flags(throttled))
     attempt("uptime_since", lambda: parse_boot_time(read(UPTIME), now()))
+    attempt("cpu_clock", lambda: parse_clock_mhz(run(["vcgencmd", "measure_clock", "arm"])))
+    attempt("memory_available", lambda: parse_meminfo_mb(read(MEMINFO), "MemAvailable"))
+    attempt("memory_total", lambda: parse_meminfo_mb(read(MEMINFO), "MemTotal"))
+    attempt("sd_usage", lambda: disk_usage_pct(statvfs()))
     if not with_network:
         return out
-    found = main_interface(parse_devices(run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"])))
+    devices = parse_devices(run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"]))
+    found = main_interface(devices)
     if found is None:
         return out
     dev, kind = found
+    wlan = next((d for d, t, st in devices if t == "wifi" and st == "connected"), None)
+    if wlan is not None:  # the doorbell's fallback when the cable does not answer (spec 2026-10-12 D9)
+        attempt("wifi_ip_address",
+                lambda: run(["nmcli", "-g", "IP4.ADDRESS", "device", "show", wlan]).split("/")[0].strip() or None)
     out["network_interface"] = kind
     attempt("ip_address", lambda: run(["nmcli", "-g", "IP4.ADDRESS", "device", "show", dev]).split("/")[0].strip() or None)
     attempt("mac_address", lambda: run(["nmcli", "-g", "GENERAL.HWADDR", "device", "show", dev])
@@ -162,6 +211,21 @@ def descriptors(network: bool | None = None) -> list[dict]:
          "state_class": "measurement"},
         {"key": "throttled", "platform": "binary_sensor", "name": "Throttled", "device_class": "problem"},
         {"key": "uptime_since", "platform": "sensor", "name": "Up since", "device_class": "timestamp"},
+        # from the old status page (satelite-status.sh, retired 16/11)
+        {"key": "undervoltage_now", "platform": "binary_sensor", "name": "Undervoltage", "device_class": "problem",
+         "icon": "mdi:flash-alert"},
+        {"key": "undervoltage_since_boot", "platform": "binary_sensor", "name": "Undervoltage since boot",
+         "device_class": "problem", "icon": "mdi:flash-alert-outline", "category": "diagnostic"},
+        {"key": "heat_limited", "platform": "binary_sensor", "name": "Limited by heat", "device_class": "problem",
+         "icon": "mdi:thermometer-alert"},
+        {"key": "cpu_clock", "platform": "sensor", "name": "CPU clock", "unit": "MHz", "device_class": "frequency",
+         "state_class": "measurement", "category": "diagnostic"},
+        {"key": "memory_available", "platform": "sensor", "name": "Memory available", "unit": "MB",
+         "device_class": "data_size", "state_class": "measurement", "icon": "mdi:memory"},
+        {"key": "memory_total", "platform": "sensor", "name": "Memory total", "unit": "MB",
+         "device_class": "data_size", "category": "diagnostic", "enabled_default": False},
+        {"key": "sd_usage", "platform": "sensor", "name": "SD card usage", "unit": "%", "icon": "mdi:sd",
+         "state_class": "measurement"},
     ]
     if network:
         d += [
@@ -169,6 +233,7 @@ def descriptors(network: bool | None = None) -> list[dict]:
              "device_class": "enum", "options": ["ethernet", "wifi"]},
             {"key": "ip_address", "platform": "sensor", "name": "IP address"},
             {"key": "mac_address", "platform": "sensor", "name": "MAC address", "category": "diagnostic"},
+            {"key": "wifi_ip_address", "platform": "sensor", "name": "Wi-Fi IP address", "category": "diagnostic"},
             {"key": "wifi_ssid", "platform": "sensor", "name": "Wi-Fi network", "category": "diagnostic",
              "enabled_default": False},
             {"key": "wifi_signal", "platform": "sensor", "name": "Wi-Fi signal", "unit": "dBm",

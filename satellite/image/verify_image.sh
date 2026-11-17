@@ -43,7 +43,7 @@ $SUDO test -L "$MNT/etc/systemd/system/timers.target.wants/friday-sync-recording
 $SUDO test -L "$MNT/etc/systemd/system/timers.target.wants/friday-netwatch.timer" || bad "netwatch timer not enabled"
 has /etc/systemd/system/friday-netwatch.service; has $PROG/netwatch.py
 $SUDO grep -q '^StateDirectory=friday-netwatch' "$MNT/etc/systemd/system/friday-netwatch.service" || bad "netwatch StateDirectory (network recovery state)"
-$SUDO test -L "$MNT/etc/systemd/system/timers.target.wants/satelite-status.timer" && bad "satelite-status.timer must stay disabled (needs the house webhook id)"
+$SUDO test -e "$MNT/etc/systemd/system/satelite-status.timer" && bad "satelite-status was retired (16/11): the agent reports the health"
 $SUDO grep -q 'ConditionPathExists=!/etc/friday-satelite/.firstboot-done' "$MNT/etc/systemd/system/friday-firstboot.service" || bad "firstboot condition"
 $SUDO grep -q 'Before=.*friday-satelite.service' "$MNT/etc/systemd/system/friday-firstboot.service" || bad "firstboot ordering"
 

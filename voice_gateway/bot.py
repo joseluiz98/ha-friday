@@ -129,7 +129,11 @@ ATIVIDADE = act.Activity(os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/sta
 VOICE_ENABLED_ARQ = os.environ.get("FRIDAY_VOICE_ENABLED_FILE", "/srv/friday/state/voice-enabled")  # global voice switch (HA integration)
 TELEGRAM_JOSE = os.environ.get("FRIDAY_TELEGRAM_JOSE", "")
 PRESENCA_JOSE = local_config.get("FRIDAY_OWNER_PERSON")
-STATUS_SATELITE = "sensor.satelite_ultimo_contato"  # atributo ip_wifi (spec D9)
+# spec D9: IP do Wi-Fi do satélite, para a campainha quando o cabo não responde. Desde 16/11 vem da integração
+# (o agente do satélite); o webhook antigo (satelite-status.sh) foi aposentado.
+def entidades_ip_wifi(sid: str) -> tuple:
+    base = "sensor.friday_" + sid.replace("-", "_")
+    return (base + "_wifi_ip_address", base + "_ip_address")
 ENTREGAS = cc.Entregas()
 
 SYSTEM_INSTRUCTION = """Você é a Sexta-feira, a assistente de voz da casa do {DONO}. Fale sempre em português
@@ -445,10 +449,14 @@ class DepsCanal:
         return (await estado_ha(PRESENCA_JOSE)).get("state")
 
     async def ip_wifi(self, sid):
-        try:
-            return (await estado_ha(STATUS_SATELITE)).get("attributes", {}).get("ip_wifi") or None
-        except Exception:
-            return None
+        for entidade in entidades_ip_wifi(sid):
+            try:
+                ip = (await estado_ha(entidade)).get("state")
+            except Exception:
+                continue
+            if ip and ip not in ("unknown", "unavailable"):
+                return ip
+        return None
 
     async def campainha(self, ip, senha, eid):
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as session:
