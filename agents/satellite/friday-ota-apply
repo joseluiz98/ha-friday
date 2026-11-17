@@ -56,7 +56,7 @@ LEGACY_VENV = f"{R}/home/jose/oww"
 # system/ file -> where it goes (mode); anything else in system/ is ignored
 SYSTEM = {
     ".service": (f"{R}/etc/systemd/system", 0o644), ".timer": (f"{R}/etc/systemd/system", 0o644),
-    "asound.conf": (f"{R}/etc", 0o644),
+    "jabra.conf": (f"{R}/etc/friday-satelite/asound", 0o644), "xvf3800.conf": (f"{R}/etc/friday-satelite/asound", 0o644),
     "sync_recordings.sh": (f"{R}/home/jose/satelite-sync", 0o755),
     "friday-agent-apply": (f"{R}/usr/local/sbin", 0o755), "friday-wifi-apply": (f"{R}/usr/local/sbin", 0o755),
     "friday-ota-apply": (f"{R}/usr/local/sbin", 0o755),

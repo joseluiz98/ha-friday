@@ -29,7 +29,10 @@ install -D -m 0644 $P/files/etc/journald-50-persistente.conf /etc/systemd/journa
 install -D -m 0644 $P/files/etc/99-respeaker.rules /etc/udev/rules.d/99-respeaker.rules
 install -D -m 0644 $P/files/etc/70-jabra-satelite.rules /etc/udev/rules.d/70-jabra-satelite.rules  # hidraw do Jabra para o grupo plugdev (botão, anel)
 install -D -m 0644 $P/files/etc/tmpfiles-friday-gravacoes.conf /etc/tmpfiles.d/friday-gravacoes.conf
-install -m 0644 $P/asound.conf /etc/asound.conf
+# one ALSA file per audio board; /etc/asound.conf points to the board in use (Jabra until friday-audio-select runs)
+install -D -m 0644 $P/asound/jabra.conf /etc/friday-satelite/asound/jabra.conf
+install -D -m 0644 $P/asound/xvf3800.conf /etc/friday-satelite/asound/xvf3800.conf
+ln -sfn /etc/friday-satelite/asound/jabra.conf /etc/asound.conf
 mkdir -p /var/log/journal
 
 echo "== program, models, sounds"
@@ -72,7 +75,9 @@ PY
   visudo -cf $U/sudoers.friday-satellite-agent >/dev/null
   install -m 0440 $U/sudoers.friday-satellite-agent /etc/sudoers.d/friday-satellite-agent
   for h in friday-wifi-apply friday-agent-apply friday-ota-apply; do install -m 0755 $U/$h /usr/local/sbin/$h; done
-  install -m 0644 $U/asound.conf /etc/asound.conf
+  install -D -m 0644 $U/jabra.conf /etc/friday-satelite/asound/jabra.conf
+  install -D -m 0644 $U/xvf3800.conf /etc/friday-satelite/asound/xvf3800.conf
+  ln -sfn /etc/friday-satelite/asound/jabra.conf /etc/asound.conf
   install -m 0755 $U/sync_recordings.sh $H/satelite-sync/sync_recordings.sh
 else
   # old layout (a manual stage without --package): program in ~/satelite, agent in /opt/friday-satellite-agent

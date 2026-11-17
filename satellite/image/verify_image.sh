@@ -25,9 +25,11 @@ for f in $PROG/friday_satelite.py $PROG/firstboot.py $PROG/netwatch.py $PROG/net
          $PROG/vendor/xvf_host.py /home/jose/satelite/sons/onboarding /home/jose/modelos/friday.onnx \
          $PY /home/jose/satelite-sync/sync_recordings.sh $AGENT/friday_satellite_agent/__main__.py \
          $AGENT/friday_agent_core/server.py /usr/local/sbin/friday-agent-apply \
-         /usr/local/sbin/friday-wifi-apply /etc/asound.conf /etc/udev/rules.d/99-respeaker.rules \
+         /usr/local/sbin/friday-wifi-apply /etc/friday-satelite/asound/jabra.conf /etc/friday-satelite/asound/xvf3800.conf \
+         /etc/udev/rules.d/99-respeaker.rules \
          /etc/NetworkManager/conf.d/wifi-powersave.conf /etc/systemd/journald.conf.d/50-persistente.conf \
          /etc/sudoers.d/010-jose-nopasswd /home/jose/.ssh/authorized_keys; do has "$f"; done
+$SUDO test -L "$MNT/etc/asound.conf" || bad "/etc/asound.conf is not a symlink to the board file"
 $SUDO grep -q 'wifi.powersave = 2' "$MNT/etc/NetworkManager/conf.d/wifi-powersave.conf" || bad "wifi powersave"
 $SUDO grep -q 'SystemMaxUse=500M' "$MNT/etc/systemd/journald.conf.d/50-persistente.conf" || bad "journal size"
 [ "$($SUDO stat -c %a "$MNT/home/jose/.ssh/authorized_keys" 2>/dev/null)" = 600 ] || bad "authorized_keys mode"

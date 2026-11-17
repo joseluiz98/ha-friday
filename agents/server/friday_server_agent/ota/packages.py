@@ -20,7 +20,7 @@ from typing import Callable
 from .. import provisioning as pv
 
 SATELLITE_PATHS = [
-    "satellite/program", "satellite/migrations", "satellite/asound.conf", "satellite/sync",
+    "satellite/program", "satellite/migrations", "satellite/audio", "satellite/sync",
     "agents/satellite/friday_satellite_agent", "agents/satellite/friday-satellite-agent.service",
     "agents/satellite/sudoers.friday-satellite-agent", "agents/satellite/friday-agent-apply",
     "agents/satellite/friday-wifi-apply", "agents/satellite/friday-ota-apply", "agents/satellite/requirements.lock",
@@ -29,7 +29,8 @@ SATELLITE_PATHS = [
 SERVER_PATHS = ["agents", "server", "voice_gateway", "brain", "scripts", "tools/wakeword", "custom_components", "ota",
                 "vault/manifest.json"]
 # repo path (file or folder) -> folder inside system/; only unit files, helpers and configs the Pi installs as root
-SYSTEM_SOURCES = ["satellite/program", "satellite/sync", "satellite/asound.conf",
+SYSTEM_SOURCES = ["satellite/program", "satellite/sync", "satellite/audio/jabra.conf",
+                  "satellite/audio/xvf3800.conf",
                   "agents/satellite/friday-satellite-agent.service", "agents/satellite/sudoers.friday-satellite-agent",
                   "agents/satellite/friday-agent-apply", "agents/satellite/friday-wifi-apply",
                   "agents/satellite/friday-ota-apply"]
