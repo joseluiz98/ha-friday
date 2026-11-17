@@ -185,11 +185,13 @@ def exigir_endereco(cfg: dict, casa: str = CASA) -> None:
 
 def carregar(caminho: str, casa: str = CASA) -> dict:
     cfg = dict(PADROES)
-    cfg.update(_casa(casa))
+    da_casa = _casa(casa)
+    cfg.update(da_casa)
     if os.path.exists(caminho):
         with open(caminho) as f:
             gravado = json.load(f)
-        cfg.update(gravado)
+        # 17/11: o firstboot grava PADROES (endereco_friday null) no config.json; um null ali não apaga o valor da casa
+        cfg.update({k: v for k, v in gravado.items() if not (v is None and da_casa.get(k) is not None)})
         # sons: mescla, senão um config.json antigo (só inicio/fim/erro) apagaria os sons novos
         cfg["sons"] = dict(PADROES["sons"], **(gravado.get("sons") or {}))
     if not cfg.get("senha_porta_local"):
