@@ -44,9 +44,16 @@ def find_hacs_update_entity(hass: HomeAssistant) -> str | None:
     """The entity_id of the HACS update entity of this repository, found in the registry (never a fixed id: the user
     may have renamed it). HACS keys the entity by the repository's numeric id, so the repository is looked up in
     HACS itself when the unique_id does not carry the name."""
-    candidates = [e for e in er.async_get(hass).entities.values() if e.platform == "hacs" and e.domain == "update"]
+    # 17/11: HA 2026.11 replaced HACS by the Marketplace (platform "marketplace", unique_id = GitHub repository id)
+    candidates = [e for e in er.async_get(hass).entities.values()
+                  if e.platform in ("hacs", "marketplace") and e.domain == "update"]
     for e in candidates:
         if HACS_REPO in e.unique_id:
+            return e.entity_id
+    for e in candidates:  # the entity's release link names the repository on both platforms
+        st = hass.states.get(e.entity_id)
+        url = str(st.attributes.get("release_url") or "") if st else ""
+        if f"github.com/{HACS_REPO}/" in url:
             return e.entity_id
     try:
         repo_id = hass.data["hacs"].repositories.get_by_full_name(HACS_REPO).data.id

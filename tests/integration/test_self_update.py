@@ -66,6 +66,19 @@ async def test_hacs_entity_found_through_repository_id(hass, installs):
     assert installs[0].data["entity_id"] == ent.entity_id
 
 
+async def test_marketplace_entity_found_through_release_url(hass, installs):
+    # 17/11: HA 2026.11 replaced HACS by the Marketplace; the update entity is platform "marketplace", keyed by the
+    # GitHub repository id, and the self-update stopped finding it (stuck on 0.3.5 while the agents were on 0.3.8)
+    ent = er.async_get(hass).async_get_or_create("update", "marketplace", "1451840658", suggested_object_id="friday_update")
+    hass.states.async_set(ent.entity_id, "off", {"installed_version": "v0.3.5",
+                          "release_url": f"https://github.com/{REPO}/releases/tag/v0.3.5"})
+    other = er.async_get(hass).async_get_or_create("update", "marketplace", "42", suggested_object_id="other")
+    hass.states.async_set(other.entity_id, "off", {"installed_version": "v1.0.0",
+                          "release_url": "https://github.com/somebody/else/releases/tag/v1.0.0"})
+    assert await self_update.maybe_self_update(hass, "v0.3.8", "0.3.5") == "installing"
+    assert installs[0].data["entity_id"] == ent.entity_id and installs[0].data["version"] == "v0.3.8"
+
+
 async def test_same_tag_not_installed_twice(hass, installs):
     _hacs_entity(hass)
     assert await self_update.maybe_self_update(hass, "v0.3.0", "0.2.1") == "installing"
