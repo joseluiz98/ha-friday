@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import sim
 
@@ -86,6 +87,52 @@ class TailTest(unittest.TestCase):
     def test_day_is_sao_paulo(self):
         # 2026-11-16 02:00 UTC is still 11-15 23:00 in Sao Paulo (UTC-3)
         self.assertEqual(sim.day_file_name(1_794_794_400.0), "2026-11-15.ndjson")
+
+
+class TailPermissionTest(unittest.TestCase):
+    """Final review 16/11: /srv/friday/state is 0700 root on the VM. Unreadable must fail loudly (non-zero exit with
+    a clear message), never poll [] forever; a file or directory that does not exist yet is still fine."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.now = 1_800_000_000.0
+
+    def assert_loud(self, cm):
+        msg = str(cm.exception.code)
+        self.assertIn("permission", msg.lower())
+        self.assertIn("sudo", msg)
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_unreadable_at_startup_exits(self):
+        with mock.patch.object(sim.os, "stat", side_effect=PermissionError(13, "denied")):
+            with self.assertRaises(SystemExit) as cm:
+                sim.RoundLogTail(self.tmp.name, clock=lambda: self.now)
+        self.assert_loud(cm)
+
+    def test_unreadable_on_poll_exits(self):
+        t = sim.RoundLogTail(self.tmp.name, clock=lambda: self.now)
+        with open(os.path.join(self.tmp.name, sim.day_file_name(self.now)), "w") as f:
+            f.write(line(event="round_opened", round_id="r1", sid="sat-aaaaaa"))
+        with mock.patch("builtins.open", side_effect=PermissionError(13, "denied")):
+            with self.assertRaises(SystemExit) as cm:
+                t.poll()
+        self.assert_loud(cm)
+
+    def test_stat_denied_on_poll_exits(self):
+        t = sim.RoundLogTail(self.tmp.name, clock=lambda: self.now)
+        with mock.patch.object(sim.os, "stat", side_effect=PermissionError(13, "denied")):
+            with self.assertRaises(SystemExit) as cm:
+                t.poll()
+        self.assert_loud(cm)
+
+    def test_missing_directory_is_tolerated(self):
+        t = sim.RoundLogTail(os.path.join(self.tmp.name, "not-yet"), clock=lambda: self.now)
+        self.assertEqual(t.poll(), [])
+        self.assertEqual(t.poll(), [])
+
+    def test_gateway_client_docstring_matches_the_lock(self):
+        self.assertNotIn("Not thread-safe", sim.GatewayClient.__doc__)
 
 
 class LoopStepTest(unittest.TestCase):
