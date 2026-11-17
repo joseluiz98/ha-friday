@@ -8,7 +8,7 @@
     "satellite": ["satellite/program", "satellite/migrations", "satellite/asound.conf", "satellite/sync",
                   "satellite/status", "agents/satellite", "agents/common", "vault/manifest.json"],
     "server-agent": ["agents/server", "agents/common", "scripts/vault.py", "vault/manifest.json"],
-    "server": ["server/status", "server/essentials", "server/cataloger", "server/cost", "server/aec", "server/asr",
+    "server": ["server/status", "server/essentials", "server/cataloger", "server/cost", "server/aec", "server/asr", "server/browser",
                "server/systemd", "server/install.sh", "voice_gateway/local_config.py"],
     "voice-gateway": ["voice_gateway", "scripts/lib"],
     "brain-skills": ["brain"],

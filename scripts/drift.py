@@ -88,7 +88,7 @@ def _vm() -> str:
 # (repo prefix, install dir, options, check extras)
 PLANS = {
     "vm": [("voice_gateway/", "/srv/friday/app", dict(skip=("install.sh",)), False),
-           *[(f"server/{d}/", f"/opt/friday/{d}", {}, False) for d in ("status", "essentials", "cataloger", "cost", "aec", "asr")],
+           *[(f"server/{d}/", f"/opt/friday/{d}", {}, False) for d in ("status", "essentials", "cataloger", "cost", "aec", "asr", "browser")],
            ("server/image/", "/opt/friday/image", dict(skip=("install.sh",)), False),
            ("agents/server/friday_server_agent/", "/opt/friday/agent/friday_server_agent", {}, True),
            ("agents/common/friday_agent_core/", "/opt/friday/agent/friday_agent_core", {}, True),
