@@ -122,6 +122,9 @@ def main() -> int:
     now = time.time()
     procs = scan()
     state, close = decide(load(STATE) or {}, procs, load(ACTIVITY), now)
+    if close and brain_busy(load(ACTIVITY), time.time()):   # a turn started while we were scanning: re-check right before acting
+        close = False
+        state["last_active"] = time.time()
     if close:
         result = close_browser()
         print(f"browser-idle: idle >= {IDLE_SECONDS}s with {len(procs)} Chromium processes -> {result}", flush=True)
