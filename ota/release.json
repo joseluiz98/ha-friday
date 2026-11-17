@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "protocol": {"satellite": 1, "server": 1, "update": 1},
+  "protocol": {"satellite": 1, "server": 2, "update": 1},
   "min_protocol": {"satellite": 1},
-  "requires": {"satellite": {"server": 1}},
+  "requires": {"satellite": {"server": 2}},
   "heavy": ["container"],
   "components": {
     "satellite": ["satellite/program", "satellite/migrations", "satellite/asound.conf", "satellite/sync",
