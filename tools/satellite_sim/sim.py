@@ -60,9 +60,19 @@ class RoundLogTail:
         return os.path.join(self._dir, day_file_name(self._clock()))
 
     @staticmethod
-    def _size(path):
+    def _denied(path, e):
+        """Unreadable log = the claim loop would never claim: stop with a clear message instead of polling [] forever.
+        On the VM /srv/friday/state is 0700 and the logs 0600, owned by root (the container writes them)."""
+        return SystemExit(f"permission denied reading {path} ({type(e).__name__}): the arbitration log is root-only "
+                          "on the VM, run the simulator with sudo")
+
+    def _size(self, path):
         try:
             return os.stat(path).st_size
+        except FileNotFoundError:
+            return 0  # not written yet (no round today, or the directory does not exist yet)
+        except PermissionError as e:
+            raise self._denied(path, e)
         except OSError:
             return 0
 
@@ -79,6 +89,8 @@ class RoundLogTail:
             with open(path, "rb") as f:
                 f.seek(self._offset)
                 data = f.read(size - self._offset)
+        except PermissionError as e:
+            raise self._denied(path, e)
         except OSError:
             return []
         self._offset += len(data)
@@ -126,7 +138,8 @@ def read_token(path):
 class GatewayClient:
     """POST JSON with the satellite Bearer token over one keep-alive connection (so the TLS handshake does not
     eat the 200 ms window). `post` never raises and never exposes the token: it returns (None, {"error":
-    <exception class>}) on failure. Not thread-safe: use one client per thread."""
+    <exception class>}) on failure. Thread-safe: a lock serializes the threads sharing one client (the claim loop
+    sends presence through the claim client to keep its connection warm)."""
 
     def __init__(self, gateway, token, conn_factory=None, timeout_s=CLAIM_TIMEOUT_S):
         self._token = token
