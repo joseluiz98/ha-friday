@@ -17,6 +17,12 @@ class FridaySwitch(FridayEntity, SwitchEntity):
         self._attr_device_class = descriptor.device_class
 
     @property
+    def available(self) -> bool:
+        """A switch with no value is `unavailable`, not `unknown`: the frontend draws two lightning-bolt buttons
+        for `unknown`/`assumed_state` and a greyed-out switch for `unavailable` (spec 2026-11-17-diagnostic-sensors)."""
+        return super().available and self._value is not None
+
+    @property
     def is_on(self):
         value = self._value
         return None if value is None else bool(value)

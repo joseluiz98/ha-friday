@@ -45,12 +45,44 @@ async def _stop(hass, entry, agent):
     await agent.stop()
 
 
-async def test_switch_without_value_is_unknown_and_available(hass):
-    """Documents the pre-0.3.8 behavior (the cause of the two bolts); Task 10 turns it into `unavailable`."""
+async def _push(hass, agent, changes):
+    await agent.sockets[0].send_json({"type": "state", "changes": changes, "origin": "test"})
+    await hass.async_block_till_done()
+
+
+async def test_switch_without_value_is_unavailable(hass):
+    """Without a value the switch is greyed out (no bolts), and it never claims `assumed_state`."""
     agent = FakeAgent(_hello("satellite", "sat1", [MUTE]))
     entry = await _setup(hass, agent, "satellite")
     st = hass.states.get("switch.friday_sat1_mute")
-    assert st.state == "unknown" and "assumed_state" not in st.attributes
+    assert st.state == "unavailable" and "assumed_state" not in st.attributes
+    await _stop(hass, entry, agent)
+
+
+async def test_switch_becomes_available_when_the_value_arrives(hass):
+    agent = FakeAgent(_hello("satellite", "sat1", [MUTE]))
+    entry = await _setup(hass, agent, "satellite")
+    assert hass.states.get("switch.friday_sat1_mute").state == "unavailable"
+    await _push(hass, agent, {"mute": False})
+    await wait_for(lambda: hass.states.get("switch.friday_sat1_mute").state == "off")
+    await _push(hass, agent, {"mute": None})
+    await wait_for(lambda: hass.states.get("switch.friday_sat1_mute").state == "unavailable")
+    await _stop(hass, entry, agent)
+
+
+async def test_explicit_none_is_unavailable(hass):
+    agent = FakeAgent(_hello("satellite", "sat1", [MUTE], {"mute": None}))
+    entry = await _setup(hass, agent, "satellite")
+    assert hass.states.get("switch.friday_sat1_mute").state == "unavailable"
+    await _stop(hass, entry, agent)
+
+
+async def test_disconnected_agent_is_still_unavailable(hass):
+    agent = FakeAgent(_hello("satellite", "sat1", [MUTE], {"mute": True}))
+    entry = await _setup(hass, agent, "satellite")
+    assert hass.states.get("switch.friday_sat1_mute").state == "on"
+    await agent.sockets[0].close()
+    await wait_for(lambda: hass.states.get("switch.friday_sat1_mute").state == "unavailable")
     await _stop(hass, entry, agent)
 
 
@@ -62,18 +94,20 @@ async def test_switch_with_value_is_on(hass):
     await _stop(hass, entry, agent)
 
 
-async def test_voice_enabled_has_its_own_value(hass):
-    """Mirrors 17/11: `voice_enabled` is on while the program's own switches have no value."""
-    agent = FakeAgent(_hello("satellite", "sat1", [MUTE, VOICE_ENABLED], {"voice_enabled": True}))
+async def test_voice_program_stays_available_with_program_off(hass):
+    """`voice_enabled` carries its own value (False when the program is stopped): it is how the owner turns it on."""
+    agent = FakeAgent(_hello("satellite", "sat1", [MUTE, VOICE_ENABLED], {"voice_enabled": False}))
     entry = await _setup(hass, agent, "satellite")
-    assert hass.states.get("switch.friday_sat1_voice_enabled").state == "on"
-    assert hass.states.get("switch.friday_sat1_mute").state == "unknown"
+    assert hass.states.get("switch.friday_sat1_voice_enabled").state == "off"
+    assert hass.states.get("switch.friday_sat1_mute").state == "unavailable"
     await _stop(hass, entry, agent)
 
 
-async def test_server_switches_without_value(hass):
+async def test_server_switches_follow_the_same_rule(hass):
     agent = FakeAgent(_hello("server", "server", [SERVER_VOICE, SERVER_OTA], {"ota_auto_install": False}))
     entry = await _setup(hass, agent, "server")
-    assert hass.states.get("switch.friday_server_voice").state == "unknown"
+    assert hass.states.get("switch.friday_server_voice").state == "unavailable"
     assert hass.states.get("switch.friday_server_ota_auto_install").state == "off"
+    await _push(hass, agent, {"voice": True})
+    await wait_for(lambda: hass.states.get("switch.friday_server_voice").state == "on")
     await _stop(hass, entry, agent)
