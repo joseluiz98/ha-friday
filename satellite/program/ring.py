@@ -12,6 +12,9 @@ import contextlib, io, math, os, sys, threading
 ESTADOS = ("off", "listen", "think", "speak", "dnd", "alarm", "setup", "updating", "error", "muted", "net_error",
            "update_pending")
 
+# o que os comandos de fora (agente: OTA, setup) põem na camada externa; o resto só como prévia (M7)
+ESTADOS_DE_FORA = ("off", "setup", "updating", "error")
+
 # a base de maior prioridade primeiro (spec 2026-11-16); o mudo não entra: é indicador por cima
 PRIORIDADE = ("alarm", "updating", "error", "setup", "speak", "listen", "think", "net_error", "dnd", "update_pending",
               "off")

@@ -223,6 +223,15 @@ class TestProvisionamento(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertEqual(ef, [])
 
+    def test_conversation_states_from_outside_are_a_preview(self):  # M7
+        # agente antigo (antes da v0.3.7) manda a prévia sem `preview`; interrompida, ela prenderia a camada externa
+        for estado in ("listen", "think", "speak", "dnd", "alarm", "muted", "net_error", "update_pending"):
+            r, ef = self.run_(acao="ring", state=estado)
+            self.assertEqual((r["ok"], ef), (True, [("anel_previa", estado)]), estado)
+        for estado in ("off", "setup", "updating", "error"):
+            r, ef = self.run_(acao="ring", state=estado)
+            self.assertEqual(ef, [("anel", estado)], estado)
+
     def test_update_pending_command_toggles_ring(self):
         for ligado in (True, False):
             r, ef = self.run_(acao="update_pending", ligado=ligado)

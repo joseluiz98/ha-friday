@@ -91,6 +91,9 @@ def executar(cmd: dict, ctl, timers, agora: float, vozes=None, sons_dir=None, es
             if cmd.get("state") not in ring.ESTADOS and not (previa and cmd.get("state") is None):
                 raise ValueError(f"state é um de {list(ring.ESTADOS)}")
             r = {}
+            # M7: de fora só vêm setup/updating/off/error; outro estado sem `preview` é a prévia de um agente antigo,
+            # e como prévia a próxima luz da conversa a desfaz (na camada externa ficaria presa)
+            previa = previa or cmd.get("state") not in ring.ESTADOS_DE_FORA
             efeitos.append(("anel_previa" if previa else "anel", cmd.get("state")))
         elif acao == "ring_countdown":  # 06/11: confirmação do reset de fábrica; seconds 0 cancela
             seg, atraso = cmd.get("seconds", 0), cmd.get("delay_s", 0)
