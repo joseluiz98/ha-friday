@@ -167,7 +167,9 @@ serviço, e `program_state` estava `off`.
 - **Ligar com o programa impedido de subir** (por exemplo, o `ExecCondition` pula o serviço): o agente roda o
   `systemctl start`, espera até `START_WAIT_S = 30` s o programa responder; se não responder, o switch assenta em
   `off` e o agente manda uma entrada de log ("Voice program did not start: …") com o motivo lido de
-  `systemctl show friday-satelite -p ActiveState -p SubState -p Result` (leitura sem `sudo`; a sudoers não muda).
+  `systemctl show friday-satelite -p ActiveState -p SubState -p Result` (leitura sem `sudo`; a sudoers não muda). Confirmado no MK1 em 17/11: o `ExecCondition` deixa
+  `Result=exec-condition` (`ConditionResult=no`, `ActiveState=inactive`, `SubState=dead`), e o motivo registrado é
+  "voice program skipped: start condition not met (no supported audio device)".
 - **Desligar:** a espera de cortesia de até 120 s por uma conversa aberta continua; durante a espera o switch mostra o
   estado real (`on` enquanto o programa roda) e vai a `off` quando o programa para.
 - **Restart do agente:** o switch nasce de `program_state` (que começa `off` até o primeiro `refresh`), não do arquivo.

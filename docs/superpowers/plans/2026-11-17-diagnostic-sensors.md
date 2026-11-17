@@ -491,8 +491,13 @@ programa roda").
     "-p", "Result"]` (sem `sudo`; `test_argv_are_exact_sudoers_commands` e a sudoers ficam iguais).
   - `Power.set_voice(True)` passa a devolver `{"ok": True, "running": bool}`: depois do `START`, consulta
     `self._state()` a cada 1 s (via `self._sleep`) até `START_WAIT_S`; sem subir, chama
-    `self._log(f"Voice program did not start: {reason}")`, com `reason` = saída de `SHOW` numa linha (`runner`
-    injetável que devolve texto: `show_runner`, padrão com `asyncio.create_subprocess_exec` e stdout capturado).
+    `self._log(f"Voice program did not start: {reason}")`. `reason` vem de `start_failure_reason(show_text: str) -> str`
+    (pura, em `power.py`) sobre a saída de `SHOW` (`runner` injetável que devolve texto: `show_runner`, padrão com
+    `asyncio.create_subprocess_exec` e stdout capturado). Confirmado ao vivo no MK1 em 17/11 (programa pulado pelo
+    `ExecCondition` só-Jabra): `Result=exec-condition`, `ConditionResult=no`, `ActiveState=inactive`,
+    `SubState=dead`, `ExecMainStatus=0`; journal "friday-satelite.service: Skipped due to 'exec-condition'."
+    Mapeamento: `Result=exec-condition` → `"voice program skipped: start condition not met (no supported audio
+    device)"`; qualquer outro → a saída de `SHOW` numa linha (`ActiveState=… SubState=… Result=…`).
   - `persist()`, `startup()` e a espera de 120 s do desligamento não mudam.
 - `__main__.py`: `voice_enabled` deixa de vir de `power.enabled`. Em todo `refresh`, depois de calcular
   `program_state`, `voice_enabled = power.voice_running(program_state)` entra em `changes` (só empurra se mudou,
@@ -504,8 +509,12 @@ programa roda").
   - `test_on_when_program_runs` (main): status do programa responde → `voice_enabled is True`.
   - `test_off_when_stopped_even_with_intent_on` (main): arquivo `on`, programa não responde → `voice_enabled is False`.
   - `test_start_refused_settles_off_and_logs` (power): `START` devolve 0, `program_state` fica `off`;
-    `set_voice(True)` → `{"ok": True, "running": False}`, `_sleep` chamado `START_WAIT_S` vezes, um log que começa com
-    `"Voice program did not start: "` e contém a saída falsa de `SHOW` (`"ActiveState=inactive"`); arquivo = `on`.
+    `SHOW` falso devolve `"ActiveState=inactive\nSubState=dead\nResult=exec-condition\n"`; `set_voice(True)` →
+    `{"ok": True, "running": False}`, `_sleep` chamado `START_WAIT_S` vezes, exatamente um log igual a
+    `"Voice program did not start: voice program skipped: start condition not met (no supported audio device)"`;
+    arquivo = `on`.
+  - `test_start_failure_reason`: `Result=exec-condition` → o texto acima; `"ActiveState=failed\nSubState=failed\nResult=exit-code\n"`
+    → `"ActiveState=failed SubState=failed Result=exit-code"`.
   - `test_start_ok_no_log` (power): `program_state` vira `idle` na 3ª consulta → `running True`, nenhum log.
   - `test_off_shows_real_state_during_courtesy_wait` (main): conversa aberta; comando off → `voice_enabled` continua
     `True` enquanto `program_state` é `conversation`; ao parar (`off`) → `False`; arquivo = `off`.
@@ -516,5 +525,5 @@ programa roda").
 - [ ] **Step 4: Run** o mesmo comando e `tests/agents/` inteiro — PASS.
 - [ ] **Step 5: Commit** `feat(satellite): Voice Program switch shows whether the program runs`
 - [ ] **Step 6 (na prova do alpha, Tarefa 8):** no MK1 sem Jabra, ligar o switch → volta a `off` em ~30 s e o logbook
-  do aparelho mostra "Voice program did not start: …" com o `Result` real (conferir o texto que o systemd dá para o
-  `ExecCondition`; ajustar só a mensagem, se preciso). Acrescentar esta linha ao "Promotion gate (stable)" do PR.
+  do aparelho mostra "Voice program did not start: voice program skipped: start condition not met (no supported
+  audio device)". Acrescentar esta linha ao "Promotion gate (stable)" do PR.
