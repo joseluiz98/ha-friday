@@ -835,19 +835,20 @@ class TestDisputa(Base):
         self.assertEqual(len(F.conexoes), n)
         self.assertEqual(m.estado, "parada")
 
-    async def test_claim_lost_in_alarm_ends_the_alarm_silently(self):
-        """Final review 16/11 (item 2): the other satellite answers; this one still stops ringing, no conversation."""
+    async def test_claim_lost_in_alarm_keeps_the_alarm_ringing(self):
+        """Owner decision 16/11: the loser acts as if it never heard the word, in every state: the alarm keeps ringing."""
         d = self.disputa(outros=1, veredito="lost")
         self.s.evento("timer_venceu", {"id": "t1", "nome": "ovo", "duracao_s": 60, "termino": 0.0})
         self.assertEqual(self.s.maestro.estado, "alarme")
         self.s.evento("palavra", self.PALAVRA)
         await asyncio.sleep(0)
-        self.assertEqual(self.s.maestro.estado, "alarme")  # still ringing while the verdict is pending
+        self.assertEqual(self.s.maestro.estado, "alarme")
         self.assertTrue(d.claims[0]["busy"])
+        antes = list(F.sons)
         await self.solta(d)
-        self.assertEqual(self.s.maestro.estado, "parada")
+        self.assertEqual(self.s.maestro.estado, "alarme")  # still ringing, nothing ended it
         self.assertEqual(F.conexoes, [])
-        self.assertNotIn("inicio_a.wav", F.sons)
+        self.assertEqual(F.sons, antes)
         self.assertFalse(self.s._claim_pendente)
 
     async def test_claim_lost_after_the_alarm_ended_during_the_wait_only_restores_the_light(self):
