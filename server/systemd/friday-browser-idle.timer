@@ -1,0 +1,9 @@
+[Unit]
+Description=F.R.I.D.A.Y. - checks the brain Chromium for idleness every 2 min
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

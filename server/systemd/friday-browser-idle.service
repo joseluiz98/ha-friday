@@ -1,0 +1,11 @@
+# Closes the brain's headless Chromium after 10 min idle (it stays resident, ~1 GB, after the first use; OpenClaw has no
+# setting for it). Logic and the definition of idle: server/browser/browser_idle.py. Plan 2026-11-16 satellite arbitration, Task 11.
+[Unit]
+Description=F.R.I.D.A.Y. - closes the idle brain Chromium
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/friday/browser/browser_idle.py
+TimeoutStartSec=300
