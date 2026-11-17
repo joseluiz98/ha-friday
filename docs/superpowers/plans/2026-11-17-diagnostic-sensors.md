@@ -59,6 +59,9 @@ Outras worktrees do mesmo repo são de outras sessões: não tocar.
 5. **Sufixo de chave aposentada que pega chave viva** (`_remove_retired_entities` compara pelo fim do `unique_id`):
    nenhuma chave anunciada termina com `_<chave aposentada>` — teste na Tarefa 6.
 
+**Ordem de execução:** 1 → 2 → 3 → 4 → 5 → 6 → 9 → 10 → 11 → 7 (Steps 1–2). O push, o PR e as notas (Steps 3–4
+da Tarefa 7) ficam com a sessão principal, depois da revisão final. A Tarefa 8 só depois do alpha instalado.
+
 ---
 
 ### Task 1: Uso de CPU comum aos agentes
@@ -291,7 +294,8 @@ def test_every_descriptor_is_placed(kind, main):
     bad = [d["key"] for d in shown
            if (d["key"] in main) == (d.get("category") in ("config", "diagnostic"))]
     assert bad == []          # main keys have no category; every other key declares one
-    assert main <= {d["key"] for d in shown}   # the allowlist never goes stale    if kind == "satellite":   # 17/11: pressure shown exactly like temperature and humidity
+    assert main <= {d["key"] for d in shown}   # the allowlist never goes stale
+    if kind == "satellite":   # 17/11: pressure shown exactly like temperature and humidity
         by = {d["key"]: d for d in shown}
         assert by["room_pressure"]["state_class"] == by["room_humidity"]["state_class"] == "measurement"
         assert "category" not in by["room_pressure"] and by["room_pressure"]["device_class"] == "pressure"
@@ -463,6 +467,8 @@ Vem antes da Tarefa 7 na execução (entra na v0.3.8). Depende da Tarefa 9 só p
 - [ ] **Step 1: Failing tests:** switch com descriptor e sem chave no estado → `state == "unavailable"`; a chave
   chega (`push_state {"mute": False}`) → `"off"` e volta a disponível; `None` explícito no estado → `"unavailable"`;
   switch do servidor (`voice`) segue a mesma regra; agente desconectado continua `unavailable` (regra atual).
+  `voice_enabled` (Voice Program) continua **disponível** com o programa parado (tem valor `False` pela Tarefa 11):
+  é por ele que o dono religa o programa — teste `test_voice_program_stays_available_with_program_off`.
 - [ ] **Step 2: Run** — FAIL.
 - [ ] **Step 3: Implement** `available` = `super().available and self._value is not None`. Nada de `assumed_state`.
 - [ ] **Step 4: Run** a suíte de integração — PASS; atualizar a nota da Tarefa 8 com a prova ao vivo (programa do MK1
