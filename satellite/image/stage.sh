@@ -45,7 +45,6 @@ cp "$S/program/friday-firstboot.service" "$S/program/friday-satelite.service" "$
 cp "$S/program/friday-netwatch.service" "$S/program/friday-netwatch.timer" "$OUT/units/"
 cp "$A/satellite/friday-satellite-agent.service" "$OUT/units/"
 cp "$S/sync/friday-sync-recordings.service" "$S/sync/friday-sync-recordings.timer" "$OUT/units/"
-cp "$S/status/satelite-status.service" "$S/status/satelite-status.timer" "$S/status/satelite-status.sh" "$OUT/units/"
 cp "$S/sync/sync_recordings.sh" "$OUT/sync/"
 cp "$S/asound.conf" "$OUT/asound.conf"
 cp "$S/image/requirements.lock" "$OUT/"

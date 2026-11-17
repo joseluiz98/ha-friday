@@ -384,5 +384,18 @@ class TestMusicaDoAlarme(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(d.chamadas, [])
 
 
+
+class TestIpWifiDaIntegracao(unittest.TestCase):  # 16/11: o webhook antigo saiu; o IP vem do agente do satélite
+    def test_entidades_do_satelite(self):
+        import os
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")).read()
+        self.assertNotIn("sensor.satelite_ultimo_contato", src)
+        i = src.index("def entidades_ip_wifi")
+        trecho = src[i:i + 300]
+        self.assertIn('"sensor.friday_" + sid.replace("-", "_")', trecho)
+        self.assertIn('"_wifi_ip_address"', trecho)
+        self.assertIn('"_ip_address"', trecho)
+
+
 if __name__ == "__main__":
     unittest.main()

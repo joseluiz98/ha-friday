@@ -69,7 +69,7 @@ usuário `jose` (sem senha, só a chave do HA, sudo sem senha, grupos `audio`/`p
 do satélite de produção (`requirements.lock`, mais `spake2`, `pyusb`, `libusb-package`); modelos `friday`/`sexta_feira`
 (sem verificador); programa em `~/satelite`, agente em `/opt/friday-satellite-agent` (+ helpers e sudoers); unidades
 `friday-firstboot` (antes das outras duas), `friday-satelite`, `friday-satellite-agent`, `friday-sync-recordings.{service,timer}`;
-`satelite-status.{service,timer,sh}` instalados **sem habilitar** (precisam do `webhook_id` da casa); regra udev do XVF3800
+a saúde da Pi vai à integração pelo agente (o antigo `satelite-status`, por webhook, foi aposentado em 16/11); regra udev do XVF3800
 (VID 2886). `friday-netwatch.{service,timer}` (a cada 5 min) é a **recuperação automática da rede**, não um aviso:
 interface → NetworkManager → reboot (até 3 reboots da própria cadeia em 24 h, estado em `/var/lib/friday-netwatch/`),
 luz de erro persistente quando esgota, fala só com não perturbe desligado (spec 2026-11-08-satellite-network-resilience).
@@ -78,7 +78,6 @@ luz de erro persistente quando esgota, fala só com não perturbe desligado (spe
 - Rodar o build de fato (bloqueio de permissão na VM, acima) e validar hostname/Wi-Fi no cartão.
 - Perfil de áudio do XVF3800 (`asound.conf` próprio, fluxo silencioso pelo `dmix`) e calibração do anel: prova final de 18–27/11.
 - Frases pré-gravadas (`sons/onboarding/<key>.wav`, 48 kHz estéreo): Task 15.
-- `satelite-status`: habilitar quando o provisionamento souber entregar o `webhook_id`.
 
 ## Testes
 `cd /config/tools/satelite/imagem && python3 -m unittest -q tests.test_make_manifest tests.test_payload_check`
