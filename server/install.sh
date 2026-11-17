@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs the VM services from the repo tree this script sits in (run on the VM as root): status port, essentials
-# backup, cataloger (Lucid), cost, aec, asr and browser (idle Chromium closer) go to /opt/friday/<name> (files copied
-# over; of what is not in the repo only stale .py files are removed, so a module deleted from the repo stops being
+# backup, cataloger (Lucid), cost, aec, asr, browser (idle Chromium closer) and images (the images server wrapper) go
+# to /opt/friday/<name> (files copied over; of what is not in the repo only stale .py files are removed, so a module deleted from the repo stops being
 # importable), the systemd units to /etc/systemd/system. Restarts only the status
 # port (no conversation impact). The container image is its own component (server/image/install.sh).
 #   sudo FRIDAY_VERSION_LINE="<describe> <sha>" bash server/install.sh      (scripts/deploy.sh sets the line)
@@ -10,7 +10,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 OPT=${FRIDAY_OPT:-/opt/friday}
 UNITS=${FRIDAY_UNITS:-/etc/systemd/system}
 LINE=${FRIDAY_VERSION_LINE:?FRIDAY_VERSION_LINE missing (use scripts/deploy.sh)}
-for d in status essentials cataloger cost aec asr browser; do
+for d in status essentials cataloger cost aec asr browser images; do
   mkdir -p "$OPT/$d"
   for f in "$HERE/$d"/*; do
     n=$(basename "$f"); [ -f "$f" ] || continue
