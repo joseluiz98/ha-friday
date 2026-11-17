@@ -11,7 +11,7 @@ import volume_inicial
 from ducking import MusicDucker, SENDSPIN_STATUS, sendspin_playing, should_duck
 import comandos
 import configuracao as cfgmod
-from arbitragem import ClienteDisputa, novo_claim_id
+from arbitragem import ESPERA_DISPUTA_S, ClienteDisputa, novo_claim_id
 from conexao import ConexaoFriday
 from detectores import (DetectorBotaoTelefone, DetectorFala, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
                         MedidorEco, PicoDaFala, escolher_acao, portao_eco, rms_dbfs, trecho_do_episodio)
@@ -33,6 +33,9 @@ import volume as vol
 EVENTOS_QUE_ENVELHECEM_A_PALAVRA = ("botao", "mudo", "timer_venceu")
 ESTADOS_DE_CONVERSA = ("conectando", "ouvindo", "cortada", "aguardando")
 PEDACOS_JANELA_PALAVRA = 25  # ~2 s: a janela que a razão do sussurro, o piso de ruído e as gravações sempre usaram
+# Buffer da pré-gravação (final review 16/11): a maior pré-gravação que a config aceita (+4 pedaços da detecção), mais a
+# espera do veredito da disputa, mais 2 de folga (a espera medida passa um pouco de 0,3 s). 2 s -> 25 + 4 + 4 + 2 = 35.
+PEDACOS_RECENTES = int(cfgmod.PRE_GRAVACAO_MAX_S / 0.08) + 4 + math.ceil(ESPERA_DISPUTA_S / 0.08) + 2
 CFG = "/etc/friday-satelite/config.json"
 ID = "/etc/friday-satelite/id"
 SONS = "/home/jose/satelite/sons"
@@ -69,8 +72,8 @@ class Satelite:
         self.conversa_sussurrada = False
         self.fala_em_andamento = False
         self.piso_conversa = 0.0  # piso de ruído do trecho da palavra (spec 2026-10-20), usado na conversa sussurrada
-        # 29 = 25 (~2 s de pedaços de 80 ms) + 4: a espera do veredito da disputa (0,3 s) não pode abrir buraco na pré-gravação
-        self.recentes = collections.deque(maxlen=29)
+        # a espera do veredito da disputa (0,3 s) não pode abrir buraco na pré-gravação, nem na maior (ver PEDACOS_RECENTES)
+        self.recentes = collections.deque(maxlen=PEDACOS_RECENTES)
         # spec 2026-11-16: disputa entre satélites (quem ouviu melhor responde). Presença a cada 4 s no `principal`.
         self.disputa = ClienteDisputa(self.cfg.get("endereco_friday"), self.cfg.get("senha_porta_local", ""))
         self._estado_do_claim = None  # estado do maestro quando o aviso saiu: o veredito `go` só vale se ainda for esse

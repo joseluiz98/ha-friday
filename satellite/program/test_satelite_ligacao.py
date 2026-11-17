@@ -886,7 +886,22 @@ class TestDisputa(Base):
         self.assertEqual(self.s._voz_dbfs(), -120.0)
 
     async def test_recentes_keeps_the_wait(self):
-        self.assertEqual(self.s.recentes.maxlen, 29)
+        # final review 16/11: sized for the config's maximum pre-roll (2 s) plus the claim wait (0.3 s), with margin
+        import math, configuracao, arbitragem
+        minimo = int(configuracao.PRE_GRAVACAO_MAX_S / 0.08) + 4 + math.ceil(arbitragem.ESPERA_DISPUTA_S / 0.08)
+        self.assertGreaterEqual(minimo, 33)
+        self.assertGreaterEqual(self.s.recentes.maxlen, minimo)
+        self.assertEqual(configuracao._REGRAS["pre_gravacao_s"][2], configuracao.PRE_GRAVACAO_MAX_S)
+
+    async def test_preroll_at_the_config_maximum_covers_the_wait(self):
+        self.s.cfg = dict(self.s.cfg, pre_gravacao_s=2)
+        self.s.recentes.extend(bytes([i]) * 2 for i in range(60))
+        self.s._espera_disputa_s = 0.3
+        self.s._agir("conectar", {"wake_word": "friday"})
+        enviados = [b[0] for b in F.conexoes[-1].enviados]
+        n = int(2 / 0.08) + 4 + 4
+        self.assertEqual(len(enviados), n)  # nothing of the 2 s pre-roll is lost to the wait
+        self.assertEqual(enviados, list(range(60 - n, 60)))
 
 
 class TestPararFala(Base):

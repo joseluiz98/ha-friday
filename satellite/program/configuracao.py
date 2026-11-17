@@ -57,6 +57,7 @@ PADROES = {
     "gravar_ambiente_janela": None,
 }
 MODOS_PALAVRA = ("ativa", "sombra", "desligada")
+PRE_GRAVACAO_MAX_S = 2  # o programa dimensiona o buffer `recentes` por este máximo
 # chave -> (tipos aceitos, mínimo, máximo); a senha nunca é alterável pela porta
 _REGRAS = {
     "espera_inicial_s": ((int, float), 1, 30), "continuacao_s": ((int, float), 0, 60),
@@ -65,7 +66,7 @@ _REGRAS = {
     "janela_voz_palavra": ((int,), 1, 25),
     "volume": ((int,), 0, 11), "volume_alertas": ((int,), 1, 10),
     "volume_sons": ((int, float), -40, 0), "nao_perturbe": ((bool,), None, None),
-    "pre_gravacao_s": ((int, float), 0, 2), "gravar_ativacoes": ((bool,), None, None),
+    "pre_gravacao_s": ((int, float), 0, PRE_GRAVACAO_MAX_S), "gravar_ativacoes": ((bool,), None, None),
     "comodo": ((str,), 1, 40),  # texto: mínimo e máximo valem para o tamanho
     "espera_resposta_s": ((int, float), 2, 30),
     "verificador": ((str, type(None)), 1, 200), "limiar_verificador": ((int, float), 0.05, 0.99),
