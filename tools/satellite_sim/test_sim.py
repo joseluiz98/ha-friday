@@ -1,3 +1,4 @@
+import http.client
 import json
 import os
 import tempfile
@@ -167,6 +168,90 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(client.post("/satellite_presence", {}), (200, {"others_online": 1}))
         self.assertEqual(seen["headers"]["Authorization"], f"Bearer {TOKEN}")
         self.assertEqual((seen["method"], seen["path"]), ("POST", "/satellite_presence"))
+
+
+class _Resp:
+    status = 200
+
+    def __init__(self, data=b'{"verdict": "lost", "reason": "r", "round_id": "x"}'):
+        self._data = data
+
+    def read(self):
+        return self._data
+
+
+class _ScriptedConn:
+    """Replies per request: an exception instance is raised, anything else answers 200."""
+
+    def __init__(self, script, log):
+        self.script, self.log = list(script), log
+
+    def request(self, *a, **k):
+        self.log.append("request")
+        step = self.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+
+    def getresponse(self):
+        return _Resp()
+
+    def close(self):
+        pass
+
+
+def _factory(per_connection_scripts, log):
+    scripts = list(per_connection_scripts)
+
+    def make():
+        log.append("connect")
+        return _ScriptedConn(scripts.pop(0), log)
+    return make
+
+
+class RetryTest(unittest.TestCase):
+    def test_reused_connection_failure_is_retried_once_on_a_fresh_one(self):
+        log = []
+        # 1st connection: first call ok, then the server closed it while idle; 2nd connection works.
+        client = sim.GatewayClient("https://x:1", TOKEN, conn_factory=_factory(
+            [["ok", http.client.RemoteDisconnected("Bearer " + TOKEN)], ["ok"]], log))
+        self.assertEqual(client.post("/satellite_presence", {})[0], 200)
+        status, body = client.post("/wake_claim", {})
+        self.assertEqual((status, body["verdict"]), (200, "lost"))
+        self.assertEqual(log.count("connect"), 2)
+
+    def test_fresh_connection_failure_is_not_retried(self):
+        log = []
+        client = sim.GatewayClient("https://x:1", TOKEN, conn_factory=_factory(
+            [[ConnectionResetError(TOKEN)], ["ok"]], log))
+        status, body = client.post("/wake_claim", {})
+        self.assertIsNone(status)
+        self.assertEqual(body, {"error": "ConnectionResetError"})
+        self.assertEqual((log.count("connect"), log.count("request")), (1, 1))
+
+    def test_reused_connection_failing_twice_gives_error_without_token(self):
+        log = []
+        client = sim.GatewayClient("https://x:1", TOKEN, conn_factory=_factory(
+            [["ok", BrokenPipeError(TOKEN)], [BrokenPipeError(TOKEN)]], log))
+        client.post("/satellite_presence", {})
+        status, body = client.post("/wake_claim", {})
+        self.assertEqual((status, body), (None, {"error": "BrokenPipeError"}))
+        self.assertEqual(log.count("connect"), 2)  # one retry only
+
+    def test_non_connection_error_on_reused_connection_is_not_retried(self):
+        log = []
+        client = sim.GatewayClient("https://x:1", TOKEN, conn_factory=_factory(
+            [["ok", TimeoutError()], ["ok"]], log))
+        client.post("/satellite_presence", {})
+        self.assertEqual(client.post("/wake_claim", {}), (None, {"error": "TimeoutError"}))
+        self.assertEqual(log.count("connect"), 1)
+
+    def test_round_opened_without_round_id_is_skipped(self):
+        sent, seen = [], set()
+        sender = lambda p, b: sent.append(b) or (200, {})
+        recs = [{"event": "round_opened", "sid": "sat-aaaaaa"},
+                {"event": "round_opened", "round_id": "", "sid": "sat-aaaaaa"}]
+        self.assertEqual(sim.claim_for_foreign_rounds(recs, "sat-f510a1", sender, -20.0, 0.9, 0, seen), [])
+        self.assertEqual((sent, seen), ([], set()))
 
 
 if __name__ == "__main__":
