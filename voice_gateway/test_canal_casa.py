@@ -1,5 +1,5 @@
 """cd /srv/friday/app && python3 -m unittest test_canal_casa -v   (spec 2026-10-12 §3)"""
-import asyncio, json, os, stat, tempfile, unittest
+import asyncio, json, os, stat, tempfile, time, unittest
 from datetime import datetime, timezone
 import canal_casa as cc
 from arbitration import Arbiter
@@ -512,6 +512,85 @@ class ArbitrationRoutesTest(unittest.IsolatedAsyncioTestCase):
             now[0] += 31
             reloader.apply(arb)
             self.assertEqual(arb.offsets, {"sat-1": 5.0})
+
+
+class SatelliteRegistryCacheTest(unittest.IsolatedAsyncioTestCase):
+    """Final review 16/11 (item 1): /satellite_presence (every 4 s per satellite) and /wake_claim authenticate against
+    an in-memory copy; the SMB read runs in the background, single flight, at most every refresh_s."""
+    A = {"sat-0a1b2c": {"senha": "a" * 32, "ip": "1.1.1.1"}}
+    B = {"sat-0a1b2d": {"senha": "b" * 32, "ip": "1.1.1.2"}}
+
+    def make(self, read, seed=lambda c: {}, refresh_s=45.0):
+        self.now = [1000.0]
+        return cc.SatelliteRegistryCache("p", "c", read=read, seed=seed, clock=lambda: self.now[0],
+                                         refresh_s=refresh_s)
+
+    async def test_current_never_awaits_a_stuck_read(self):
+        import threading
+        gate = threading.Event()
+        calls = []
+
+        def stuck(p, c):
+            calls.append(1)
+            gate.wait(5)
+            return {}
+        reg = self.make(stuck, seed=lambda c: dict(self.A))
+        try:
+            t0 = time.monotonic()
+            for _ in range(50):
+                self.assertEqual(reg.current(), self.A)  # seeded from the local cache, returned at once
+            self.assertLess(time.monotonic() - t0, 0.2)
+            self.now[0] += 100  # stale, but the first refresh is still stuck: no second read
+            reg.current()
+            await asyncio.sleep(0.05)
+            self.assertEqual(len(calls), 1)
+        finally:
+            gate.set()
+            await reg.wait_idle()
+
+    async def test_refresh_replaces_copy_and_is_rate_limited(self):
+        calls = []
+
+        def read(p, c):
+            calls.append(1)
+            return dict(self.B)
+        reg = self.make(read, seed=lambda c: dict(self.A))
+        self.assertEqual(reg.current(), self.A)
+        await reg.wait_idle()
+        self.assertEqual(reg.current(), self.B)
+        self.now[0] += 10
+        reg.current()
+        await reg.wait_idle()
+        self.assertEqual(len(calls), 1)  # within refresh_s: no new read
+        self.now[0] += 50
+        reg.current()
+        await reg.wait_idle()
+        self.assertEqual(len(calls), 2)
+
+    async def test_failed_or_empty_refresh_keeps_the_stale_copy(self):
+        def boom(p, c):
+            raise OSError("smb down")
+        reg = self.make(boom, seed=lambda c: dict(self.A))
+        reg.current()
+        await reg.wait_idle()
+        self.assertEqual(reg.current(), self.A)
+        reg2 = self.make(lambda p, c: {}, seed=lambda c: dict(self.A))
+        reg2.current()
+        await reg2.wait_idle()
+        self.assertEqual(reg2.current(), self.A)
+
+    async def test_no_seed_starts_empty_then_fills(self):
+        reg = self.make(lambda p, c: dict(self.B))
+        self.assertEqual(reg.current(), {})
+        await reg.wait_idle()
+        self.assertEqual(reg.current(), self.B)
+
+    async def test_seed_failure_is_empty(self):
+        def bad(c):
+            raise OSError("no cache")
+        reg = self.make(lambda p, c: {}, seed=bad)
+        self.assertEqual(reg.current(), {})
+        await reg.wait_idle()
 
 
 if __name__ == "__main__":
