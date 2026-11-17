@@ -133,8 +133,16 @@ Apagar estatísticas antigas; mexer em `sensor.cpu_utilizacao` do HA; novas mét
 o HA grava `unknown`; `available` = agente conectado e `descriptor.available` → continua `True`. Um switch
 disponível com estado `unknown` é exatamente o caso da hipótese.
 
-**Hipótese a confirmar no código do frontend da nossa versão:** a interface desenha os dois botões quando o estado é
-`unknown` **ou** quando `assumed_state` é verdadeiro; com `unavailable` ela desenha o interruptor cinza e travado.
+**Achado no frontend da nossa versão (confirmado em 17/11, home-assistant-frontend 20260930.5, a versão fixada no
+`manifest.json` do HA 2026.10.4):** `src/components/entity/ha-entity-toggle.ts`, método `render()`, desenha os dois
+botões de raio (`mdiFlashOff`/`mdiFlash`) quando
+`this.stateObj.attributes.assumed_state || this.stateObj.state === UNKNOWN`; caso contrário desenha um `ha-switch`,
+com `.disabled = state === UNAVAILABLE` (interruptor cinza e travado, `checked` falso). A linha de toggle do Lovelace
+(`src/panels/lovelace/entity-rows/hui-toggle-entity-row.ts`, `render()`) mostra o `ha-entity-toggle` para
+`on`/`off`/`unavailable`/`unknown`; para qualquer outro estado mostra só o texto. Resumindo: `unknown` e
+`assumed_state` dão raios; `unavailable` dá interruptor cinza. O teste
+`tests/integration/test_switch_state.py` reproduz o lado do servidor (switch sem valor = `unknown`, disponível, sem
+`assumed_state`).
 
 **Opções consideradas:**
 
