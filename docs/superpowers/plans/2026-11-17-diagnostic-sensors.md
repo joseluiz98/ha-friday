@@ -472,27 +472,49 @@ Vem antes da Tarefa 7 na execução (entra na v0.3.8). Depende da Tarefa 9 só p
 
 ---
 
-### Task 11: Sinal de "Voice Program" ligado sem o programa rodar — **BLOQUEADA até a resposta do dono**
+### Task 11: "Voice Program" mostra se o programa roda (opção (b), aprovada em 17/11)
 
-Fora da v0.3.8, a menos que o dono escolha antes de a execução começar. Opções e recomendação no spec (seção
-"Voice Program mostra a intenção"). Se ele escolher **(a)**:
+Entra na v0.3.8: executar antes da Tarefa 7. Semântica completa no spec (seção "Voice Program passa a mostrar se o
+programa roda").
 
 **Files:**
-- Modify: `agents/satellite/friday_satellite_agent/__main__.py` (estado `voice_enabled_attributes`, chave nova)
-- Modify: `agents/satellite/friday_satellite_agent/capabilities.py` (descriptor novo)
-- Test: `tests/agents/test_satellite_power.py`, `tests/agents/test_entity_placement.py` (a chave nova é Diagnóstico)
+- Modify: `agents/satellite/friday_satellite_agent/power.py`
+- Modify: `agents/satellite/friday_satellite_agent/__main__.py` (`set_voice`, `voice_off`, `refresh`, estado inicial
+  `memo["state"]["voice_enabled"]`)
+- Test: `tests/agents/test_satellite_power.py`, `tests/agents/test_satellite_main.py`
 
 **Interfaces:**
-- Produces: `voice_program_mismatch(enabled: bool, program_state: str | None, off_since: float | None, now: float,
-  grace_s: float) -> bool` (pura); estado `voice_enabled_attributes = {"running": bool}`; descriptor
-  `{"key": "voice_program_not_running", "platform": "binary_sensor", "name": "Voice program not running",
-  "device_class": "problem", "category": "diagnostic"}`. `grace_s` = N minutos: **o dono escolhe N** (sugestão: 5).
+- Produces (em `power.py`):
+  - `RUNNING_STATES = frozenset({"idle", "listening", "conversation"})`
+  - `voice_running(program_state: str | None) -> bool` — `program_state in RUNNING_STATES`.
+  - `START_WAIT_S = 30`; `SHOW = ["/usr/bin/systemctl", "show", SERVICE, "-p", "ActiveState", "-p", "SubState",
+    "-p", "Result"]` (sem `sudo`; `test_argv_are_exact_sudoers_commands` e a sudoers ficam iguais).
+  - `Power.set_voice(True)` passa a devolver `{"ok": True, "running": bool}`: depois do `START`, consulta
+    `self._state()` a cada 1 s (via `self._sleep`) até `START_WAIT_S`; sem subir, chama
+    `self._log(f"Voice program did not start: {reason}")`, com `reason` = saída de `SHOW` numa linha (`runner`
+    injetável que devolve texto: `show_runner`, padrão com `asyncio.create_subprocess_exec` e stdout capturado).
+  - `persist()`, `startup()` e a espera de 120 s do desligamento não mudam.
+- `__main__.py`: `voice_enabled` deixa de vir de `power.enabled`. Em todo `refresh`, depois de calcular
+  `program_state`, `voice_enabled = power.voice_running(program_state)` entra em `changes` (só empurra se mudou,
+  como o resto). `set_voice` não empurra mais o valor pedido; depois de ligar ou desligar, chama `refresh("ha")`
+  para publicar o estado real.
 
-- [ ] **Step 1: Failing tests:** intenção `on` + `program_state` `off` há menos de N → `False`; há N ou mais → `True`;
-  intenção `off` → sempre `False`; programa volta (`idle`) → `False` e `running` `True`.
-- [ ] **Step 2: Run** `FRIDAY_TEST_DIR=ha-friday-wt-diag bash scripts/test.sh tests/agents/test_satellite_power.py` — FAIL.
-- [ ] **Step 3: Implement** no laço de `refresh` do agente (onde `program_state` é calculado), guardando desde quando
-  o programa está `off`.
-- [ ] **Step 4: Run** — PASS. **Step 5: Commit** `feat(satellite): flag Voice Program on while the program is not running`
-
-Se ele escolher **(b)**, reescrever esta tarefa antes de executar.
+- [ ] **Step 1: Failing tests**
+  - `test_voice_running_mapping`: `idle`/`listening`/`conversation` → `True`; `off`, `None`, `"x"` → `False`.
+  - `test_on_when_program_runs` (main): status do programa responde → `voice_enabled is True`.
+  - `test_off_when_stopped_even_with_intent_on` (main): arquivo `on`, programa não responde → `voice_enabled is False`.
+  - `test_start_refused_settles_off_and_logs` (power): `START` devolve 0, `program_state` fica `off`;
+    `set_voice(True)` → `{"ok": True, "running": False}`, `_sleep` chamado `START_WAIT_S` vezes, um log que começa com
+    `"Voice program did not start: "` e contém a saída falsa de `SHOW` (`"ActiveState=inactive"`); arquivo = `on`.
+  - `test_start_ok_no_log` (power): `program_state` vira `idle` na 3ª consulta → `running True`, nenhum log.
+  - `test_off_shows_real_state_during_courtesy_wait` (main): conversa aberta; comando off → `voice_enabled` continua
+    `True` enquanto `program_state` é `conversation`; ao parar (`off`) → `False`; arquivo = `off`.
+  - `test_agent_restart_derives_from_program_not_file` (main): arquivo `on`, primeiro `refresh` com programa parado →
+    `False`; arquivo `off` → `startup()` roda `STOP` (comportamento atual preservado).
+- [ ] **Step 2: Run** `FRIDAY_TEST_DIR=ha-friday-wt-diag bash scripts/test.sh tests/agents/test_satellite_power.py tests/agents/test_satellite_main.py` — FAIL.
+- [ ] **Step 3: Implement** conforme Interfaces.
+- [ ] **Step 4: Run** o mesmo comando e `tests/agents/` inteiro — PASS.
+- [ ] **Step 5: Commit** `feat(satellite): Voice Program switch shows whether the program runs`
+- [ ] **Step 6 (na prova do alpha, Tarefa 8):** no MK1 sem Jabra, ligar o switch → volta a `off` em ~30 s e o logbook
+  do aparelho mostra "Voice program did not start: …" com o `Result` real (conferir o texto que o systemd dá para o
+  `ExecCondition`; ajustar só a mensagem, se preciso). Acrescentar esta linha ao "Promotion gate (stable)" do PR.

@@ -147,19 +147,35 @@ disponível com estado `unknown` é exatamente o caso da hipótese.
 **Decisão do dono (17/11): A.** Um switch sem valor fica `unavailable` (cinza, sem raios). A regra vale para todo
 booleano controlável que a integração expõe, inclusive no servidor (`voice`, `ota_auto_install`). Tarefa 10 do plano.
 
-## "Voice Program" mostra a intenção, não o programa (decisão do dono em aberto)
+## "Voice Program" passa a mostrar se o programa roda (decidido: opção (b), 17/11, entra na v0.3.8)
 
-**Achado (17/11):** o switch `voice_enabled` ("Voice Program") do satélite publica o arquivo de intenção
+**Achado (17/11):** o switch `voice_enabled` ("Voice Program") do satélite publicava o arquivo de intenção
 `~/.friday-agent/voice-enabled` (`agents/satellite/friday_satellite_agent/power.py`, lido em `__main__.py`), não se
-o programa está rodando. Hoje ele mostra `on` com o programa parado: o `ExecCondition` do systemd (só com Jabra) pula
-o serviço, e `program_state` está `off`. Quem olha a página acha que a voz está ligada.
+o programa está rodando. Mostrava `on` com o programa parado: o `ExecCondition` do systemd (só com Jabra) pula o
+serviço, e `program_state` estava `off`.
 
-**Opções (o dono decide):**
+**Decisão do dono: (b).** A alternativa (a), switch como intenção mais um sensor de divergência, foi descartada.
 
-| Opção | O que muda | Custo |
-|---|---|---|
-| (a) o switch continua sendo a intenção, e um sinal de divergência aparece: atributo `running` no switch e um `binary_sensor` de problema "Voice program not running" (Diagnóstico), ligado quando a intenção é `on` e `program_state` está `off` há mais de N minutos | a intenção fica clara e a falha também | uma entidade a mais; escolher N |
-| (b) o switch mostra se o programa roda de fato | o que se vê é a verdade | ao ligar com o programa impedido de subir, o switch volta sozinho para `off`, sem explicar por quê |
+**Semântica:**
 
-**Recomendação do coordenador:** (a). **Fora da v0.3.8**, a menos que o dono responda antes de a execução começar
-(Tarefa 11 do plano, bloqueada).
+- **Estado do switch = o programa de voz está rodando de fato**, derivado de `program_state`. Valores reais do agente
+  (`capabilities.py`): `off` quando o programa não responde (`Mapper.state` com `cfg is None`), senão `idle`,
+  `listening` ou `conversation` (mapa `STATES`). Mapeamento explícito: `idle`, `listening`, `conversation` → `on`;
+  `off`, ausente ou qualquer outro valor → `off`.
+- **O arquivo de intenção continua** como a memória do agente do que foi pedido: é gravado em todo comando, e o
+  `startup()` do agente continua respeitando-o (intenção `off` → `systemctl stop` no boot do agente).
+- **Ligar com o programa impedido de subir** (por exemplo, o `ExecCondition` pula o serviço): o agente roda o
+  `systemctl start`, espera até `START_WAIT_S = 30` s o programa responder; se não responder, o switch assenta em
+  `off` e o agente manda uma entrada de log ("Voice program did not start: …") com o motivo lido de
+  `systemctl show friday-satelite -p ActiveState -p SubState -p Result` (leitura sem `sudo`; a sudoers não muda).
+- **Desligar:** a espera de cortesia de até 120 s por uma conversa aberta continua; durante a espera o switch mostra o
+  estado real (`on` enquanto o programa roda) e vai a `off` quando o programa para.
+- **Restart do agente:** o switch nasce de `program_state` (que começa `off` até o primeiro `refresh`), não do arquivo.
+
+**Os outros booleanos, para registro (sem mudança):**
+
+- Switches do satélite `mute`, `do_not_disturb`, `ducking`, `whisper_mode`, `follow_up_mode`, `turn_sounds`: já
+  publicam os valores reais do programa (sem programa, ficam sem valor → `unavailable` pela opção A).
+- Servidor `voice`: lê `/srv/friday/state/voice-enabled`, que o gateway aplica na hora; o arquivo equivale ao efeito
+  real, exceto com o gateway fora do ar. Fica como está.
+- Servidor `ota_auto_install`: ajuste puro; o valor é o próprio ajuste.
