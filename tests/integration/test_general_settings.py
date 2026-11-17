@@ -147,7 +147,11 @@ async def test_retired_entities_removed(hass):
     reg = er.async_get(hass)
     for domain, uid in (("number", "sat1_reply_wait"), ("select", "sat1_wakeword_friday_mode"),
                         ("number", "sat1_wakeword_sexta_feira_sensitivity"), ("switch", "sat1_ducking"),
-                        ("number", "sat1_vol"), ("select", "sat1_ota_channel"), ("sensor", "sat1_sw_version")):
+                        ("number", "sat1_vol"), ("select", "sat1_ota_channel"), ("sensor", "sat1_sw_version"),
+                        # 17/11: semantics or unit changed (spec 2026-11-17-diagnostic-sensors)
+                        ("sensor", "sat1_cpu_load"), ("sensor", "sat1_memory_available"),
+                        ("sensor", "sat1_memory_total"), ("sensor", "server_vm_cpu_load_pct"),
+                        ("sensor", "server_host_available_mb")):
         reg.async_get_or_create(domain, DOMAIN, uid, config_entry=entry)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await connected(entry, 1)
@@ -156,6 +160,8 @@ async def test_retired_entities_removed(hass):
     assert "sat1_vol" in left and "sat1_ducking" in left  # 11/11: ducking is back on the device page
     assert not left & {"sat1_reply_wait", "sat1_wakeword_friday_mode", "sat1_wakeword_sexta_feira_sensitivity",
                        "sat1_ota_channel", "sat1_sw_version"}  # 14/11: Advanced step / the update entity
+    assert not left & {"sat1_cpu_load", "sat1_memory_available", "sat1_memory_total",
+                       "server_vm_cpu_load_pct", "server_host_available_mb"}  # 17/11
     await stop(hass, entry, [sat])
 
 

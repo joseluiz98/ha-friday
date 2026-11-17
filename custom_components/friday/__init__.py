@@ -86,6 +86,8 @@ RETIRED_KEYS = frozenset({
     "end_of_speech_pause", "continuous_speech_limit", "ducking_restore",
     "close_mic_awaiting_reply", "continue_listening_while_speaking",
     "ota_channel", "sw_version",  # 14/11: Advanced step / the update entity "Software" shows the version
+    # 17/11: semantics or unit changed (spec 2026-11-17-diagnostic-sensors)
+    "cpu_load", "memory_available", "memory_total", "vm_cpu_load_pct", "host_available_mb",
 })
 _RETIRED_WAKEWORD = re.compile(r"^.+_wakeword_.+_(mode|sensitivity)$")
 
