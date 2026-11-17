@@ -22,6 +22,18 @@ class TestProducaoSatelite(unittest.TestCase):
         # um valor de verdade no config.json continua valendo sobre a casa
         json.dump({"endereco_friday": "https://outro.example:7443", "senha_porta_local": "x"}, open(conf, "w"))
         self.assertEqual(cfgmod.carregar(conf, casa)["endereco_friday"], "https://outro.example:7443")
+    def test_tons_de_fabrica_sao_os_da_elevenlabs(self):
+        # 17/11: satélite novo nascia com os tons antigos (inicio_a…); o conjunto escolhido pelo dono em 20/10 vira o padrão
+        s = cfgmod.PADROES["sons"]
+        self.assertEqual((s["inicio"], s["fim"], s["erro"], s["alarme"], s["lembrete"], s["volume"]),
+                         ("inicio_elevenlabs.wav", "fim_elevenlabs_20261020.wav", "erro_b.wav",
+                          "alarme_elevenlabs.wav", "lembrete_elevenlabs.wav", "volume_a.wav"))
+        import json
+        vault = json.load(open(os.path.join(AQUI, "..", "..", "vault", "manifest.json")))["files"]
+        nomes = {k.rsplit("/", 1)[-1] for k in vault}
+        for f in ("inicio_elevenlabs.wav", "fim_elevenlabs_20261020.wav", "erro_b.wav",
+                  "alarme_elevenlabs.wav", "lembrete_elevenlabs.wav"):
+            self.assertIn(f, nomes)
     def test_aviso_vai_para_satellite_alert(self):
         t = open(os.path.join(AQUI, "friday_satelite.py")).read()
         self.assertIn("/satellite_alert", t); self.assertNotIn("/aviso_satelite", t)

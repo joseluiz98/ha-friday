@@ -13,8 +13,9 @@ PADROES = {
     # volume_sons: previsto na spec de 05/10 (sons de turno −12 dB abaixo da voz), NUNCA aplicado: os sons tocam no
     # volume geral. Fora da página do HA desde 10/11; a chave segue aceita só para não quebrar config antiga.
     "volume": None, "volume_alertas": 6, "volume_sons": -12, "nao_perturbe": False,
-    "sons": {"inicio": "inicio_a.wav", "fim": "fim_a.wav", "erro": "erro_a.wav",
-             "volume": "volume_a.wav", "alarme": "alarme_a.wav", "lembrete": "lembrete_a.wav",
+    # 17/11: tons de fábrica = conjunto ElevenLabs escolhido pelo dono em 20/10 (migração 0003 troca os antigos)
+    "sons": {"inicio": "inicio_elevenlabs.wav", "fim": "fim_elevenlabs_20261020.wav", "erro": "erro_b.wav",
+             "volume": "volume_a.wav", "alarme": "alarme_elevenlabs.wav", "lembrete": "lembrete_elevenlabs.wav",
              "nao_perturbe_ligou": "nao_perturbe_ligou.wav", "nao_perturbe_desligou": "nao_perturbe_desligou.wav",
              "aprendizagem_intro": "aprendizagem_intro.wav", "aprendizagem_mudar_lugar": "aprendizagem_mudar_lugar.wav", "aprendizagem_fala_livre": "aprendizagem_fala_livre.wav", "aprendizagem_fim": "aprendizagem_fim.wav", "aprendizagem_cancelada": "aprendizagem_cancelada.wav"},
     "endereco_friday": None, "pre_gravacao_s": 0.4,

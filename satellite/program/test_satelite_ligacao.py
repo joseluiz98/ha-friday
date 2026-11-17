@@ -100,6 +100,12 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.p.start()
         import sons
         sons.gerar(self.d)
+        import shutil  # 17/11: os tons de fábrica são os da ElevenLabs; os gerados fazem o papel deles aqui
+        for novo, gerado in (("inicio_elevenlabs.wav", "inicio_a.wav"), ("fim_elevenlabs_20261020.wav", "fim_a.wav"),
+                             ("erro_b.wav", "erro_a.wav"), ("alarme_elevenlabs.wav", "alarme_a.wav"),
+                             ("lembrete_elevenlabs.wav", "lembrete_a.wav")):
+            if not os.path.exists(os.path.join(self.d, novo)):
+                shutil.copy(os.path.join(self.d, gerado), os.path.join(self.d, novo))
         self.s = fs.Satelite(asyncio.get_running_loop())
         import cadastro
         self.s.vozes = cadastro.Vozes(os.path.join(self.d, "vozes"))  # never the Pi's /home/jose/vozes
@@ -161,11 +167,11 @@ class TestMudoESonsTurno(Base):
         self.s.cfg["sons_turno"] = False
         for n in ("inicio", "fim", "erro"):
             self.s._agir("som", n)
-        self.assertEqual(F.sons, ["erro_a.wav"])
+        self.assertEqual(F.sons, ["erro_b.wav"])
 
     async def test_padrao_toca_os_sons_de_turno(self):
         self.s._agir("som", "inicio"); self.s._agir("som", "fim")
-        self.assertEqual(F.sons, ["inicio_a.wav", "fim_a.wav"])
+        self.assertEqual(F.sons, ["inicio_elevenlabs.wav", "fim_elevenlabs_20261020.wav"])
 
 
 class EmissorFalso:
@@ -221,7 +227,7 @@ class TestTimers(Base):
         self.assertEqual(self.s.maestro.estado, "alarme")
         self.assertEqual(self.s.volume.atual, 6)  # volume_alertas padrão
         await asyncio.sleep(0.05)
-        self.assertIn("alarme_a.wav", F.sons)
+        self.assertIn("alarme_elevenlabs.wav", F.sons)
         self.s.evento("botao")
         self.assertEqual(self.s.volume.atual, self.s.volume.normal)
         self.assertGreaterEqual(F.limpou, 1)
@@ -267,7 +273,7 @@ class TestCampainha(Base):
         self.assertEqual(self.s.campainha("abcd1234"), "vou_abrir")
         c = F.conexoes[-1]
         self.assertEqual(c.dados["entrega"], "abcd1234")
-        self.assertIn("lembrete_a.wav", F.sons)
+        self.assertIn("lembrete_elevenlabs.wav", F.sons)
         self.assertTrue(self.s.volume.em_alerta)
 
     async def test_botao_na_entrega_avisa_o_bot(self):
@@ -360,7 +366,7 @@ class TestCancelarConversa(Base):
         self.assertIsNone(self.s.conexao)
         self.assertFalse(self.s.microfone_aberto)
         self.assertEqual(self.s.maestro.estado, "parada")
-        self.assertEqual(F.sons[-1], "fim_a.wav")  # os sons pedidos DEPOIS do cancelamento tocam normalmente
+        self.assertEqual(F.sons[-1], "fim_elevenlabs_20261020.wav")  # os sons pedidos DEPOIS do cancelamento tocam normalmente
         self.assertEqual(F.fechadas, 0)  # ainda não: a mensagem precisa sair
         await asyncio.sleep(0.45)
         self.assertEqual(F.fechadas, 1)
@@ -614,7 +620,7 @@ class TestDisputa(Base):
     async def test_alone_acts_now_and_records(self):
         d = self.disputa(outros=0)
         self.s.evento("palavra", self.PALAVRA)
-        self.assertEqual(F.sons, ["inicio_a.wav"])  # na hora, sem esperar ninguém
+        self.assertEqual(F.sons, ["inicio_elevenlabs.wav"])  # na hora, sem esperar ninguém
         await asyncio.sleep(0.01)
         self.assertEqual(d.claims, [])
         self.assertEqual(len(d.registros), 1)
@@ -631,7 +637,7 @@ class TestDisputa(Base):
         self.assertEqual((F.sons, F.conexoes), ([], []))  # som e conversa só depois do veredito
         self.assertEqual(self.s.maestro.estado, "parada")
         await self.solta(d)
-        self.assertEqual(F.sons, ["inicio_a.wav"])
+        self.assertEqual(F.sons, ["inicio_elevenlabs.wav"])
         self.assertEqual(self.s.maestro.estado, "conectando")
         self.assertEqual(F.conexoes[-1].dados["claim_id"], d.claims[0]["claim_id"])
         self.assertEqual(d.claims[0]["wake_word"], "friday")
@@ -667,7 +673,7 @@ class TestDisputa(Base):
         self.s.evento("palavra", self.PALAVRA)
         await self.solta(d)
         self.assertEqual(m.estado, "ouvindo")  # reabre como hoje
-        self.assertEqual(F.sons, ["inicio_a.wav"])
+        self.assertEqual(F.sons, ["inicio_elevenlabs.wav"])
 
     async def test_claim_during_a_pending_delivery_like_any_busy_state(self):
         d = self.disputa(outros=1, veredito="go")
@@ -724,7 +730,7 @@ class TestDisputa(Base):
     async def test_word_without_measurements_acts_as_today(self):
         d = self.disputa(outros=1)
         self.s.evento("palavra", {"whisper": False, "wake_word": "friday"})
-        self.assertEqual(F.sons, ["inicio_a.wav"])
+        self.assertEqual(F.sons, ["inicio_elevenlabs.wav"])
         self.assertEqual((d.claims, d.registros), ([], []))
 
     async def test_preroll_covers_wait(self):
