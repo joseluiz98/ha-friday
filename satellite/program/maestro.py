@@ -452,6 +452,11 @@ class Maestro:
             if nome == "palavra" and self.mudo is False:
                 return self._encerrar_alarme(agora, "palavra") + self._abrir(agora, "palavra", self._sussurro(valor),
                                                                            self._palavra(valor))
+            if nome == "palavra_perdida" and self.mudo is False:
+                # spec 2026-11-16 (final review): another satellite answered the word; here it only stops the alarm
+                return self._encerrar_alarme(agora, "palavra")
+            return []
+        if nome == "palavra_perdida":  # only means something while the alarm rings
             return []
         if self._alarme and self._da_conversa("timer") and nome in ("fala_comecou", "botao"):
             # alguém respondeu ao timer: o alarme não volta. O `encerrar` NÃO entra aqui: sozinho ele é o modelo

@@ -28,6 +28,10 @@ import timers as tm
 from whisper import noise_floor_rms, whisper_ratio_db
 import volume as vol
 
+# spec 2026-11-16 (final review): during the <=0.3 s claim wait these events make the word stale, even if the
+# conversation then closed; a conversation closing by itself (bot, idle) still lets the won word open a new one.
+EVENTOS_QUE_ENVELHECEM_A_PALAVRA = ("botao", "mudo", "timer_venceu")
+ESTADOS_DE_CONVERSA = ("conectando", "ouvindo", "cortada", "aguardando")
 PEDACOS_JANELA_PALAVRA = 25  # ~2 s: a janela que a razão do sussurro, o piso de ruído e as gravações sempre usaram
 CFG = "/etc/friday-satelite/config.json"
 ID = "/etc/friday-satelite/id"
@@ -71,6 +75,7 @@ class Satelite:
         self.disputa = ClienteDisputa(self.cfg.get("endereco_friday"), self.cfg.get("senha_porta_local", ""))
         self._estado_do_claim = None  # estado do maestro quando o aviso saiu: o veredito `go` só vale se ainda for esse
         self._claim_pendente = False  # há um aviso esperando o veredito: outra palavra nesse intervalo é ignorada
+        self._claim_interrompido = False  # botão/timer/mudo durante a espera: a palavra ficou velha mesmo se a conversa fechou
         self._espera_disputa_s = 0.0  # quanto a Pi esperou o veredito; a pré-gravação cobre esse tempo
         self._claim_id = None  # id do aviso da palavra que está abrindo a conversa (vai na oferta ao bot)
         self.contexto = collections.deque(maxlen=375)  # 20/10: ~30 s antes de cada ativação (tentativas perdidas)
@@ -188,6 +193,8 @@ class Satelite:
     def evento(self, nome, valor=None):
         if nome == "palavra" and self._disputar_palavra(valor):
             return
+        if self._claim_pendente and nome in EVENTOS_QUE_ENVELHECEM_A_PALAVRA:
+            self._claim_interrompido = True
         self._despachar(nome, valor)
 
     # ---- disputa entre satélites (spec 2026-11-16 §5.1, §5.3, §5.4)
@@ -244,16 +251,29 @@ class Satelite:
                 veredito = {"verdict": "go", "reason": "error"}
             self._espera_disputa_s = time.monotonic() - t0
             if veredito.get("verdict") == "lost":
-                self._restaurar_luz()  # com conversa aberta nada mudou: a luz já é a dela
-            elif (self.maestro.estado != self._estado_do_claim or not self.maestro.palavra_agiria(valor)):
+                if self._estado_do_claim == "alarme" and self.maestro.estado == "alarme":
+                    self._despachar("palavra_perdida", valor)  # a outra responde; aqui o alarme para, sem conversa
+                else:
+                    self._restaurar_luz()  # com conversa aberta nada mudou: a luz já é a dela
+            elif not self._palavra_ainda_vale(valor):
                 # durante a espera o mundo mudou (campainha, timer, mudo, conversa que fechou): a palavra ficou velha
                 print(json.dumps({"arbitration": "stale", "estado": self.maestro.estado}), flush=True)
                 self._restaurar_luz()
             else:
                 self._despachar_palavra(valor)
         finally:
-            self._claim_pendente, self._estado_do_claim = False, None
+            self._claim_pendente, self._estado_do_claim, self._claim_interrompido = False, None, False
             self._espera_disputa_s = 0.0
+
+    def _palavra_ainda_vale(self, valor) -> bool:
+        """O `go` vale se o estado é o do aviso, ou se a conversa aberta fechou sozinha durante a espera (final review
+        16/11: senão a palavra some em silêncio). Botão, timer e mudo durante a espera envelhecem a palavra."""
+        if not self.maestro.palavra_agiria(valor):
+            return False
+        if self.maestro.estado == self._estado_do_claim:
+            return True
+        return (self.maestro.estado == "parada" and self._estado_do_claim in ESTADOS_DE_CONVERSA
+                and not self._claim_interrompido)
 
     def _despachar_palavra(self, valor):
         self._claim_id = valor.get("claim_id")

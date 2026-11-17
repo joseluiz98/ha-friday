@@ -803,16 +803,62 @@ class TestDisputa(Base):
         await self.solta(d)
         self.assertEqual(self.luzes, ["listen", "off"])
 
-    async def test_conversation_closed_during_the_wait_makes_the_word_stale(self):
+    async def test_conversation_closed_during_the_wait_still_answers_the_word(self):
+        """Final review 16/11 (item 3): the conversation closing by itself (AGUARDANDO/CORTADA/open -> PARADA) during the
+        <=0.3 s wait must not swallow a won word: it opens a new conversation."""
+        for antes in ("aguardando", "cortada", "ouvindo"):
+            with self.subTest(antes=antes):
+                F.sons.clear(); F.conexoes.clear()
+                d = self.disputa(outros=1, veredito="go")
+                m = self.s.maestro
+                m.estado, m._abertura = antes, {"inicio": 0.0, "como_abriu": "palavra"}
+                m._recado = antes == "ouvindo"  # an open conversation only claims over a pending message
+                self.s.evento("palavra", self.PALAVRA)
+                await asyncio.sleep(0)
+                self.assertTrue(self.s._claim_pendente)
+                m.estado, m._abertura, m._recado = "parada", None, False
+                await self.solta(d)
+                self.assertEqual(m.estado, "conectando")
+                self.assertEqual(F.conexoes[-1].dados["claim_id"], d.claims[0]["claim_id"])
+                m.estado, m._abertura = "parada", None
+
+    async def test_button_closing_the_conversation_during_the_wait_keeps_the_word_stale(self):
         d = self.disputa(outros=1, veredito="go")
         m = self.s.maestro
         m.estado, m._abertura = "aguardando", {"inicio": 0.0, "como_abriu": "palavra"}
         self.s.evento("palavra", self.PALAVRA)
         await asyncio.sleep(0)
-        m.estado, m._abertura = "parada", None
+        self.s.evento("botao", "vermelho")  # the person cancelled: the word from before must not reopen
+        self.assertEqual(m.estado, "parada")
+        n = len(F.conexoes)
         await self.solta(d)
-        self.assertEqual((F.sons, F.conexoes), ([], []))
-        self.assertEqual(self.luzes, ["off"])
+        self.assertEqual(len(F.conexoes), n)
+        self.assertEqual(m.estado, "parada")
+
+    async def test_claim_lost_in_alarm_ends_the_alarm_silently(self):
+        """Final review 16/11 (item 2): the other satellite answers; this one still stops ringing, no conversation."""
+        d = self.disputa(outros=1, veredito="lost")
+        self.s.evento("timer_venceu", {"id": "t1", "nome": "ovo", "duracao_s": 60, "termino": 0.0})
+        self.assertEqual(self.s.maestro.estado, "alarme")
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.assertEqual(self.s.maestro.estado, "alarme")  # still ringing while the verdict is pending
+        self.assertTrue(d.claims[0]["busy"])
+        await self.solta(d)
+        self.assertEqual(self.s.maestro.estado, "parada")
+        self.assertEqual(F.conexoes, [])
+        self.assertNotIn("inicio_a.wav", F.sons)
+        self.assertFalse(self.s._claim_pendente)
+
+    async def test_claim_lost_after_the_alarm_ended_during_the_wait_only_restores_the_light(self):
+        d = self.disputa(outros=1, veredito="lost")
+        self.s.evento("timer_venceu", {"id": "t1", "nome": "ovo", "duracao_s": 60, "termino": 0.0})
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.s.evento("botao")  # the button stopped it during the wait
+        self.assertEqual(self.s.maestro.estado, "parada")
+        await self.solta(d)
+        self.assertEqual((self.s.maestro.estado, F.conexoes), ("parada", []))
 
     async def test_whisper_and_recordings_use_the_2_s_window_not_the_preroll_buffer(self):
         import inspect, re
