@@ -82,19 +82,12 @@ class Power:
                 LOG.warning("startup stop failed: %s", type(err).__name__)
 
     async def set_voice(self, enabled: bool):
-        """On: start, then wait up to START_WAIT_S for the program to answer -> {"ok", "running"}.
-        Off: courtesy wait for an open conversation, then stop -> {"ok"}."""
+        """On: start the service and return at once -> {"ok"} (the caller then runs `await_start` in the background:
+        HA gives a command 10 s and the agent handles commands one at a time). Off: courtesy wait for an open
+        conversation, then stop -> {"ok"}."""
         self.persist(enabled)  # first, so an agent restart mid-wait still ends up off
         if enabled:
-            code = await self._run(START)
-            if code != 0:
-                return self._result(code)
-            for _ in range(START_WAIT_S):
-                await self._sleep(1)
-                if voice_running(self._state()):
-                    return {"ok": True, "running": True}
-            await self._log_start_failure()
-            return {"ok": True, "running": False}
+            return self._result(await self._run(START))
         for _ in range(WAIT_MAX_S):
             if self._state() != "conversation":
                 break
@@ -102,6 +95,15 @@ class Power:
         else:
             LOG.warning("voice off: conversation still open after %ss, stopping anyway", WAIT_MAX_S)
         return self._result(await self._run(STOP))
+
+    async def await_start(self) -> bool:
+        """After a successful start: wait up to START_WAIT_S for the program to answer; log why if it never does."""
+        for _ in range(START_WAIT_S):
+            await self._sleep(1)
+            if voice_running(self._state()):
+                return True
+        await self._log_start_failure()
+        return False
 
     async def _log_start_failure(self) -> None:
         if not self._log:

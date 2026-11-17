@@ -26,7 +26,7 @@ class FakeProgram:
         self.state = state
 
 
-def make_switch(tmp_path, program_state, *, intent_on=True):
+def make_switch(tmp_path, program_state, *, intent_on=True, log=None):
     """A VoiceSwitch wired like main(): refresh derives voice_enabled from the program and publishes it."""
     from friday_satellite_agent import __main__ as m
     from friday_satellite_agent import power as pw
@@ -35,6 +35,7 @@ def make_switch(tmp_path, program_state, *, intent_on=True):
     memo = {"program_state": "off"}
     pushed = []
     runner_calls = []
+    sleeps = []
 
     async def runner(argv):
         runner_calls.append(list(argv))
@@ -50,11 +51,13 @@ def make_switch(tmp_path, program_state, *, intent_on=True):
         pushed.append((origin, dict(changes)))
 
     async def sleep(_s):
+        sleeps.append(_s)
         await refresh("agent")
 
     path = str(tmp_path / "voice-enabled")
-    power = pw.Power(runner, path, lambda: memo["program_state"], sleep=sleep, show_runner=show)
+    power = pw.Power(runner, path, lambda: memo["program_state"], sleep=sleep, show_runner=show, log=log)
     power.persist(intent_on)
+    power.sleeps = sleeps
     return m.VoiceSwitch(power, refresh), power, prog, memo, pushed, runner_calls, refresh
 
 
@@ -82,7 +85,7 @@ async def test_off_shows_real_state_during_courtesy_wait(tmp_path):
     assert open(power.path).read().strip() == "off"  # durable at once
     assert memo["voice_enabled"] is True  # still really running: the courtesy wait
     prog.state = None  # the conversation ended and the program stopped
-    await asyncio.gather(*sw._off)
+    await asyncio.gather(*sw._tasks)
     assert calls == [pw.STOP] and memo["voice_enabled"] is False
 
 
@@ -104,3 +107,63 @@ async def test_agent_restart_derives_from_program_not_file(tmp_path):
     power.persist(False)
     await power.startup()
     assert calls == [pw.STOP]
+
+
+async def test_turning_on_replies_before_the_start_wait(tmp_path):
+    """HA gives a command 10 s and the agent handles commands one at a time: the 30 s wait must not block the reply."""
+    from friday_satellite_agent import power as pw
+
+    logs = []
+
+    async def log(msg):
+        logs.append(msg)
+
+    sw, power, prog, memo, pushed, calls, refresh = make_switch(tmp_path, None, intent_on=False, log=log)
+    assert await sw.set(True) == {"ok": True}
+    assert calls == [pw.START]
+    assert power.sleeps == []  # replied without waiting for the program
+    assert logs == []
+    import asyncio
+    await asyncio.gather(*sw._tasks)  # the background wait still runs, and reports the failure
+    assert len(power.sleeps) == pw.START_WAIT_S
+    assert logs == ["Voice program did not start: voice program skipped: start condition not met "
+                    "(no supported audio device)"]
+    assert memo["voice_enabled"] is False
+
+
+async def test_turning_on_background_wait_ends_when_program_comes_up(tmp_path):
+    import asyncio
+
+    logs = []
+
+    async def log(msg):
+        logs.append(msg)
+
+    sw, power, prog, memo, pushed, calls, refresh = make_switch(tmp_path, None, intent_on=False, log=log)
+    assert await sw.set(True) == {"ok": True}
+    prog.state = "idle"
+    await asyncio.gather(*sw._tasks)
+    assert memo["voice_enabled"] is True and logs == [] and len(power.sleeps) == 1
+
+
+async def test_start_failure_is_reported_at_once(tmp_path):
+    sw, power, prog, memo, pushed, calls, refresh = make_switch(tmp_path, None, intent_on=False)
+
+    async def fail(argv):
+        return 1
+
+    power._run = fail
+    assert await sw.set(True) == {"ok": False, "error": "command_failed"}
+    assert sw._tasks == []
+
+
+async def test_a_newer_command_replaces_the_pending_start_wait(tmp_path):
+    import asyncio
+
+    sw, power, prog, memo, pushed, calls, refresh = make_switch(tmp_path, None, intent_on=False)
+    assert await sw.set(True) == {"ok": True}
+    first = sw._tasks[0]
+    assert await sw.set(False) == {"ok": True}
+    await asyncio.sleep(0)
+    assert first.cancelled() or first.done()
+    await asyncio.gather(*sw._tasks)

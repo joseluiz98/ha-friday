@@ -177,7 +177,9 @@ async def test_start_refused_settles_off_and_logs(tmp_path):
         logs.append(msg)
 
     p, runner, box, sleeps = make(tmp_path, state="off", log=log)
-    assert await p.set_voice(True) == {"ok": True, "running": False}
+    assert await p.set_voice(True) == {"ok": True}
+    assert sleeps == []  # the reply does not wait for the program
+    assert await p.await_start() is False
     assert runner.calls == [pw.START] and len(sleeps) == pw.START_WAIT_S
     assert logs == ["Voice program did not start: voice program skipped: start condition not met "
                     "(no supported audio device)"]
@@ -193,7 +195,8 @@ async def test_start_ok_no_log(tmp_path):
 
     p, runner, box, sleeps = make(tmp_path, state="off", log=log)
     box["script"] = ["off", "off", "idle"]
-    assert await p.set_voice(True) == {"ok": True, "running": True}
+    assert await p.set_voice(True) == {"ok": True}
+    assert await p.await_start() is True
     assert len(sleeps) == 3 and logs == [] and "show_calls" not in box
 
 

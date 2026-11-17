@@ -70,7 +70,7 @@ class VoiceSwitch:
     def __init__(self, power: Power, refresh) -> None:
         self.power = power
         self._refresh = refresh  # async (origin) -> None: re-reads the program and publishes the real state
-        self._off: list[asyncio.Task] = []
+        self._tasks: list[asyncio.Task] = []  # the background wait of the last command (courtesy or start)
 
     @staticmethod
     def derive(changes: dict) -> dict:
@@ -85,16 +85,25 @@ class VoiceSwitch:
         except Exception as err:  # noqa: BLE001
             LOG.warning("voice off failed: %s", type(err).__name__)
 
+    async def _voice_on(self) -> None:
+        try:
+            await self.power.await_start()  # logs why when the program never comes up
+            await self._refresh("ha")
+        except Exception as err:  # noqa: BLE001
+            LOG.warning("voice on wait failed: %s", type(err).__name__)
+
     async def set(self, enabled: bool) -> dict:
-        for t in self._off:
-            t.cancel()  # a newer command replaces a pending courtesy wait
-        self._off.clear()
+        for t in self._tasks:
+            t.cancel()  # a newer command replaces a pending wait
+        self._tasks.clear()
         res = {"ok": True}
         if enabled:
-            res = await self.power.set_voice(True)
+            res = await self.power.set_voice(True)  # returns once the service is started: HA waits 10 s for a reply
+            if res.get("ok"):
+                self._tasks.append(asyncio.create_task(self._voice_on()))
         else:
             self.power.persist(False)  # durable before the (up to 120 s) wait
-            self._off.append(asyncio.create_task(self._voice_off()))
+            self._tasks.append(asyncio.create_task(self._voice_off()))
         await self._refresh("ha")  # publishes what is true now, not what was asked
         return res if not res.get("ok") else {"ok": True}
 
