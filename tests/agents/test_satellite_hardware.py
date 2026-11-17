@@ -48,11 +48,17 @@ def test_signal_nonsense_is_rejected_and_falls_back_to_percent():
 
 
 FILES = {hw.THERMAL: "51000", hw.UPTIME: "3600.0 1.0", hw.LOADAVG: "2.00 1.50 1.00 3/250 999",
-         hw.WIRELESS: " wlan0: 0000 70. -48. -256 0 0 0 0 0 0"}
+         hw.WIRELESS: " wlan0: 0000 70. -48. -256 0 0 0 0 0 0",
+         hw.MEMINFO: "MemTotal:         929456 kB\nMemFree:  100 kB\nMemAvailable:     543744 kB\n"}
+ST = type("St", (), {"f_blocks": 1000, "f_bfree": 550, "f_bavail": 500, "f_frsize": 4096})()
+LEGACY = {"undervoltage_now": False, "undervoltage_since_boot": False, "heat_limited": False, "cpu_clock": 1200,
+          "memory_available": 531, "memory_total": 907, "sd_usage": 47}
 
 
 def fake_run(devices):
     def run(argv):
+        if argv == ["vcgencmd", "measure_clock", "arm"]:
+            return "frequency(48)=1200000000"
         if argv[0] == "vcgencmd":
             return "throttled=0x0"
         if argv[:4] == ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE"]:
@@ -71,10 +77,10 @@ def fake_run(devices):
 
 def test_sample_wifi_only():
     out = hw.sample(read=FILES.__getitem__, run=fake_run("eth0:ethernet:unavailable\nwlan0:wifi:connected\n"),
-                    now=lambda: NOW, cores=lambda: 4)
+                    now=lambda: NOW, cores=lambda: 4, statvfs=lambda: ST)
     assert out == {"cpu_temperature": 51.0, "cpu_load": 50.0, "throttled": False,
-                   "uptime_since": "2026-10-29T11:00:00+00:00",
-                   "network_interface": "wifi", "ip_address": "192.0.2.15",
+                   "uptime_since": "2026-10-29T11:00:00+00:00", **LEGACY,
+                   "network_interface": "wifi", "ip_address": "192.0.2.15", "wifi_ip_address": "192.0.2.15",
                    "mac_address": "B8:27:EB:00:00:01", "wifi_ssid": "ExampleNet", "wifi_signal": -48}
 
 
@@ -88,6 +94,23 @@ def test_sample_ethernet_wins_and_has_no_wifi_keys():
     out = hw.sample(read=FILES.__getitem__, run=fake_run("eth0:ethernet:connected\nwlan0:wifi:connected\n"),
                     now=lambda: NOW)
     assert out["network_interface"] == "ethernet" and "wifi_ssid" not in out and "wifi_signal" not in out
+    assert out["wifi_ip_address"] == "192.0.2.15"  # the doorbell's fallback when the cable does not answer
+
+
+def test_throttle_flags_like_the_old_status_page():
+    assert hw.parse_throttle_flags("throttled=0x50005") == {
+        "undervoltage_now": True, "undervoltage_since_boot": True, "heat_limited": True}
+    assert hw.parse_throttle_flags("throttled=0x10000") == {
+        "undervoltage_now": False, "undervoltage_since_boot": True, "heat_limited": False}
+    assert hw.parse_throttle_flags("throttled=0x2")["heat_limited"] is True
+    assert hw.parse_throttle_flags("nonsense") == {}
+
+
+def test_clock_memory_and_disk_parse():
+    assert hw.parse_clock_mhz("frequency(48)=600117000") == 600 and hw.parse_clock_mhz("x") is None
+    assert hw.parse_meminfo_mb(FILES[hw.MEMINFO], "MemAvailable") == 531
+    assert hw.parse_meminfo_mb("", "MemAvailable") is None
+    assert hw.disk_usage_pct(ST) == 47
 
 
 def test_sample_survives_missing_sources():
@@ -101,12 +124,17 @@ def test_sample_survives_missing_sources():
         hw.sample(read=read, run=run, now=lambda: NOW)
     except FileNotFoundError:
         pass  # nmcli missing is handled by with_network=False
-    assert hw.sample(read=read, run=run, now=lambda: NOW, with_network=False) == {}
+    def statvfs():
+        raise OSError("/")
+
+    assert hw.sample(read=read, run=run, now=lambda: NOW, with_network=False, statvfs=statvfs) == {}
 
 
 def test_descriptors_network_only_with_nmcli():
     keys = {d["key"] for d in hw.descriptors(network=False)}
-    assert keys == {"cpu_temperature", "cpu_load", "throttled", "uptime_since"}
+    assert keys == {"cpu_temperature", "cpu_load", "throttled", "uptime_since", "undervoltage_now",
+                    "undervoltage_since_boot", "heat_limited", "cpu_clock", "memory_available", "memory_total",
+                    "sd_usage"}
     d = {x["key"]: x for x in hw.descriptors(network=True)}
     assert d["throttled"]["platform"] == "binary_sensor" and d["throttled"]["device_class"] == "problem"
     assert d["wifi_signal"]["device_class"] == "signal_strength" and d["wifi_signal"]["unit"] == "dBm"

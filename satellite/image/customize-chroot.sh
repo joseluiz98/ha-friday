@@ -111,14 +111,11 @@ fi
 
 echo "== units"
 for u in friday-firstboot.service friday-satelite.service friday-satellite-agent.service \
-         friday-sync-recordings.service friday-sync-recordings.timer friday-netwatch.service friday-netwatch.timer \
-         satelite-status.service satelite-status.timer; do
+         friday-sync-recordings.service friday-sync-recordings.timer friday-netwatch.service friday-netwatch.timer; do
   install -m 0644 $U/$u /etc/systemd/system/$u
 done
-install -m 0755 $U/satelite-status.sh /usr/local/bin/satelite-status.sh
 systemctl enable ssh.service friday-firstboot.service friday-satelite.service friday-satellite-agent.service \
   friday-sync-recordings.timer friday-netwatch.timer
-# satelite-status needs /etc/satelite/webhook_id (a secret of the house): installed, NOT enabled
 
 echo "== ownership and cleanup"
 chown -R jose:jose $H
