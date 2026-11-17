@@ -208,6 +208,19 @@ class TestComandos(Base):
         self.assertFalse(self.s.estado_publico()["update_pendente"])
         self.assertFalse(self.s.comando_porta({"acao": "update_pending", "ligado": "x"})["ok"])
 
+    async def test_status_publishes_the_capture_rate(self):
+        """Task 5 (xvf3800-support): `captura_taxa` (3 casas) e `captura_ts` no /status; None até a 1ª janela."""
+        e = self.s.estado_publico()
+        self.assertIsNone(e["captura_taxa"])
+        self.assertIsNone(e["captura_ts"])
+        t0 = 100.0
+        for i in range(70):  # 11,2 s a tempo real, pedaços de 2560 amostras
+            self.s.taxa_captura.alimentar(2560, t0 + i * 0.16)
+        e = self.s.estado_publico()
+        self.assertEqual(e["captura_taxa"], round(self.s.taxa_captura.atual(), 3))
+        self.assertAlmostEqual(e["captura_taxa"], 1.0, delta=0.01)
+        self.assertIsInstance(e["captura_ts"], float)
+
     async def test_estado_publico_lista_as_palavras_carregadas(self):
         # a saúde do OTA (friday-ota-apply) exige palavra carregada: lista vazia até a captura criar o modelo
         self.assertEqual(self.s.estado_publico()["palavras_carregadas"], [])

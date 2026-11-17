@@ -17,6 +17,7 @@ from detectores import (DetectorBotaoTelefone, DetectorFala, DetectorMudo, Detec
                         MedidorEco, PicoDaFala, escolher_acao, portao_eco, rms_dbfs, trecho_do_episodio)
 from hardware import AltoFalante, Anel, Captura, TeclasVolume
 from maestro import Ajustes, Maestro
+from taxa_captura import TaxaCaptura
 import palavra_modelo
 import placa
 from ativacao_detalhes import payload as payload_ativacao
@@ -74,6 +75,7 @@ class Satelite:
         self.contagem = ring.Contagem()
         self.conexao = None
         self._modelo_palavra = None  # spec 2026-10-24: o Model atual (a captura o (re)cria); a porta lê os nomes
+        self.taxa_captura = TaxaCaptura()  # spec 2026-11-17: o agente vigia a USB do XVF3800 por esta taxa (/status)
         self.microfone_aberto = False
         self.conversa_sussurrada = False
         self.fala_em_andamento = False
@@ -152,6 +154,8 @@ class Satelite:
         return dict(self.maestro.publico(), volume=self.volume.atual, update_pendente=bool(self.anel.pendente),
                     palavras=self._modos_palavras(),  # spec 2026-10-24: {nome: modo}, para o futuro sensor do HA
                     palavras_carregadas=sorted(self.palavras_carregadas()),  # saúde do OTA (spec 2026-11-10 §6.9)
+                    captura_taxa=None if self.taxa_captura.atual() is None else round(self.taxa_captura.atual(), 3),
+                    captura_ts=self.taxa_captura.ts,  # spec 2026-11-17: vigia da USB (agente)
                     timers=[{"nome": t["nome"], "duracao_s": t["duracao_s"], "falta_s": t["falta_s"]}
                             for t in self.timers.consultar(agora)])
 
@@ -821,6 +825,7 @@ class Satelite:
         razao_ep, piso_ep, calculou = None, 0.0, False  # spec 2026-10-20 D3: a razão sai uma vez por episódio
         while True:
             pcm = cap.ler()  # EOFError → sai do processo → systemd religa
+            self.taxa_captura.alimentar(len(pcm) // 2, time.monotonic())
             x = np.frombuffer(pcm, dtype=np.int16)
             self.recentes.append(pcm)
             self.contexto.append(pcm)
