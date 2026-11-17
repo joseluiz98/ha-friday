@@ -13,7 +13,12 @@ START = ["sudo", "-n", "/usr/bin/systemctl", "start", SERVICE]
 STOP = ["sudo", "-n", "/usr/bin/systemctl", "stop", SERVICE]
 RESTART = ["sudo", "-n", "/usr/bin/systemctl", "restart", SERVICE]
 REBOOT = ["sudo", "-n", "/usr/sbin/reboot"]
+# read-only: `systemctl show` needs no sudo (and the sudoers file stays exactly as it is)
+SHOW = ["/usr/bin/systemctl", "show", SERVICE, "-p", "ActiveState", "-p", "SubState", "-p", "Result"]
 WAIT_MAX_S = 120
+START_WAIT_S = 30
+# program_state values (capabilities.STATES plus "off") in which the voice program is really running
+RUNNING_STATES = frozenset({"idle", "listening", "conversation"})
 DEFAULT_PATH = os.path.expanduser("~/.friday-agent/voice-enabled")
 
 
@@ -21,6 +26,26 @@ async def run_command(argv: list[str]) -> int:
     proc = await asyncio.create_subprocess_exec(
         *argv, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     return await proc.wait()
+
+
+async def run_show(argv: list[str]) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    out, _ = await proc.communicate()
+    return out.decode("utf-8", "replace")
+
+
+def voice_running(program_state: str | None) -> bool:
+    """The "Voice Program" switch shows whether the program really runs, not what was last asked."""
+    return program_state in RUNNING_STATES
+
+
+def start_failure_reason(show_text: str) -> str:
+    """Why the service did not come up, from `systemctl show` (ExecCondition skips it when no supported audio device)."""
+    props = dict(line.split("=", 1) for line in show_text.splitlines() if "=" in line)
+    if props.get("Result") == "exec-condition":
+        return "voice program skipped: start condition not met (no supported audio device)"
+    return " ".join(f"{k}={props.get(k, '?')}" for k in ("ActiveState", "SubState", "Result"))
 
 
 def read_enabled(path: str) -> bool:
@@ -33,8 +58,9 @@ def read_enabled(path: str) -> bool:
 
 class Power:
     def __init__(self, runner=run_command, path: str = DEFAULT_PATH, program_state=lambda: "idle",
-                 sleep=asyncio.sleep, log=None) -> None:
+                 sleep=asyncio.sleep, log=None, show_runner=run_show) -> None:
         self._run = runner
+        self._show = show_runner
         self.path = path
         self._state = program_state
         self._sleep = sleep
@@ -55,17 +81,36 @@ class Power:
             except Exception as err:  # noqa: BLE001 - the agent must still start
                 LOG.warning("startup stop failed: %s", type(err).__name__)
 
-    async def set_voice(self, enabled: bool) -> int:
+    async def set_voice(self, enabled: bool):
+        """On: start, then wait up to START_WAIT_S for the program to answer -> {"ok", "running"}.
+        Off: courtesy wait for an open conversation, then stop -> {"ok"}."""
         self.persist(enabled)  # first, so an agent restart mid-wait still ends up off
         if enabled:
-            return await self._run(START)
+            code = await self._run(START)
+            if code != 0:
+                return self._result(code)
+            for _ in range(START_WAIT_S):
+                await self._sleep(1)
+                if voice_running(self._state()):
+                    return {"ok": True, "running": True}
+            await self._log_start_failure()
+            return {"ok": True, "running": False}
         for _ in range(WAIT_MAX_S):
             if self._state() != "conversation":
                 break
             await self._sleep(1)
         else:
             LOG.warning("voice off: conversation still open after %ss, stopping anyway", WAIT_MAX_S)
-        return await self._run(STOP)
+        return self._result(await self._run(STOP))
+
+    async def _log_start_failure(self) -> None:
+        if not self._log:
+            return
+        try:
+            reason = start_failure_reason(await self._show(SHOW))
+            await self._log(f"Voice program did not start: {reason}")
+        except Exception as err:  # noqa: BLE001 - logging never blocks the action
+            LOG.warning("start failure log failed: %s", type(err).__name__)
 
     @staticmethod
     def _result(code) -> dict:

@@ -62,6 +62,43 @@ def _sat_id() -> str:
         return f.read().strip()
 
 
+class VoiceSwitch:
+    """The "Voice Program" switch. Its state is whether the program really runs (derived from `program_state`),
+    not the intent file: the systemd ExecCondition can skip the service (no supported audio device) while the
+    intent says on (spec 2026-11-17-diagnostic-sensors). The intent file stays the agent's memory of what was asked."""
+
+    def __init__(self, power: Power, refresh) -> None:
+        self.power = power
+        self._refresh = refresh  # async (origin) -> None: re-reads the program and publishes the real state
+        self._off: list[asyncio.Task] = []
+
+    @staticmethod
+    def derive(changes: dict) -> dict:
+        """Adds `voice_enabled` to the changes of a refresh (the program's state is in them)."""
+        changes["voice_enabled"] = power_mod.voice_running(changes.get("program_state"))
+        return changes
+
+    async def _voice_off(self) -> None:
+        try:
+            await self.power.set_voice(False)
+            await self._refresh("ha")  # the courtesy wait is over and the program stopped: publish it
+        except Exception as err:  # noqa: BLE001
+            LOG.warning("voice off failed: %s", type(err).__name__)
+
+    async def set(self, enabled: bool) -> dict:
+        for t in self._off:
+            t.cancel()  # a newer command replaces a pending courtesy wait
+        self._off.clear()
+        res = {"ok": True}
+        if enabled:
+            res = await self.power.set_voice(True)
+        else:
+            self.power.persist(False)  # durable before the (up to 120 s) wait
+            self._off.append(asyncio.create_task(self._voice_off()))
+        await self._refresh("ha")  # publishes what is true now, not what was asked
+        return res if not res.get("ok") else {"ok": True}
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     token, program_port = _read_settings()
@@ -86,29 +123,18 @@ async def main() -> None:
     async def power_log(message: str) -> None:
         await core.push_log(message, {})
 
-    power = Power(program_state=lambda: memo["state"].get("program_state"), log=power_log)
-    preview = ring_preview.RingPreview(program.command, lambda: memo["state"].get("program_state"))
-    memo["state"]["voice_enabled"] = power.enabled
-    off_task: list[asyncio.Task] = []
-
-    async def voice_off() -> None:
+    async def sleep_and_refresh(seconds: float) -> None:
+        """Power waits on the program coming up or going down: re-read it each second instead of the 20 s poll."""
+        await asyncio.sleep(seconds)
         try:
-            await power.set_voice(False)
-        except Exception as err:  # noqa: BLE001
-            LOG.warning("voice off failed: %s", type(err).__name__)
+            await refresh("agent")
+        except Exception as err:  # noqa: BLE001 - a failed read must not break the wait
+            LOG.warning("refresh during wait failed: %s", type(err).__name__)
 
-    async def set_voice(enabled: bool) -> dict:
-        for t in off_task:
-            t.cancel()  # a newer command replaces a pending courtesy wait
-        off_task.clear()
-        memo["state"]["voice_enabled"] = enabled
-        await core.push_state({"voice_enabled": enabled}, "ha")
-        if enabled:
-            await power.set_voice(True)
-        else:
-            power.persist(False)  # durable before the (up to 120 s) wait
-            off_task.append(asyncio.create_task(voice_off()))
-        return {"ok": True}
+    power = Power(program_state=lambda: memo["state"].get("program_state"), log=power_log, sleep=sleep_and_refresh)
+    preview = ring_preview.RingPreview(program.command, lambda: memo["state"].get("program_state"))
+    voice = VoiceSwitch(power, lambda origin: refresh(origin))
+    memo["state"]["voice_enabled"] = power_mod.voice_running(memo["state"]["program_state"])
 
     async def apply_agent(stage: str) -> int:
         return await power_mod.run_command(APPLY_AGENT + [stage])
@@ -202,6 +228,7 @@ async def main() -> None:
             except (ProgramError, OSError):
                 return
             changes = mapper.state(memo["cfg"], memo["ww"], status)
+        voice.derive(changes)
         timers = await asyncio.to_thread(read_timers)
         if timers is not None:
             changes.update(cap.timers_state(timers))
@@ -211,7 +238,7 @@ async def main() -> None:
 
     async def do_set(cmd: dict) -> dict:
         if cmd.get("key") == "voice_enabled":
-            return await set_voice(bool(cmd.get("value")))
+            return await voice.set(bool(cmd.get("value")))
         if cmd.get("key") == "ota_channel":
             res = await asyncio.to_thread(updater.set_channel, cmd.get("value"))
             await ota_changed()

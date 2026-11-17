@@ -19,7 +19,10 @@ class Runner:
         return 0
 
 
-def make(tmp_path, state="idle", **kw):
+REFUSED = "ActiveState=inactive\nSubState=dead\nResult=exec-condition\n"
+
+
+def make(tmp_path, state="idle", show=REFUSED, **kw):
     runner = Runner()
     box = {"s": state}
     sleeps = []
@@ -29,7 +32,11 @@ def make(tmp_path, state="idle", **kw):
         if "script" in box and box["script"]:
             box["s"] = box["script"].pop(0)
 
-    p = pw.Power(runner, str(tmp_path / "voice-enabled"), lambda: box["s"], sleep=sleep, **kw)
+    async def show_runner(argv):
+        box.setdefault("show_calls", []).append(list(argv))
+        return show
+
+    p = pw.Power(runner, str(tmp_path / "voice-enabled"), lambda: box["s"], sleep=sleep, show_runner=show_runner, **kw)
     return p, runner, box, sleeps
 
 
@@ -49,7 +56,7 @@ async def test_off_stops_anyway_after_120s(tmp_path):
 
 
 async def test_on_starts_and_persists(tmp_path):
-    p, runner, _, _ = make(tmp_path)
+    p, runner, _, _ = make(tmp_path, state="idle")
     await p.set_voice(False)
     await p.set_voice(True)
     assert runner.calls[-1] == pw.START
@@ -143,3 +150,59 @@ async def test_nonzero_exit_is_command_failed(tmp_path):
     p._run = fail
     assert await p.reboot() == {"ok": False, "error": "command_failed"}
     assert await p.restart_program() == {"ok": False, "error": "command_failed"}
+
+
+def test_voice_running_mapping():
+    assert all(pw.voice_running(s) for s in ("idle", "listening", "conversation"))
+    assert not any(pw.voice_running(s) for s in ("off", None, "x"))
+
+
+def test_show_argv_is_read_only_without_sudo():
+    assert pw.SHOW == ["/usr/bin/systemctl", "show", "friday-satelite", "-p", "ActiveState", "-p", "SubState",
+                       "-p", "Result"]
+    assert pw.START_WAIT_S == 30
+
+
+def test_start_failure_reason():
+    assert pw.start_failure_reason(REFUSED) == (
+        "voice program skipped: start condition not met (no supported audio device)")
+    assert pw.start_failure_reason("ActiveState=failed\nSubState=failed\nResult=exit-code\n") == (
+        "ActiveState=failed SubState=failed Result=exit-code")
+
+
+async def test_start_refused_settles_off_and_logs(tmp_path):
+    logs = []
+
+    async def log(msg):
+        logs.append(msg)
+
+    p, runner, box, sleeps = make(tmp_path, state="off", log=log)
+    assert await p.set_voice(True) == {"ok": True, "running": False}
+    assert runner.calls == [pw.START] and len(sleeps) == pw.START_WAIT_S
+    assert logs == ["Voice program did not start: voice program skipped: start condition not met "
+                    "(no supported audio device)"]
+    assert box["show_calls"] == [pw.SHOW]
+    assert open(p.path).read().strip() == "on"
+
+
+async def test_start_ok_no_log(tmp_path):
+    logs = []
+
+    async def log(msg):
+        logs.append(msg)
+
+    p, runner, box, sleeps = make(tmp_path, state="off", log=log)
+    box["script"] = ["off", "off", "idle"]
+    assert await p.set_voice(True) == {"ok": True, "running": True}
+    assert len(sleeps) == 3 and logs == [] and "show_calls" not in box
+
+
+async def test_start_command_failure_is_reported_without_waiting(tmp_path):
+    p, runner, box, sleeps = make(tmp_path, state="off")
+
+    async def fail(argv):
+        return 1
+
+    p._run = fail
+    assert await p.set_voice(True) == {"ok": False, "error": "command_failed"}
+    assert sleeps == []
