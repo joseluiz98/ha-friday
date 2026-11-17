@@ -479,6 +479,13 @@ class TestComposicaoXvf(unittest.TestCase):
         self.assertEqual(set(quadro[1][1:]), {0x0000FF})
         self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 5))
 
+    def test_xvf_mute_over_dnd_keeps_dnd_low(self):  # M9: mudo + não perturbe não fica mais forte que o DND sozinho
+        self.r.show_maestro("dnd")
+        self.t.chamadas.clear()
+        self.r.set_muted(True)
+        quadro = self.t.chamadas[0]
+        self.assertEqual(set(quadro[1][1:]), {ring.escalar(0x8000FF, ring.DND_LOW)})
+
     def test_xvf_mute_over_off_lights_only_the_mute_leds(self):
         self.r.show_maestro("off")
         self.t.chamadas.clear()

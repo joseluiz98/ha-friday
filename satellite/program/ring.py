@@ -355,6 +355,8 @@ class Xvf3800Ring(_Composto):
             return 0
         if base == "listen":
             return COR_PONTEIRO
+        if base == "dnd":  # M9: o mesmo brilho baixo do não perturbe sem mudo
+            return escalar(_XVF["dnd"][1], DND_LOW)
         return _XVF[base][1]
 
     def _draw(self, base, mudo, direction):
