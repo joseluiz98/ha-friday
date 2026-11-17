@@ -31,6 +31,7 @@ class Mixer:
 
 
 class MusicMixer:
+    def __init__(self, card="USB", control="Music"): self.card = card
     def write(self, p): F.music.append(p)
     def prime(self): F.primed = True
 
@@ -544,7 +545,7 @@ class TestRedeEsgotadaLigacao(unittest.TestCase):
         self.assertIn('tipo == "desfazer_mudo"', corpo)
         self.assertIn("ring.ESTADO_DO_MAESTRO[self.maestro._luz_do_estado()]", corpo)
         self.assertIn('"undo_mute"', corpo)
-        self.assertIn("unsupported_xvf3800", corpo)
+        self.assertIn("\"undo_mute\": \"xvf3800\"", corpo)  # 17/11: o pino do XVF desfaz o mudo
 
 
 if __name__ == "__main__":
@@ -940,3 +941,65 @@ class TestPararFala(Base):
         self.s._agir("conectar", None)
         self.s.evento("fala_comecou", None)
         self.assertEqual(F.falas_pessoa, 1)
+
+
+class LinkFalso:
+    """XvfLink falso (spec 2026-11-17): registra escritas."""
+    def __init__(self):
+        self.escritas = []
+
+    def write(self, nome, valores):
+        self.escritas.append((nome, list(valores)))
+        return True
+
+    def read(self, nome):
+        return None
+
+
+class TestXvf3800(Base):
+    async def asyncSetUp(self):
+        self.link = LinkFalso()
+        self.p_link = mock.patch.object(fs.xvf_link, "XvfLink", return_value=self.link)
+        self.p_link.start()
+        await super().asyncSetUp()
+
+    async def asyncTearDown(self):
+        await super().asyncTearDown()
+        self.p_link.stop()
+
+    def _novo_satelite_xvf(self):
+        self.p_placa.stop()
+        self.p_placa = mock.patch.object(fs.placa, "ler_placa", return_value="xvf3800")
+        self.p_placa.start()
+        self.link.escritas.clear()
+        return fs.Satelite(asyncio.get_running_loop())
+
+    async def test_startup_reapplies_the_board_settings_unlocking_first(self):
+        s = self._novo_satelite_xvf()
+        self.assertEqual(self.link.escritas[0], ("AEC_FIXEDBEAMSONOFF", [0]))
+        self.assertIn(("AUDIO_MGR_OP_R", [7, 3]), self.link.escritas)
+        self.assertEqual(s.placa, "xvf3800")
+        self.assertIsInstance(s.anel, fs.ring.Xvf3800Ring)  # a placa do audio-select decide, não a busca USB do anel
+
+    async def test_button_mute_turns_the_ring_red_on_the_xvf(self):
+        s = self._novo_satelite_xvf()
+        s.maestro.mudo = True  # o detector viu os zeros do botão
+        self.assertTrue(s._mudo_visivel())
+
+    async def test_undo_mute_writes_the_pin_on_the_xvf(self):
+        s = self._novo_satelite_xvf()
+        self.link.escritas.clear()
+        s._agir("desfazer_mudo", None)
+        self.assertIn(("GPO_WRITE_VALUE", [30, 0]), self.link.escritas)
+
+    async def test_jabra_ring_ignores_the_button_mute_as_today(self):
+        self.s.maestro.mudo = True
+        self.assertFalse(self.s._mudo_visivel())
+
+
+class TestXvf3800Atraso(TestXvf3800):
+    async def test_delay_change_from_ha_is_written_live(self):
+        s = self._novo_satelite_xvf()
+        self.link.escritas.clear()
+        s.ao_mudar_config(dict(s.cfg, xvf_sys_delay=3))
+        self.assertEqual(self.link.escritas, [("AUDIO_MGR_SYS_DELAY", [3])])

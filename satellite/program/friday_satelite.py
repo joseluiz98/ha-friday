@@ -20,6 +20,7 @@ from maestro import Ajustes, Maestro
 from taxa_captura import TaxaCaptura
 import palavra_modelo
 import placa
+import xvf_link
 from ativacao_detalhes import payload as payload_ativacao
 import net_recovery
 import porta_local
@@ -65,12 +66,17 @@ class Satelite:
         self.alto = AltoFalante()
         # spec 2026-11-05 §11: o anel é uma camada de estados com dois drivers (Jabra, XVF3800); nunca derruba o programa
         # spec 2026-11-17: a placa de áudio (Jabra ou XVF3800) vem do audio-select; Jabra = o código de sempre.
-        # `link=None` até o canal USB do XVF (Task 4) ser ligado aqui.
+        # No XVF um canal USB único (xvf_link) atende anel, mudo, ajustes e DOA; os ajustes voltam a cada partida.
         self.placa = placa.ler_placa()
-        camada = placa.montar(self.placa, link=None)
+        self.xvf = xvf_link.XvfLink() if self.placa == "xvf3800" else None
+        if self.xvf is not None:
+            xvf_link.apply_startup(self.xvf, self.cfg, mudo=bool(self.cfg.get("mudo")))
+        camada = placa.montar(self.placa, link=self.xvf)
         self.mixer = camada["mixer"]
         self._botao_cls = camada["botao"]  # None no XVF: sem botão nem teclas (volume só por voz e pelo HA)
-        self.anel = ring.make_ring(lambda: Anel(detector=self.det_botao), posicao_fn=self.mixer.escrever)
+        self.anel = ring.make_ring(lambda: Anel(detector=self.det_botao), posicao_fn=self.mixer.escrever,
+                                   xvf_factory=(lambda: self.xvf) if self.xvf is not None else None,
+                                   usb_find=(lambda **kw: True) if self.xvf is not None else None)
         self._rede_checada = None  # spec 2026-11-08: instante (monotonic) da última leitura do estado do netwatch
         self.contagem = ring.Contagem()
         self.conexao = None
@@ -328,6 +334,8 @@ class Satelite:
             self.conexao.pessoa_falou()
         if nome == "mudo" and valor is not None:  # 31/10: botão de mudo do Jabra chega ao HA na hora
             self.emissor.emitir("config", {"mudancas": {"mudo_botao": bool(valor)}, "origem": "botao"})
+            if self.placa == "xvf3800":  # 17/11: o anel do XVF mostra o mudo do botão (no Jabra, a luz é dele)
+                self.anel.set_muted(self._mudo_visivel())
 
     @staticmethod
     async def _fechar_depois(conexao, atraso_s):
@@ -347,8 +355,9 @@ class Satelite:
         elif tipo == "luz":
             self.anel.show_maestro(ring.ESTADO_DO_MAESTRO[arg])
         elif tipo == "desfazer_mudo":  # spec 2026-11-08: a rede voltou e o mudo veio da luz de erro; não ficar mudo
-            if isinstance(self.anel, ring.Xvf3800Ring):  # sem caminho de software conhecido no código: só registra
-                print(json.dumps({"undo_mute": "unsupported_xvf3800"}), flush=True)
+            if self.placa == "xvf3800":  # 17/11: o pino X0D30 do XVF desfaz o mudo do botão por software
+                self.controle_mudo.aplicar(False)
+                print(json.dumps({"undo_mute": "xvf3800"}), flush=True)
             else:  # Jabra: escrever a luz religa o microfone mudo (medido em 06/10)
                 self.anel.set_muted(self._mudo_visivel())
                 self.anel.show_maestro(ring.ESTADO_DO_MAESTRO[self.maestro._luz_do_estado()])
@@ -755,6 +764,8 @@ class Satelite:
         self.cfg = novo
         if mudou_mudo:
             self._aplicar_mudo()
+        if self.xvf is not None and "xvf_sys_delay" in mudancas:  # 17/11: atraso calibrado pelo HA vale na hora
+            self.xvf.write("AUDIO_MGR_SYS_DELAY", [int(novo["xvf_sys_delay"])])
         self.emissor.url = novo.get("agente_url")
         if mudancas:  # PUT /config pela porta local
             self.emissor.emitir("config", {"mudancas": mudancas, "origem": "porta"})
@@ -768,8 +779,9 @@ class Satelite:
 
     def _mudo_visivel(self) -> bool:
         """O indicador de mudo do anel (v0.3.7) segue só o mudo por software (config). O do botão é do próprio Jabra
-        (vermelho dele, luzes retidas pelo maestro); e os zeros que o próprio bit causa na captura não podem prendê-lo."""
-        return bool(self.cfg.get("mudo"))
+        (vermelho dele, luzes retidas pelo maestro); e os zeros que o próprio bit causa na captura não podem prendê-lo.
+        No XVF3800 (17/11) o botão não tem luz própria: o mudo do botão (zeros exatos na captura) também acende o anel."""
+        return bool(self.cfg.get("mudo")) or (self.placa == "xvf3800" and self.maestro.mudo is True)
 
     def arranque_do_anel(self):
         """Arranque: o mudo gravado entra no anel ANTES da primeira luz (16/11: o não perturbe apagava o vermelho)."""
