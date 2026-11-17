@@ -55,6 +55,7 @@ import music_state as ms
 import preferencias_voz as pv
 import inventario_casa as ic
 import gemini_watch as gw
+import speech_cut
 import canal_casa as cc
 import whisper_mode as wm
 import memory_views as mv
@@ -1171,9 +1172,13 @@ async def bot(runner_args: RunnerArguments):
     # 19/10 (caso real 13:59): o Gemini recebeu a resposta do cérebro e não falou; não havia registro do que ele
     # mandou de volta. Depois de cada entrega, as mensagens dele vão resumidas ao log até ela começar a falar.
     vigia = gw.ResultWatch()
+    corte = speech_cut.SpeechCut()  # v0.3.7 (M6): a palavra cortou o recado; o resto da geração não volta
     _mensagem_original = llm._handle_server_message
 
     async def _mensagem_vigiada(message):
+        message = corte.filter(message)
+        if message is None:
+            return
         if vigia.active():
             try:
                 logger.info(f"gemini [{sessao}] +{vigia.elapsed():.1f}s após o cérebro: "
@@ -1585,6 +1590,10 @@ async def bot(runner_args: RunnerArguments):
                 n = cancelamento.cancel()
                 logger.info(f"botão vermelho [{sessao}]: {n} tarefa(s) cancelada(s)")
                 await runner.cancel()
+            elif msg.type == "cortar_fala":  # v0.3.7 (M6): a palavra cortou o recado na Pi
+                armou = corte.cut()
+                logger.info(f"fala cortada pela palavra [{sessao}]: geração em curso descartada={armou}")
+                await worker.queue_frames([_quadros.InterruptionWorkerFrame()])
             elif msg.type == "speech_started" and turnos_pi:  # D7: a Pi percebeu a fala (inclusive sussurrada)
                 await turnos_pi.started()
             elif msg.type == "speech_stopped" and turnos_pi:

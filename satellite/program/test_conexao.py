@@ -262,6 +262,17 @@ class TestCortarFala(unittest.IsolatedAsyncioTestCase):
         c._entregar_audio(b"d")
         self.assertEqual(tocou, [b"a", b"d"])
 
+    def test_cut_tells_the_bot(self):  # M6: o bot descarta o resto da geração cortada
+        import json
+        c = self._c([])
+        class Canal:
+            readyState = "open"
+            def __init__(self): self.enviadas = []
+            def send(self, m): self.enviadas.append(json.loads(m))
+        c._canal = Canal()
+        c.cortar_fala()
+        self.assertEqual([m["data"]["t"] for m in c._canal.enviadas], ["cortar_fala"])
+
     def test_person_speaking_without_a_cut_changes_nothing(self):
         tocou = []
         c = self._c(tocou)
