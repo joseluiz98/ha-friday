@@ -21,6 +21,7 @@ from taxa_captura import TaxaCaptura
 import palavra_modelo
 import placa
 import xvf_link
+import doa
 from ativacao_detalhes import payload as payload_ativacao
 import net_recovery
 import porta_local
@@ -71,6 +72,12 @@ class Satelite:
         self.xvf = xvf_link.XvfLink() if self.placa == "xvf3800" else None
         if self.xvf is not None:
             xvf_link.apply_startup(self.xvf, self.cfg, mudo=bool(self.cfg.get("mudo")))
+        # 17/11 (DOA v0): direção e trava de feixe só no XVF; a regra lê o switch Beam lock a cada palavra
+        self.doa_dir = doa.Direcao() if self.xvf is not None else None
+        self.doa_trava = doa.TravaFeixe(self.xvf, log=lambda m: print(json.dumps({"doa": m}), flush=True)) \
+            if self.xvf is not None else None
+        self.doa_regra = doa.Regra(self.doa_dir, self.doa_trava, ligada=lambda: bool(self.cfg.get("beam_lock", True))) \
+            if self.xvf is not None else None
         camada = placa.montar(self.placa, link=self.xvf)
         self.mixer = camada["mixer"]
         self._botao_cls = camada["botao"]  # None no XVF: sem botão nem teclas (volume só por voz e pelo HA)
@@ -319,6 +326,26 @@ class Satelite:
         except Exception:
             return -120.0
 
+    # ---- DOA v0 (spec 2026-11-17): regra do ESPHome, só no XVF
+    def _travar_na_palavra(self):
+        if self.doa_regra is None:
+            return
+        graus = self.doa_regra.palavra(time.monotonic())
+        if graus is not None:
+            self.anel.fixar_direcao(graus)
+
+    def _doa_evento(self, nome):
+        if self.doa_regra is None:
+            return
+        if nome == "fala_comecou":
+            self.doa_regra.fala_comecou()
+        elif nome == "fala_parou":
+            self.doa_regra.fala_parou()
+        elif nome == "parada":
+            self.doa_regra.conversa_fechou()
+        if not self.doa_trava.travado:
+            self.anel.fixar_direcao(None)
+
     def _despachar(self, nome, valor=None):
         if nome != "tique":  # 06/10: rastro no journal para entender fechamentos (sem áudio)
             print(json.dumps({"evento": nome, "valor": valor, "estado": self.maestro.estado}), flush=True)
@@ -336,6 +363,10 @@ class Satelite:
             self.emissor.emitir("config", {"mudancas": {"mudo_botao": bool(valor)}, "origem": "botao"})
             if self.placa == "xvf3800":  # 17/11: o anel do XVF mostra o mudo do botão (no Jabra, a luz é dele)
                 self.anel.set_muted(self._mudo_visivel())
+        if nome in ("fala_comecou", "fala_parou"):  # 17/11: DOA v0 — fim do primeiro pedido solta a trava
+            self._doa_evento(nome)
+        if self.doa_trava is not None and self.doa_trava.travado and self.maestro.estado == "parada":
+            self._doa_evento("parada")  # a conversa fechou com a trava ainda ligada
 
     @staticmethod
     async def _fechar_depois(conexao, atraso_s):
@@ -364,6 +395,8 @@ class Satelite:
                 print(json.dumps({"undo_mute": "jabra"}), flush=True)
         elif tipo == "conectar":  # arg: None (palavra/botão) ou {"timer": ...}/{"entrega": id} (spec 2026-10-12)
             com_voz = arg is None or arg.get("whisper") or arg.get("wake_word")
+            if arg is not None and arg.get("wake_word"):  # 17/11: DOA v0 — trava na direção de quem disse a palavra
+                self._travar_na_palavra()
             if self._claim_id and arg is not None:  # spec 2026-11-16: o bot cruza a conversa com o aviso da disputa
                 arg = dict(arg, claim_id=self._claim_id)
             self.conexao = ConexaoFriday(self.cfg["endereco_friday"], cfgmod.dados_conexao(self.sid, self.cfg, arg),
@@ -711,6 +744,10 @@ class Satelite:
             self.mixer.escrever(self.volume.atual)
 
     def tique(self):
+        if self.doa_trava is not None and self.doa_trava.travado:  # 17/11: teto de 90 s da trava de feixe
+            self.doa_trava.tique()
+            if not self.doa_trava.travado:
+                self.anel.fixar_direcao(None)
         if not self._claim_pendente:  # no máximo 0,3 s: o tique não abre a fila de entregas por cima do aviso
             self.evento("tique")
         agora = time.monotonic()
@@ -1124,6 +1161,8 @@ async def principal():
         threading.Thread(target=corpo, daemon=True).start()
 
     em_thread(s.captura); em_thread(s.botao)
+    if s.doa_dir is not None:  # 17/11: DOA v0 — leitura contínua da direção (só no XVF)
+        threading.Thread(target=doa.ler_continuo, args=(s.xvf, s.doa_dir, threading.Event()), daemon=True).start()
     presenca = asyncio.ensure_future(s.disputa.laco_presenca())  # spec 2026-11-16: quantos outros satélites estão online
     threading.Thread(target=s.teclas, daemon=True).start()
     threading.Thread(target=s.duck_laco, daemon=True).start()

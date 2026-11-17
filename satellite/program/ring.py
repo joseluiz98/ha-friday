@@ -85,6 +85,7 @@ class _Composto:
     def _init_composto(self):
         self._estado = RingState()
         self._direcao = None
+        self._dir_fixa = None     # 17/11 (DOA v0): direção travada, desenhada na escuta enquanto a trava durar
         self._cru = None          # prévia / `muted` legado: desenhado como está
         self._iniciado = False    # nada desenha antes do primeiro show
 
@@ -138,6 +139,13 @@ class _Composto:
             if self._iniciado and self._cru is None and self._estado.resolve() != antes:
                 self._redesenhar()
 
+    def fixar_direcao(self, graus) -> None:
+        """DOA v0 (17/11): ponteiro na direção travada durante a conversa; None apaga (em repouso o anel segue apagado)."""
+        with self._trava:
+            self._dir_fixa = graus
+            if self._iniciado:
+                self._redesenhar()
+
     def set_muted(self, on: bool) -> None:
         self._mudar(lambda: self._estado.set_muted(on))
 
@@ -151,7 +159,8 @@ class _Composto:
                        self._direcao if self._cru == "listen" else None)
             return
         base, mudo = self._estado.resolve()
-        self._draw(base, mudo, self._direcao if base == "listen" else None)
+        direcao = self._direcao if self._direcao is not None else self._dir_fixa
+        self._draw(base, mudo, direcao if base == "listen" else None)
 
     def _comecar_erro(self):  # só no driver com erro momentâneo
         pass

@@ -1003,3 +1003,42 @@ class TestXvf3800Atraso(TestXvf3800):
         self.link.escritas.clear()
         s.ao_mudar_config(dict(s.cfg, xvf_sys_delay=3))
         self.assertEqual(self.link.escritas, [("AUDIO_MGR_SYS_DELAY", [3])])
+
+
+class TestXvf3800Trava(TestXvf3800):
+    """DOA v0 (17/11): trava na palavra, solta no fim do primeiro pedido e ao fechar a conversa."""
+    def _xvf_com_direcao(self, graus=45):
+        s = self._novo_satelite_xvf()
+        agora = fs.time.monotonic()
+        for dt in (0.6, 0.4, 0.2):
+            s.doa_dir.alimentar(agora - dt, fs.math.radians(graus))
+        self.link.escritas.clear()
+        return s
+
+    async def test_wake_word_locks_and_first_request_end_releases(self):
+        s = self._xvf_com_direcao()
+        s._travar_na_palavra()
+        self.assertIn(("AEC_FIXEDBEAMSONOFF", [1]), self.link.escritas)
+        self.assertAlmostEqual(s.anel._dir_fixa, 45, delta=1)
+        s._doa_evento("fala_parou")  # fim da própria palavra: segue travada
+        self.assertTrue(s.doa_trava.travado)
+        s._doa_evento("fala_comecou"); s._doa_evento("fala_parou")
+        self.assertFalse(s.doa_trava.travado)
+        self.assertIn(("AUDIO_MGR_OP_R", [7, 3]), self.link.escritas)
+
+    async def test_beam_lock_switch_off_never_locks(self):
+        s = self._xvf_com_direcao()
+        s.cfg["beam_lock"] = False
+        s._travar_na_palavra()
+        self.assertNotIn(("AEC_FIXEDBEAMSONOFF", [1]), self.link.escritas)
+
+    async def test_conversation_close_releases_and_clears_the_ring(self):
+        s = self._xvf_com_direcao()
+        s._travar_na_palavra()
+        s._doa_evento("parada")
+        self.assertFalse(s.doa_trava.travado)
+        self.assertIsNone(s.anel._dir_fixa)
+
+    async def test_jabra_has_no_beam_lock(self):
+        self.assertIsNone(self.s.doa_regra)
+        self.s._travar_na_palavra()  # não faz nada no Jabra
