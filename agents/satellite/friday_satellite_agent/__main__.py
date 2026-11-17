@@ -138,11 +138,12 @@ async def main() -> None:
     ha_token = secrets.token_urlsafe(32) if pairable else pairing.agent_token(ETC_DIR, {"senha_porta_local": token})
     session = pairing.PairingSession() if pairable else None
     zc_box: list = []
-    mapper, tracker = cap.Mapper(), cap.Tracker(path=COUNTERS)
+    board = cap.read_board(os.path.join(ETC_DIR, "audio_board"))  # read once: a board swap restarts the program, not the agent
+    mapper, tracker = cap.Mapper(board=board), cap.Tracker(path=COUNTERS)
     memo: dict = {"cfg": None, "ww": [], "state": {"program_state": "off", **tracker.counters(),
                                                    "sw_version": cap.VERSION, "wifi_change": "idle"}}
     device = {"id": sat_id, "kind": "satellite", "name": f"Satellite {sat_id}",
-              "model": "Raspberry Pi 3 + Jabra", "sw_version": cap.VERSION}
+              "model": cap.model_for_board(board), "sw_version": cap.VERSION}
 
     async def power_log(message: str) -> None:
         await core.push_log(message, {})
@@ -229,7 +230,7 @@ async def main() -> None:
     equalizer = eqmod.Equalizer()
 
     def capabilities() -> list[dict]:
-        return (cap.controls_from_config(memo["cfg"] or {}, memo["ww"]) + cap.room_descriptors(room.keys)
+        return (cap.controls_from_config(memo["cfg"] or {}, memo["ww"], board=board) + cap.room_descriptors(room.keys)
                 + equalizer.descriptors() + ota.OtaClient.descriptors())
 
     async def room_state(values: dict) -> None:
