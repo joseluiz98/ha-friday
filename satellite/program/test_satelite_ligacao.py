@@ -577,6 +577,334 @@ class TestAnelComMudo(Base):
         self.assertEqual(F.luzes[-1][1], True)
 
 
+class DisputaFalsa:
+    """ClienteDisputa de mentira (spec 2026-11-16): `liberar` segura o veredito até o teste soltar."""
+    def __init__(self, outros=0, veredito="go"):
+        self.outros, self.veredito = outros, veredito
+        self.claims, self.registros, self.antes = [], [], None
+        self.liberar = asyncio.Event()
+    def precisa_disputar(self): return self.outros > 0
+    async def disputar(self, claim):
+        self.claims.append(claim)
+        if self.antes:
+            self.antes()
+        await self.liberar.wait()
+        return {"verdict": self.veredito, "reason": "teste"}
+    async def registrar(self, claim): self.registros.append(claim)
+    async def fechar(self): pass
+
+
+class TestDisputa(Base):
+    PALAVRA = {"whisper": False, "wake_word": "friday", "score": 0.83, "voice_dbfs": -31.5}
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.luzes = []
+        self.s.anel.show_maestro = lambda estado, direcao=None: self.luzes.append(estado)
+
+    def disputa(self, **k):
+        self.s.disputa = DisputaFalsa(**k)
+        return self.s.disputa
+
+    async def solta(self, d):
+        await asyncio.sleep(0)
+        d.liberar.set()
+        await asyncio.sleep(0.01)
+
+    async def test_alone_acts_now_and_records(self):
+        d = self.disputa(outros=0)
+        self.s.evento("palavra", self.PALAVRA)
+        self.assertEqual(F.sons, ["inicio_a.wav"])  # na hora, sem esperar ninguém
+        await asyncio.sleep(0.01)
+        self.assertEqual(d.claims, [])
+        self.assertEqual(len(d.registros), 1)
+        c = d.registros[0]
+        self.assertEqual((c["wake_word"], c["score"], c["voice_dbfs"], c["busy"]), ("friday", 0.83, -31.5, False))
+        self.assertIsInstance(c["claim_id"], str)
+        self.assertEqual(F.conexoes[-1].dados["claim_id"], c["claim_id"])
+
+    async def test_claim_go_then_acts(self):
+        d = self.disputa(outros=1)
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.assertEqual(self.luzes, ["listen"])  # a luz de escuta acende já
+        self.assertEqual((F.sons, F.conexoes), ([], []))  # som e conversa só depois do veredito
+        self.assertEqual(self.s.maestro.estado, "parada")
+        await self.solta(d)
+        self.assertEqual(F.sons, ["inicio_a.wav"])
+        self.assertEqual(self.s.maestro.estado, "conectando")
+        self.assertEqual(F.conexoes[-1].dados["claim_id"], d.claims[0]["claim_id"])
+        self.assertEqual(d.claims[0]["wake_word"], "friday")
+        self.assertFalse(d.claims[0]["busy"])
+        self.assertEqual(d.registros, [])
+
+    async def test_claim_lost_in_parada_restores_light(self):
+        d = self.disputa(outros=1, veredito="lost")
+        self.s.evento("palavra", self.PALAVRA)
+        await self.solta(d)
+        self.assertEqual((F.sons, F.conexoes), ([], []))
+        self.assertEqual(self.s.maestro.estado, "parada")
+        self.assertEqual(self.luzes, ["listen", "off"])  # volta à luz do estado (parada)
+
+    async def test_claim_lost_while_busy_keeps_conversation(self):
+        d = self.disputa(outros=1, veredito="lost")
+        m = self.s.maestro
+        m.estado, m._abertura = "aguardando", {"inicio": 0.0, "como_abriu": "palavra"}
+        vistos = []
+        original = m.evento
+        m.evento = lambda nome, agora, valor=None: (vistos.append(nome), original(nome, agora, valor))[1]
+        self.s.evento("palavra", self.PALAVRA)
+        await self.solta(d)
+        self.assertTrue(d.claims[0]["busy"])
+        self.assertNotIn("palavra", vistos)
+        self.assertEqual(m.estado, "aguardando")
+        self.assertEqual((F.sons, F.conexoes, self.luzes), ([], [], []))  # a luz do ocupado não muda
+
+    async def test_claim_go_while_busy_acts_as_today(self):
+        d = self.disputa(outros=1, veredito="go")
+        m = self.s.maestro
+        m.estado, m._abertura = "aguardando", {"inicio": 0.0, "como_abriu": "palavra"}
+        self.s.evento("palavra", self.PALAVRA)
+        await self.solta(d)
+        self.assertEqual(m.estado, "ouvindo")  # reabre como hoje
+        self.assertEqual(F.sons, ["inicio_a.wav"])
+
+    async def test_claim_during_a_pending_delivery_like_any_busy_state(self):
+        d = self.disputa(outros=1, veredito="go")
+        m = self.s.maestro
+        m.estado, m._abertura, m._recado = "ouvindo", {"inicio": 0.0, "como_abriu": "entrega"}, True
+        self.s.evento("palavra", self.PALAVRA)
+        await self.solta(d)
+        self.assertTrue(d.claims[0]["busy"])
+        self.assertEqual(F.parou_ja, 1)  # b287504: só a palavra ativa corta o recado
+
+    async def test_no_claim_when_maestro_would_ignore(self):
+        d = self.disputa(outros=1)
+        casos = [("muda", lambda m: setattr(m, "mudo", True)),
+                 ("conversa aberta sem recado", lambda m: (setattr(m, "estado", "ouvindo"),
+                                                          setattr(m, "_abertura", {"inicio": 0.0, "como_abriu": "palavra"}))),
+                 ("teste da palavra", lambda m: (setattr(m, "estado", "teste_palavra"), setattr(m, "_teste", {"contagem": 0}))),
+                 ("cadastro", lambda m: (setattr(m, "estado", "cadastro"), setattr(m, "_cadastro", {"nome": "x"})))]
+        for nome, prepara in casos:
+            with self.subTest(nome):
+                self.s.maestro.mudo = False
+                self.s.maestro.estado, self.s.maestro._abertura, self.s.maestro._cadastro = "parada", None, None
+                prepara(self.s.maestro)
+                self.s.evento("palavra", self.PALAVRA)
+                await asyncio.sleep(0.01)
+                self.assertEqual((d.claims, d.registros, self.luzes), ([], [], []))
+                self.assertFalse(self.s._claim_pendente)
+
+    async def test_alone_and_muted_does_not_record_either(self):
+        d = self.disputa(outros=0)
+        self.s.maestro.mudo = True
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0.01)
+        self.assertEqual((d.claims, d.registros), ([], []))
+
+    async def test_button_and_timer_never_claim(self):
+        d = self.disputa(outros=1)
+        self.s.evento("botao", None)
+        self.assertEqual(self.s.maestro.estado, "conectando")
+        self.s.evento("botao", "vermelho")
+        self.s.evento("timer_venceu", TestAlarmeMusical.TM)
+        self.s.campainha("abcd1234")
+        await asyncio.sleep(0.01)
+        self.assertEqual((d.claims, d.registros), ([], []))
+
+    async def test_second_word_while_pending_is_ignored(self):
+        d = self.disputa(outros=1)
+        self.s.evento("palavra", self.PALAVRA)
+        self.s.evento("palavra", dict(self.PALAVRA, score=0.9))
+        await self.solta(d)
+        self.assertEqual(len(d.claims), 1)
+        self.assertEqual(len(F.conexoes), 1)
+        self.assertFalse(self.s._claim_pendente)
+
+    async def test_word_without_measurements_acts_as_today(self):
+        d = self.disputa(outros=1)
+        self.s.evento("palavra", {"whisper": False, "wake_word": "friday"})
+        self.assertEqual(F.sons, ["inicio_a.wav"])
+        self.assertEqual((d.claims, d.registros), ([], []))
+
+    async def test_preroll_covers_wait(self):
+        self.s.recentes.extend(bytes([i]) * 2 for i in range(29))
+        self.s._espera_disputa_s = 0.3  # a espera medida do veredito (injetada, sem relógio)
+        self.s._agir("conectar", {"wake_word": "friday"})
+        enviados = [b[0] for b in F.conexoes[-1].enviados]
+        self.assertEqual(len(enviados), int(0.4 / 0.08) + 4 + 4)
+        self.assertEqual(enviados, list(range(29 - 13, 29)))  # os mais novos, contíguos até o microfone ao vivo
+        self.assertEqual(self.s._espera_disputa_s, 0.3)  # quem zera é `_disputar_e_agir`
+
+    async def test_preroll_with_wait_measured_by_the_claim_resets(self):
+        d = self.disputa(outros=1)
+        self.s.recentes.extend(bytes([i]) * 2 for i in range(29))
+        self.s.evento("palavra", self.PALAVRA)
+        await self.solta(d)
+        self.assertGreaterEqual(len(F.conexoes[-1].enviados), int(0.4 / 0.08) + 4)  # pelo menos o de sempre
+        self.assertEqual(self.s._espera_disputa_s, 0)
+
+    async def test_preroll_unchanged_when_alone(self):
+        self.disputa(outros=0)
+        self.s.recentes.extend(bytes([i]) * 2 for i in range(29))
+        self.s.evento("palavra", self.PALAVRA)
+        self.assertEqual(len(F.conexoes[-1].enviados), int(0.4 / 0.08) + 4)
+
+    async def test_second_word_without_measurements_hits_the_pending_guard(self):
+        d = self.disputa(outros=1)
+        self.s.evento("palavra", self.PALAVRA)
+        self.s.evento("palavra", {"whisper": False, "wake_word": "friday"})
+        self.s.evento("palavra")
+        self.assertEqual(F.sons, [])  # nada despachado enquanto o veredito não vem
+        await self.solta(d)
+        self.assertEqual(len(F.conexoes), 1)
+
+    async def test_doorbell_during_the_wait_queues_and_the_word_goes_first(self):
+        d = self.disputa(outros=1, veredito="go")
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.assertEqual(self.s.campainha("abcd1234"), "na_fila")
+        self.s.tique()  # o tique não abre a fila por cima do aviso
+        self.assertEqual(F.conexoes, [])
+        await self.solta(d)
+        self.assertEqual(F.parou_ja, 0)  # a entrega não foi cortada
+        self.assertNotIn("entrega", F.conexoes[-1].dados)
+        self.assertEqual(F.conexoes[-1].dados["wake_word"], "friday")
+        self.assertEqual(self.s.maestro.publico()["fila_entregas"], 1)
+
+    async def test_timer_during_the_wait_wins_and_the_word_is_stale(self):
+        d = self.disputa(outros=1, veredito="go")
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.s.evento("timer_venceu", TestAlarmeMusical.TM)
+        self.assertEqual(self.s.maestro.estado, "alarme")
+        await self.solta(d)
+        self.assertEqual(self.s.maestro.estado, "alarme")  # o alarme não foi encerrado por uma palavra anterior a ele
+        self.assertEqual(F.conexoes, [])
+        self.assertFalse(self.s._claim_pendente)
+
+    async def test_mute_during_the_wait_drops_the_word_and_never_touches_a_muted_ring(self):
+        d = self.disputa(outros=1, veredito="go")
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.s.evento("mudo", True)
+        await self.solta(d)
+        self.assertEqual((F.sons, F.conexoes), ([], []))
+        self.assertEqual(self.luzes, ["listen"])  # mudo do botão: a luz é do Jabra, nada é escrito por cima
+        self.s.evento("mudo", False)  # ao desmutar o maestro refaz a luz
+        self.assertEqual(self.luzes[-1], "off")
+
+    async def test_software_mute_during_the_wait_restores_the_light(self):
+        d = self.disputa(outros=1, veredito="go")
+        self.s.maestro.mudo_software = True
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.s.evento("mudo", True)
+        await self.solta(d)
+        self.assertEqual(self.luzes, ["listen", "off"])
+
+    async def test_conversation_closed_during_the_wait_still_answers_the_word(self):
+        """Final review 16/11 (item 3): the conversation closing by itself (AGUARDANDO/CORTADA/open -> PARADA) during the
+        <=0.3 s wait must not swallow a won word: it opens a new conversation."""
+        for antes in ("aguardando", "cortada", "ouvindo"):
+            with self.subTest(antes=antes):
+                F.sons.clear(); F.conexoes.clear()
+                d = self.disputa(outros=1, veredito="go")
+                m = self.s.maestro
+                m.estado, m._abertura = antes, {"inicio": 0.0, "como_abriu": "palavra"}
+                m._recado = antes == "ouvindo"  # an open conversation only claims over a pending message
+                self.s.evento("palavra", self.PALAVRA)
+                await asyncio.sleep(0)
+                self.assertTrue(self.s._claim_pendente)
+                m.estado, m._abertura, m._recado = "parada", None, False
+                await self.solta(d)
+                self.assertEqual(m.estado, "conectando")
+                self.assertEqual(F.conexoes[-1].dados["claim_id"], d.claims[0]["claim_id"])
+                m.estado, m._abertura = "parada", None
+
+    async def test_button_closing_the_conversation_during_the_wait_keeps_the_word_stale(self):
+        d = self.disputa(outros=1, veredito="go")
+        m = self.s.maestro
+        m.estado, m._abertura = "aguardando", {"inicio": 0.0, "como_abriu": "palavra"}
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.s.evento("botao", "vermelho")  # the person cancelled: the word from before must not reopen
+        self.assertEqual(m.estado, "parada")
+        n = len(F.conexoes)
+        await self.solta(d)
+        self.assertEqual(len(F.conexoes), n)
+        self.assertEqual(m.estado, "parada")
+
+    async def test_claim_lost_in_alarm_keeps_the_alarm_ringing(self):
+        """Owner decision 16/11: the loser acts as if it never heard the word, in every state: the alarm keeps ringing."""
+        d = self.disputa(outros=1, veredito="lost")
+        self.s.evento("timer_venceu", {"id": "t1", "nome": "ovo", "duracao_s": 60, "termino": 0.0})
+        self.assertEqual(self.s.maestro.estado, "alarme")
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.assertEqual(self.s.maestro.estado, "alarme")
+        self.assertTrue(d.claims[0]["busy"])
+        antes = list(F.sons)
+        await self.solta(d)
+        self.assertEqual(self.s.maestro.estado, "alarme")  # still ringing, nothing ended it
+        self.assertEqual(F.conexoes, [])
+        self.assertEqual(F.sons, antes)
+        self.assertFalse(self.s._claim_pendente)
+
+    async def test_claim_lost_after_the_alarm_ended_during_the_wait_only_restores_the_light(self):
+        d = self.disputa(outros=1, veredito="lost")
+        self.s.evento("timer_venceu", {"id": "t1", "nome": "ovo", "duracao_s": 60, "termino": 0.0})
+        self.s.evento("palavra", self.PALAVRA)
+        await asyncio.sleep(0)
+        self.s.evento("botao")  # the button stopped it during the wait
+        self.assertEqual(self.s.maestro.estado, "parada")
+        await self.solta(d)
+        self.assertEqual((self.s.maestro.estado, F.conexoes), ("parada", []))
+
+    async def test_whisper_and_recordings_use_the_2_s_window_not_the_preroll_buffer(self):
+        import inspect, re
+        self.s.recentes.extend(bytes([i]) * 2 for i in range(29))
+        janela = self.s._janela_palavra()
+        self.assertEqual(len(janela), fs.PEDACOS_JANELA_PALAVRA)
+        self.assertEqual(fs.PEDACOS_JANELA_PALAVRA, 25)
+        self.assertEqual(janela[-1], bytes([28]) * 2)
+        fonte = inspect.getsource(fs.Satelite.captura)
+        usos = [l.strip() for l in fonte.splitlines() if "self.recentes" in l]
+        self.assertEqual(usos, ["self.recentes.append(pcm)"])  # tudo mais passa por _janela_palavra()
+        self.assertIn('b"".join(self._janela_palavra())', fonte)  # entrada do sussurro e do piso de ruído
+
+    async def test_active_word_value_carries_score_and_voice_level(self):
+        import array
+        pcm = array.array("h", [1000] * 1280).tobytes()
+        self.s.recentes.extend([pcm] * 20)
+        v = self.s._valor_palavra(False, "friday", 0.8, 0.55)
+        self.assertEqual((v["score"], v["verifier_score"], v["wake_word"], v["whisper"]), (0.8, 0.55, "friday", False))
+        self.assertAlmostEqual(v["voice_dbfs"], -30.3, places=1)
+        self.assertNotIn("verifier_score", self.s._valor_palavra(False, "friday", 0.8))
+        self.s.recentes.clear()
+        self.assertEqual(self.s._voz_dbfs(), -120.0)  # sem áudio: silêncio, nunca erro
+        self.s.recentes.append(b"")
+        self.assertEqual(self.s._voz_dbfs(), -120.0)
+
+    async def test_recentes_keeps_the_wait(self):
+        # final review 16/11: sized for the config's maximum pre-roll (2 s) plus the claim wait (0.3 s), with margin
+        import math, configuracao, arbitragem
+        minimo = int(configuracao.PRE_GRAVACAO_MAX_S / 0.08) + 4 + math.ceil(arbitragem.ESPERA_DISPUTA_S / 0.08)
+        self.assertGreaterEqual(minimo, 33)
+        self.assertGreaterEqual(self.s.recentes.maxlen, minimo)
+        self.assertEqual(configuracao._REGRAS["pre_gravacao_s"][2], configuracao.PRE_GRAVACAO_MAX_S)
+
+    async def test_preroll_at_the_config_maximum_covers_the_wait(self):
+        self.s.cfg = dict(self.s.cfg, pre_gravacao_s=2)
+        self.s.recentes.extend(bytes([i]) * 2 for i in range(60))
+        self.s._espera_disputa_s = 0.3
+        self.s._agir("conectar", {"wake_word": "friday"})
+        enviados = [b[0] for b in F.conexoes[-1].enviados]
+        n = int(2 / 0.08) + 4 + 4
+        self.assertEqual(len(enviados), n)  # nothing of the 2 s pre-roll is lost to the wait
+        self.assertEqual(enviados, list(range(60 - n, 60)))
+
+
 class TestPararFala(Base):
     async def test_parar_fala_cuts_playback_and_the_rest_of_her_speech(self):
         self.s.maestro.evento("palavra", 0.0)

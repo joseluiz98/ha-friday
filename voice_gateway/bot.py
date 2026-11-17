@@ -57,6 +57,7 @@ import inventario_casa as ic
 import gemini_watch as gw
 import speech_cut
 import canal_casa as cc
+from arbitration import Arbiter, load_offsets
 import whisper_mode as wm
 import memory_views as mv
 import voice_directives as vd
@@ -125,6 +126,12 @@ TOKEN_CANAL_ARQ = os.environ.get("FRIDAY_TOKEN_CANAL", "/srv/friday/state/canal_
 # Senha só do POST /reminder: o OpenClaw a manda como `cron.webhookToken` (fica também no openclaw.json, 600).
 TOKEN_REMINDER_ARQ = os.environ.get("FRIDAY_TOKEN_REMINDER", "/srv/friday/state/reminder_webhook.token")
 # 04/11 (minor 13 de 19/10): conversas abertas e turnos do cérebro, para a porta de status e o agente do HA
+# Arbitragem entre satélites (spec 2026-11-16-satellite-arbitration): um árbitro por processo do gateway.
+ARBITRO = Arbiter(offsets=load_offsets(cc.arbitration_offsets_path()), log=cc.write_arbitration_record)
+ARBITRO_OFFSETS = cc.OffsetsReloader()
+# Presence (every 4 s per satellite) and claims (0.3 s budget) authenticate against this in-memory copy, refreshed in
+# the background; they never wait for the SMB read (final review 16/11).
+REGISTRO_SATELITES = cc.SatelliteRegistryCache(SATELITES_ARQ, SATELITES_CACHE)
 ATIVIDADE = act.Activity(os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json"))
 VOICE_ENABLED_ARQ = os.environ.get("FRIDAY_VOICE_ENABLED_FILE", "/srv/friday/state/voice-enabled")  # global voice switch (HA integration)
 TELEGRAM_JOSE = os.environ.get("FRIDAY_TELEGRAM_JOSE", "")
@@ -697,6 +704,20 @@ def registrar_rotas(app):
         return JSONResponse({"enviado": via})
 
 
+    @app.post("/satellite_presence")
+    async def rota_presenca(request: Request):
+        sats = REGISTRO_SATELITES.current()
+        status, saida = await cc.handle_presence(ARBITRO, sats, request.headers.get("authorization"))
+        return JSONResponse(saida, status_code=status)
+
+    @app.post("/wake_claim")
+    async def rota_disputa(request: Request):
+        sats = REGISTRO_SATELITES.current()
+        ARBITRO_OFFSETS.apply(ARBITRO)
+        status, saida = await cc.handle_wake_claim(ARBITRO, sats, request.headers.get("authorization"),
+                                                   await corpo_json(request))
+        return JSONResponse(saida, status_code=status)
+
     @app.post("/satellite_media")
     async def rota_musica(request: Request):
         sats = await cc.read_satellites_without_blocking(SATELITES_ARQ, SATELITES_CACHE)
@@ -1105,7 +1126,8 @@ async def bot(runner_args: RunnerArguments):
     # 20/10 (spec 2026-10-20 D6): conversa aberta por um "Friday" sussurrado; só o satélite manda `whisper`
     sussurro = eh_satelite and sm.whisper(corpo)
     logger.info(f"conexão: {sm.rotulo_conexao(eh_satelite, satelite_id, comodo, id_entrega, timer, bool(apresentacao))}"
-                f"{' sussurro' if sussurro else ''}; "
+                f"{' sussurro' if sussurro else ''}"
+                f"{' claim_id=' + str(corpo.get('claim_id')) if eh_satelite and isinstance(corpo, dict) and corpo.get('claim_id') else ''}; "
                 f"preferências: {preferencias.count(chr(10) + '- ')} diretrizes; vistas de memória: braço={arm}")
     if id_entrega and not entrega:
         logger.warning(f"entrega {id_entrega} desconhecida ou vencida: a conversa é encerrada")
@@ -1626,6 +1648,8 @@ async def bot(runner_args: RunnerArguments):
     async def on_client_connected(transport, client):
         logger.info("cliente conectado")
         ATIVIDADE.opened(sessao)
+        if eh_satelite:
+            ARBITRO.set_busy(satelite_id, True)
         ab.start(sessao, arm, satelite_id if eh_satelite else None)
         if AQUECER_A_CADA_SECS > 0:
             aquecimento.append(asyncio.create_task(manter_cerebro_quente()))
@@ -1645,6 +1669,8 @@ async def bot(runner_args: RunnerArguments):
     async def on_client_disconnected(transport, client):
         logger.info("cliente desconectado")
         ATIVIDADE.closed(sessao)
+        if eh_satelite:
+            ARBITRO.set_busy(satelite_id, False)
         if not ab_fim:
             ab_fim.append(True)
             ab.end(sessao, arm)
@@ -1660,6 +1686,8 @@ async def bot(runner_args: RunnerArguments):
         # Pedidos ao cérebro em andamento NÃO são cancelados: com a conversa fechada, viram push.
         estado.aberta = False
         ATIVIDADE.closed(sessao)
+        if eh_satelite:
+            ARBITRO.set_busy(satelite_id, False)
         if entrega:
             ENTREGAS.terminou(entrega.id)
         for tarefa in aquecimento:

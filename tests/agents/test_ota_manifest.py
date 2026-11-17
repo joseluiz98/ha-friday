@@ -14,6 +14,31 @@ def test_changed_components_by_prefix():
     assert m.changed_components(man, ["agents/common/friday_agent_core/server.py"]) == ["satellite", "server-agent"]
     assert m.changed_components(man, ["satellite/programX.py", "README.md"]) == []
 
+def _installed_server_dirs():
+    """The /opt/friday/<d> dirs server/install.sh copies (its `for d in ...; do` loop)."""
+    import re
+    text = (ROOT / "server" / "install.sh").read_text()
+    return re.search(r"^for d in ([a-z ]+); do$", text, re.M).group(1).split()
+
+def test_every_installed_server_dir_is_in_the_server_component():
+    """Final review 16/11: server/browser was installed but missing from components.server, so a release that only
+    changed it would not be installed by the OTA (plan() -> touches())."""
+    man = m.load(str(ROOT / "ota" / "release.json"))
+    dirs = _installed_server_dirs()
+    assert "browser" in dirs
+    for d in dirs:
+        assert f"server/{d}" in man.components["server"], d
+    assert m.changed_components(man, ["server/browser/browser_idle.py"]) == ["server"]
+
+def test_drift_checks_every_installed_server_dir():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("drift", ROOT / "scripts" / "drift.py")
+    drift = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(drift)
+    prefixes = {p[0] for p in drift.PLANS["vm"]}
+    for d in _installed_server_dirs():
+        assert f"server/{d}/" in prefixes, d
+
 @pytest.mark.parametrize("bad,key", [
     ({"schema": 2}, "schema"),
     ({"components": {}}, "components"),

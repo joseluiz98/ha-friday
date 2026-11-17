@@ -47,7 +47,17 @@ class TestProducao(unittest.TestCase):
         t = open(os.path.join(AQUI, "bot.py")).read()
         self.assertNotIn("cc.ler_satelites(SATELITES_ARQ)", t)
         # desde 19/10 o cache entra pela leitura sem travar (read_satellites_without_blocking usa ler_satelites_com_cache)
-        self.assertEqual(t.count("cc.read_satellites_without_blocking(SATELITES_ARQ, SATELITES_CACHE)"), 4)  # 21/10: +1 (player do satélite, fato de música; com prazo), +1 (/satellite_media)
+        self.assertEqual(t.count("cc.read_satellites_without_blocking(SATELITES_ARQ, SATELITES_CACHE)"), 4)  # 21/10: +1 (player do satélite, fato de música; com prazo), +1 (/satellite_media); 16/11: presence/claim use the in-memory copy
+
+    def test_presence_and_claim_never_await_the_registry_read(self):
+        """Final review 16/11: presence every 4 s and claims (0.3 s budget) must not park threads on the SMB read."""
+        t = open(os.path.join(AQUI, "bot.py")).read()
+        self.assertIn("REGISTRO_SATELITES = cc.SatelliteRegistryCache(SATELITES_ARQ, SATELITES_CACHE)", t)
+        for route in ("async def rota_presenca", "async def rota_disputa"):
+            body = t.split(route, 1)[1].split("@app.", 1)[0]
+            self.assertIn("REGISTRO_SATELITES.current()", body, route)
+            self.assertNotIn("read_satellites_without_blocking", body, route)
+            self.assertNotIn("to_thread", body, route)
 
 
 if __name__ == "__main__":
