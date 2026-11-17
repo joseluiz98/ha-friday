@@ -15,9 +15,10 @@ from arbitragem import ESPERA_DISPUTA_S, ClienteDisputa, novo_claim_id
 from conexao import ConexaoFriday
 from detectores import (DetectorBotaoTelefone, DetectorFala, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
                         MedidorEco, PicoDaFala, escolher_acao, portao_eco, rms_dbfs, trecho_do_episodio)
-from hardware import AltoFalante, Anel, Botao, Captura, ControleMudo, Mixer, MusicMixer, TeclasVolume
+from hardware import AltoFalante, Anel, Captura, TeclasVolume
 from maestro import Ajustes, Maestro
 import palavra_modelo
+import placa
 from ativacao_detalhes import payload as payload_ativacao
 import net_recovery
 import porta_local
@@ -62,7 +63,12 @@ class Satelite:
         self.det_botao = DetectorBotaoTelefone()
         self.alto = AltoFalante()
         # spec 2026-11-05 §11: o anel é uma camada de estados com dois drivers (Jabra, XVF3800); nunca derruba o programa
-        self.mixer = Mixer()
+        # spec 2026-11-17: a placa de áudio (Jabra ou XVF3800) vem do audio-select; Jabra = o código de sempre.
+        # `link=None` até o canal USB do XVF (Task 4) ser ligado aqui.
+        self.placa = placa.ler_placa()
+        camada = placa.montar(self.placa, link=None)
+        self.mixer = camada["mixer"]
+        self._botao_cls = camada["botao"]  # None no XVF: sem botão nem teclas (volume só por voz e pelo HA)
         self.anel = ring.make_ring(lambda: Anel(detector=self.det_botao), posicao_fn=self.mixer.escrever)
         self._rede_checada = None  # spec 2026-11-08: instante (monotonic) da última leitura do estado do netwatch
         self.contagem = ring.Contagem()
@@ -84,7 +90,7 @@ class Satelite:
         self.contexto = collections.deque(maxlen=375)  # 20/10: ~30 s antes de cada ativação (tentativas perdidas)
         self.ambiente = ambiente.GravadorAmbiente()  # 02/11: gravação contínua para o retreino (gravar_ambiente_ate)
         # spec 2026-10-12: volume (o gravado, ou o que o aparelho tem) e timers
-        self.controle_mudo = ControleMudo()
+        self.controle_mudo = camada["controle_mudo"]
         fabrica = self.cfg["volume"] is None  # 06/11: Mark novo começa em 65%, não no que o aparelho guardou
         if fabrica:
             print(json.dumps({"volume_inicial": volume_inicial.aplicar()}), flush=True)
@@ -97,7 +103,7 @@ class Satelite:
         self.timers = tm.Timers(self._gravar_timers)
         # spec 2026-10-21 §6.2: ducking da música. O `softvol` Music só nasce no primeiro uso do PCM (prime);
         # start() põe 100%: depois de um crash a música não fica presa em 15%.
-        self.music_mixer = MusicMixer()
+        self.music_mixer = camada["music_mixer"]
         try:
             self.music_mixer.prime()
         except Exception as e:
@@ -1054,13 +1060,17 @@ class Satelite:
                 self.loop.call_soon_threadsafe(self.conexao.enviar, portao_eco(pcm, ela_falando, self.cfg.get("eco_portao_db")))
 
     def botao(self):
-        b = Botao(self.det_botao)
+        if self._botao_cls is None:  # XVF3800: o botão da placa corta o microfone em hardware, sem evento aqui
+            return
+        b = self._botao_cls(self.det_botao)
         while True:
             cor = b.esperar_toque()
             self.loop.call_soon_threadsafe(self.evento, "botao", cor)
 
     def teclas(self):
         """Botões +/− do Jabra. Falha aqui NÃO derruba o programa: sem ela só se perde a sincronia do volume."""
+        if self._botao_cls is None:  # XVF3800 não tem teclas de volume
+            return
         try:
             t = TeclasVolume()
             while True:

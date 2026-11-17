@@ -6,7 +6,7 @@ from unittest import mock
 # Módulos que só existem na Pi (ou que mexem em hardware) viram simulados SÓ durante o import do programa; depois
 # os originais voltam, senão os outros testes da suíte (test_conexao, test_hardware) pegariam os simulados.
 _SIMULADOS = ("numpy", "aiohttp", "openwakeword", "openwakeword.model", "openwakeword.vad", "hardware", "conexao",
-              "porta_local", "friday_satelite", "whisper")
+              "porta_local", "friday_satelite", "whisper", "placa")
 _ORIGINAIS = {n: sys.modules.get(n) for n in _SIMULADOS}
 for nome in ("numpy", "aiohttp", "openwakeword", "openwakeword.model", "openwakeword.vad"):
     sys.modules.setdefault(nome, types.ModuleType(nome))
@@ -81,6 +81,7 @@ sys.modules["whisper"] = wh
 pl = types.ModuleType("porta_local")
 sys.modules["porta_local"] = pl
 
+sys.modules.pop("placa", None)  # a fresh one binds to the simulated hardware; the original comes back below
 import friday_satelite as fs  # noqa: E402
 
 for _n, _m in _ORIGINAIS.items():
@@ -98,6 +99,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.p = mock.patch.multiple(fs, CFG=os.path.join(self.d, "config.json"), ID=os.path.join(self.d, "id"),
                                      TIMERS=os.path.join(self.d, "estado", "timers.json"), SONS=self.d)
         self.p.start()
+        self.p_placa = mock.patch.object(fs.placa, "ler_placa", return_value="jabra")  # never the host's audio_board
+        self.p_placa.start()
         import sons
         sons.gerar(self.d)
         import shutil  # 17/11: os tons de fábrica são os da ElevenLabs; os gerados fazem o papel deles aqui
@@ -113,6 +116,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.s._parar_alarme()
+        self.p_placa.stop()
         self.p.stop()
 
 

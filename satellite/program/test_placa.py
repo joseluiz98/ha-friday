@@ -1,0 +1,146 @@
+"""Camada da placa de áudio (spec 2026-11-17 xvf3800-support, Task 3).
+cd satellite/program && python3 -m unittest -q test_placa"""
+import os
+import tempfile
+import types
+import unittest
+
+import hardware
+import placa
+
+
+class Resp:
+    def __init__(self, out="", rc=0):
+        self.stdout, self.returncode = out, rc
+
+
+class Exec:
+    """Grava as chamadas e devolve a saída pedida."""
+    def __init__(self, out=""):
+        self.chamadas, self.out = [], out
+
+    def __call__(self, argv, **kw):
+        self.chamadas.append(argv)
+        return Resp(self.out)
+
+
+class FakeLink:
+    def __init__(self, lido=None):
+        self.escritas, self.lido, self.leituras = [], lido, []
+
+    def write(self, nome, valores):
+        self.escritas.append((nome, list(valores)))
+        return True
+
+    def read(self, nome):
+        self.leituras.append(nome)
+        return self.lido
+
+
+class TestLerPlaca(unittest.TestCase):
+    def _arq(self, texto):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "audio_board")
+        if texto is not None:
+            with open(p, "w") as f:
+                f.write(texto)
+        return p
+
+    def test_reads_the_three_values(self):
+        for v in ("xvf3800", "jabra", "none"):
+            self.assertEqual(placa.ler_placa(self._arq(v + "\n")), v)
+
+    def test_missing_or_unknown_is_jabra(self):
+        """Satélite antigo, sem o arquivo: é o Jabra de sempre (anti-objetivo do spec)."""
+        self.assertEqual(placa.ler_placa(self._arq(None)), "jabra")
+        self.assertEqual(placa.ler_placa(self._arq("outra\n")), "jabra")
+
+
+class TestVolumeXvf(unittest.TestCase):
+    def test_volume_table_xvf(self):
+        self.assertEqual(placa.VOLUME_XVF, [0, 30, 33, 37, 40, 43, 47, 50, 53, 57, 58, 60])
+        for pos, valor in enumerate(placa.VOLUME_XVF):
+            ex = Exec()
+            placa.MixerXvf(executar=ex).escrever(pos)
+            self.assertEqual(ex.chamadas, [["amixer", "-q", "-c", "Array", "sset", "PCM", f"{valor},{valor}"]])
+
+    def test_write_clamps_the_position(self):
+        ex = Exec()
+        m = placa.MixerXvf(executar=ex)
+        m.escrever(99)
+        m.escrever(-3)
+        self.assertEqual([c[-1] for c in ex.chamadas], ["60,60", "0,0"])
+
+    def test_read_rounds_to_the_nearest_position(self):
+        casos = {60: 11, 58: 10, 40: 4, 30: 1, 0: 0, 41: 4, 42: 5, 35: 2, 59: 10, 20: 1, 10: 0}
+        for cru, pos in casos.items():
+            saida = f"Simple mixer control 'PCM',0\n  Front Left: Playback {cru} [67%] [-20.00dB]\n"
+            self.assertEqual(placa.MixerXvf(executar=Exec(saida)).ler(), pos, cru)
+
+    def test_read_without_position_raises(self):
+        with self.assertRaises(RuntimeError):
+            placa.MixerXvf(executar=Exec("nada")).ler()
+
+    def test_read_uses_card_array_pcm(self):
+        ex = Exec("  Front Left: Playback 40 [67%]\n")
+        placa.MixerXvf(executar=ex).ler()
+        self.assertEqual(ex.chamadas[0], ["amixer", "-c", "Array", "sget", "PCM"])
+
+
+class TestMudoXvf(unittest.TestCase):
+    def test_mudo_xvf_writes_pin(self):
+        link = FakeLink()
+        m = placa.MudoXvf(link)
+        self.assertTrue(m.aplicar(True))
+        self.assertTrue(m.aplicar(False))
+        self.assertEqual(link.escritas, [("GPO_WRITE_VALUE", [30, 1]), ("GPO_WRITE_VALUE", [30, 0])])
+
+    def test_mudo_xvf_read(self):
+        self.assertIs(placa.MudoXvf(FakeLink([0, 1])).ler(), True)
+        self.assertIs(placa.MudoXvf(FakeLink([1, 0])).ler(), False)
+        link = FakeLink([0, 1])
+        placa.MudoXvf(link).ler()
+        self.assertEqual(link.leituras, ["GPO_READ_VALUES"])
+
+    def test_mudo_xvf_read_unknown_is_none(self):
+        self.assertIsNone(placa.MudoXvf(FakeLink(None)).ler())
+        self.assertIsNone(placa.MudoXvf(FakeLink([1])).ler())
+
+    def test_write_failure_is_false_not_raised(self):
+        class Ruim(FakeLink):
+            def write(self, nome, valores):
+                return False
+        self.assertFalse(placa.MudoXvf(Ruim()).aplicar(True))
+        self.assertFalse(placa.MudoXvf(None).aplicar(True))
+        self.assertIsNone(placa.MudoXvf(None).ler())
+
+
+class TestMontar(unittest.TestCase):
+    def test_jabra_assembly_is_todays(self):
+        c = placa.montar("jabra")
+        self.assertIsInstance(c["mixer"], hardware.Mixer)
+        self.assertEqual((c["mixer"].card, c["mixer"].controle), ("USB", "PCM"))
+        self.assertIsInstance(c["music_mixer"], hardware.MusicMixer)
+        self.assertEqual((c["music_mixer"].card, c["music_mixer"].control), ("USB", "Music"))
+        self.assertIsInstance(c["controle_mudo"], hardware.ControleMudo)
+        self.assertEqual((c["controle_mudo"].card, c["controle_mudo"].control), ("USB", "Headset"))
+        self.assertIs(c["botao"], hardware.Botao)
+
+    def test_none_assembles_like_jabra(self):
+        """`none` não sobe o programa; se alguém montar assim mesmo, nada muda para o Jabra."""
+        self.assertIs(placa.montar("none")["botao"], hardware.Botao)
+
+    def test_xvf_assembly(self):
+        link = FakeLink()
+        c = placa.montar("xvf3800", link=link)
+        self.assertIsInstance(c["mixer"], placa.MixerXvf)
+        self.assertEqual(c["mixer"].card, "Array")
+        self.assertIsInstance(c["music_mixer"], hardware.MusicMixer)
+        self.assertEqual(c["music_mixer"].card, "Array")
+        self.assertIsInstance(c["controle_mudo"], placa.MudoXvf)
+        self.assertIs(c["controle_mudo"]._link, link)
+        self.assertIsNone(c["botao"])
+
+
+if __name__ == "__main__":
+    unittest.main()
