@@ -34,10 +34,23 @@ def _extra_tree(cfg):
     (rel / "satellite/audio/jabra.conf").write_text("pcm.!default {}")
     (rel / "satellite/audio/xvf3800.conf").write_text("pcm.!default {}")
     (rel / "ota").mkdir()
-    (rel / "ota/release.json").write_text(json.dumps({"schema": 1, "protocol": {"satellite": 1, "server": 1, "update": 1},
-                                                      "min_protocol": {}, "requires": {}, "heavy": [],
-                                                      "components": {"satellite": ["satellite"]}}))
+    (rel / "ota/release.json").write_text(json.dumps(_release_json()))
     return rel
+
+
+DECLARED_SYSTEM = ["satellite/program", "satellite/audio/jabra.conf", "satellite/audio/xvf3800.conf",
+                   "agents/satellite/friday-satellite-agent.service", "agents/satellite/sudoers.friday-satellite-agent",
+                   "agents/satellite/friday-ota-apply"]
+
+
+def _release_json(contract=True, system=None):
+    data = {"schema": 1, "protocol": {"satellite": 1, "server": 1, "update": 1}, "min_protocol": {}, "requires": {},
+            "heavy": [], "components": {"satellite": ["satellite"]}}
+    if contract:
+        data["package"] = {"satellite": {"paths": ["satellite/program", "satellite/migrations", "satellite/audio",
+                                                   "agents/satellite", "agents/common/friday_agent_core"],
+                                         "system": DECLARED_SYSTEM if system is None else system}}
+    return data
 
 
 @pytest.fixture
@@ -252,3 +265,126 @@ def test_a_bundle_of_the_old_layout_is_never_reused(tmp_path):
     lock.write_text("x==1\n")
     path = wh.build([str(lock)], "f" * 64, out_root=str(tmp_path), run=run)
     assert calls and path != str(old) and Path(path).read_bytes() != b"old layout"
+
+
+def test_declared_system_files_are_packed(src):
+    archive, _, tmp = src
+    files = _members(pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(tmp / "pkg"))["path"])
+    assert files["system/jabra.conf"] == b"pcm.!default {}" and files["system/xvf3800.conf"] == b"pcm.!default {}"
+
+
+def test_old_builtin_lists_still_pack_the_declared_audio(src, monkeypatch):
+    """The v0.3.8 packager case: its built-in lists know nothing about audio, the release declares it."""
+    archive, _, tmp = src
+    monkeypatch.setattr(pk, "SATELLITE_PATHS", [p for p in pk.SATELLITE_PATHS if p != "satellite/audio"])
+    monkeypatch.setattr(pk, "SYSTEM_SOURCES", [p for p in pk.SYSTEM_SOURCES if not p.startswith("satellite/audio")])
+    files = _members(pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(tmp / "pkg"))["path"])
+    assert "system/jabra.conf" in files and "system/xvf3800.conf" in files
+
+
+def test_declared_file_missing_fails_and_writes_nothing(src):
+    archive, _, tmp = src
+    rel = tmp / "release" / "ota/release.json"
+    rel.write_text(json.dumps(_release_json(system=DECLARED_SYSTEM + ["satellite/audio/missing.conf"])))
+    with pytest.raises(pv.ProvisioningError) as e:
+        pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(tmp / "pkg"))
+    assert e.value.code == "source_missing"
+    assert not list((tmp / "pkg").glob("*"))
+
+
+def test_release_without_contract_uses_builtin_lists(src):
+    archive, _, tmp = src
+    (tmp / "release" / "ota/release.json").write_text(json.dumps(_release_json(contract=False)))
+    files = _members(pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(tmp / "pkg"))["path"])
+    assert {"system/friday-satelite.service", "system/jabra.conf", "system/xvf3800.conf",
+            "system/friday-ota-apply"} <= set(files)
+
+
+def test_declared_merges_required_paths_without_repeats():
+    paths, system = pk.declared({"package": {"satellite": {"paths": ["satellite/program", "x"], "system": ["a", "a"]}}})
+    assert paths[:2] == ["satellite/program", "x"] and system == ["a"]
+    assert "ota/release.json" in paths and "vault/manifest.json" in paths and "agents/satellite/friday-ota-apply" in paths
+    assert "satellite/program/requirements.lock" not in paths  # already inside the declared folder
+    assert len(paths) == len(set(paths))
+    assert pk.declared({}) [1] == pk.SYSTEM_SOURCES
+
+
+def _repo_release():
+    return json.loads((Path(__file__).resolve().parents[2] / "ota/release.json").read_text())
+
+
+def test_builtin_lists_equal_the_repo_contract():
+    sat = _repo_release()["package"]["satellite"]
+    assert (sat["paths"], sat["system"]) == (pk.SATELLITE_PATHS, pk.SYSTEM_SOURCES)
+
+
+def test_apply_system_names_are_declared():
+    """Every plain file name the satellite's apply installs from system/ is covered by the release contract."""
+    import ast
+    repo = Path(__file__).resolve().parents[2]
+    tree = ast.parse((repo / "agents/satellite/friday-ota-apply").read_text())
+    system = next(n.value for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "SYSTEM")
+    names = [k.value for k in system.keys if isinstance(k, ast.Constant) and not k.value.startswith(".")]
+    declared = [os.path.basename(p) for p in _repo_release()["package"]["satellite"]["system"]]
+    covered = set(declared)
+    for entry in _repo_release()["package"]["satellite"]["system"]:  # a declared folder covers the files inside it
+        if (repo / entry).is_dir():
+            covered |= {f.name for f in (repo / entry).iterdir() if f.is_file()}
+    existing = {f.name for base in ("satellite", "agents/satellite") for f in (repo / base).rglob("*") if f.is_file()}
+    assert names
+    for n in names:
+        if n in existing:
+            assert n in covered, f"{n} is installed by friday-ota-apply but no package.satellite.system entry covers it"
+
+
+def test_build_release_records_built_by(src):
+    archive, _, tmp = src
+    root = tmp / "ota"
+    out = pk.build_release(FakeRepo(archive), "v9.9.9", SHA, pv._vault(), str(root), wheels=lambda locks, sha: "w",
+                           built_by="v9.9.8")
+    assert out["built_by"] == "v9.9.8"
+    assert json.loads((root / "packages/v9.9.9/meta.json").read_text())["built_by"] == "v9.9.8"
+
+
+def test_mark_offered_roundtrip(tmp_path):
+    assert pk.is_offered(str(tmp_path), "v0.4.0") is False
+    (tmp_path / "packages" / "v0.4.0").mkdir(parents=True)
+    pk.mark_offered(str(tmp_path), "v0.4.0")
+    assert (tmp_path / "packages" / "v0.4.0" / ".offered").exists()
+    assert pk.is_offered(str(tmp_path), "v0.4.0") is True
+    assert pk.is_offered(str(tmp_path), "v0.3.0") is False
+
+
+def test_mark_offered_records_first_offer_only(tmp_path):
+    pk.mark_offered(str(tmp_path), "v0.4.0", now=100.0)
+    pk.mark_offered(str(tmp_path), "v0.4.0", now=200.0)
+    data = json.loads((tmp_path / "packages/v0.4.0/.offered").read_text())
+    assert data == {"tag": "v0.4.0", "at": 100.0}
+
+
+def test_satellite_only_rebuild_keeps_server_archive(src):
+    archive, _, tmp = src
+    root = tmp / "ota"
+    repo = FakeRepo(archive)
+    pk.build_release(repo, "v9.9.9", SHA, pv._vault(), str(root), wheels=lambda locks, sha: "w", built_by="v9.9.8")
+    server = root / "packages/v9.9.9/archive.tar"
+    before = server.read_bytes()
+    repo.calls.clear()
+    out = pk.build_release(repo, "v9.9.9", SHA, pv._vault(), str(root), wheels=lambda locks, sha: "w2",
+                           built_by="v9.9.9", satellite_only=True)
+    assert server.exists() and server.read_bytes() == before
+    assert not any(c[2] == tuple(pk.SERVER_PATHS) for c in repo.calls)
+    assert out["built_by"] == "v9.9.9" and out["satellite"]["wheels"] == "w2" and out["server"]["path"] == str(server)
+    assert json.loads((root / "packages/v9.9.9/meta.json").read_text())["built_by"] == "v9.9.9"
+
+
+def test_build_satellite_without_release_json_uses_builtin_lists(src):
+    archive, _, tmp = src
+
+    def no_release(sha, paths):
+        if list(paths) == ["ota/release.json"]:
+            raise rp.RepoError("nothing to archive")
+        return archive(sha, paths)
+
+    info = pk.build_satellite(no_release, "v9.9.9", SHA, pv._vault(), str(tmp / "pkg"))
+    assert "program/friday_satelite.py" in _members(info["path"])

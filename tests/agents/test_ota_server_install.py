@@ -430,6 +430,7 @@ class FakeInstaller:
 
 def _orch(tmp_path, releases, results=(), alpha=False):
     w = OrchWorld(tmp_path, releases, {r.release.sha: man(server_proto=2) for r in releases})
+    w.server_at(None)  # these tests drive the server install itself
     w.orch.installer = FakeInstaller(results)
     if alpha:
         w.store.device("sat-00aa22")["channel"] = "alpha"

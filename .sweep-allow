@@ -35,3 +35,6 @@ private:*/LICENSE:^Copyright
 */agents/server/friday_server_agent/__main__.py:PVEAPIToken=
 # Proxmox API header template: the format only, the token value is read at runtime from a 0600 file.
 */agents/server/friday_server_agent/ota/proxmox.py:PVEAPIToken=\{token\}
+# Commit trailers and the owner's contact address: already public in every commit's metadata (owner, 18/11).
+*:noreply@anthropic[.]com
+*:faleconoscosilvasoftware@gmail[.]com

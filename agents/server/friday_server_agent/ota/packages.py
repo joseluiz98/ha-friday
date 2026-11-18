@@ -15,10 +15,12 @@ import os
 import shutil
 import tarfile
 import tempfile
+import time
 from typing import Callable
 
 from .. import provisioning as pv
 
+# fallback for releases without package.satellite in ota/release.json (the release is the source)
 SATELLITE_PATHS = [
     "satellite/program", "satellite/migrations", "satellite/audio", "satellite/sync",
     "agents/satellite/friday_satellite_agent", "agents/satellite/friday-satellite-agent.service",
@@ -28,6 +30,7 @@ SATELLITE_PATHS = [
 ]
 SERVER_PATHS = ["agents", "server", "voice_gateway", "brain", "scripts", "tools/wakeword", "custom_components", "ota",
                 "vault/manifest.json"]
+# fallback for releases without package.satellite in ota/release.json (the release is the source)
 # repo path (file or folder) -> folder inside system/; only unit files, helpers and configs the Pi installs as root
 SYSTEM_SOURCES = ["satellite/program", "satellite/sync", "satellite/audio/jabra.conf",
                   "satellite/audio/xvf3800.conf", "satellite/audio/friday-audio-select",
@@ -43,6 +46,26 @@ REQUIRED_MODERN = ["satellite/program/requirements.lock", "agents/satellite/requ
                    "satellite/program/friday-satelite.service", "agents/satellite/friday-satellite-agent.service",
                    "agents/satellite/sudoers.friday-satellite-agent"]
 SCHEMA = 1
+
+
+def declared(release: dict) -> tuple[list[str], list[str]]:
+    """(paths to archive, system sources) for a release: its own `package.satellite`, else the built-in lists.
+    The built-in required paths are always merged in; order is kept and nothing repeats."""
+    sat = ((release or {}).get("package") or {}).get("satellite")
+    if isinstance(sat, dict):
+        paths, system = list(sat.get("paths") or []), list(sat.get("system") or [])
+    else:
+        paths, system = list(SATELLITE_PATHS), list(SYSTEM_SOURCES)
+    out: list[str] = []
+    for p in paths + REQUIRED_MODERN + ["ota/release.json", "vault/manifest.json"]:
+        if p in out or any(p.startswith(q.rstrip("/") + "/") for q in out):
+            continue
+        out.append(p)
+    sys_out: list[str] = []
+    for p in system:
+        if p not in sys_out:
+            sys_out.append(p)
+    return out, sys_out
 
 
 def lock_sha256(program_lock: bytes, agent_lock: bytes) -> str:
@@ -86,7 +109,7 @@ def _vault_files(vault, tmp: str) -> list[tuple[str, str]]:
 
 
 def pack_satellite(tar: tarfile.TarFile, raw: bytes, tag: str, sha: str, vault, line: str | None = None) -> dict:
-    """Writes the satellite package into `tar` from `raw` (a tar of SATELLITE_PATHS at the release). Returns its manifest.
+    """Writes the satellite package into `tar` from `raw` (a tar of the release's declared paths). Returns its manifest.
     `line` is written verbatim to FRIDAY_VERSION (default "<tag> <sha>")."""
     tmp = tempfile.mkdtemp()
     try:
@@ -100,6 +123,13 @@ def pack_satellite(tar: tarfile.TarFile, raw: bytes, tag: str, sha: str, vault, 
             missing = [p for p in REQUIRED_MODERN if not os.path.isfile(os.path.join(tmp, p))]
             if missing:
                 pv.LOG.error("package: release %s lacks %s", tag, ", ".join(missing))
+                raise pv.ProvisioningError("source_missing")
+        declares = isinstance((release.get("package") or {}).get("satellite"), dict)
+        _, system = declared(release)
+        if declares:  # a declared system file that is not in the release fails loudly; the built-in list stays lenient
+            gone = [p for p in system if not os.path.exists(os.path.join(tmp, p))]
+            if gone:
+                pv.LOG.error("package: release %s declares missing system files: %s", tag, ", ".join(gone))
                 raise pv.ProvisioningError("source_missing")
         vault_files = _vault_files(vault, tmp)  # validated before anything is written
         prog = os.path.join(tmp, "satellite/program")
@@ -125,7 +155,7 @@ def pack_satellite(tar: tarfile.TarFile, raw: bytes, tag: str, sha: str, vault, 
                 if os.path.isfile(os.path.join(mdir, name)) and not pv._skip(name):
                     tar.add(os.path.join(mdir, name), arcname=f"migrations/{name}", recursive=False, filter=pv._public)
                     migrations.append(name)
-        for rel in SYSTEM_SOURCES:
+        for rel in system:
             p = os.path.join(tmp, rel)
             files = [p] if os.path.isfile(p) else (
                 [os.path.join(p, n) for n in sorted(os.listdir(p))] if os.path.isdir(p) else [])
@@ -163,7 +193,13 @@ def build_satellite(archive: Callable[[str, list], bytes], tag: str, sha: str, v
     fd, tmp = tempfile.mkstemp(prefix=".satellite-", suffix=".tar.gz", dir=out_dir)
     os.close(fd)
     try:
-        raw = archive(sha, SATELLITE_PATHS)
+        try:  # the release declares its own package: read that declaration first, then archive what it names
+            with tarfile.open(fileobj=io.BytesIO(archive(sha, ["ota/release.json"]))) as t:
+                m = t.extractfile("ota/release.json") if "ota/release.json" in t.getnames() else None
+                release = json.loads(m.read().decode("utf-8")) if m else {}
+        except (tarfile.TarError, ValueError, KeyError, RuntimeError, OSError):
+            release = {}  # a tag without ota/release.json (RepoError "nothing to archive"): the built-in lists
+        raw = archive(sha, declared(release)[0])
         with tarfile.open(tmp, "w:gz") as tar:
             manifest = pack_satellite(tar, raw, tag, sha, vault)
         os.chmod(tmp, 0o644)
@@ -178,20 +214,26 @@ def build_satellite(archive: Callable[[str, list], bytes], tag: str, sha: str, v
             "lock_sha256": manifest["lock_sha256"], "protocol": manifest["protocol"], "heavy": manifest["heavy"]}
 
 
-def build_release(repo, tag: str, sha: str, vault, root: str, wheels: Callable[[list, str], str]) -> dict:
-    """`<root>/packages/<tag>/`: satellite.tar.gz, archive.tar (server side), meta.json, `.complete`. Idempotent."""
+def build_release(repo, tag: str, sha: str, vault, root: str, wheels: Callable[[list, str], str],
+                  built_by: str = "", satellite_only: bool = False) -> dict:
+    """`<root>/packages/<tag>/`: satellite.tar.gz, archive.tar (server side), meta.json, `.complete`. Idempotent.
+    `built_by` is the version of the agent that packed it (spec 2026-11-18): an older packager may miss files.
+    `satellite_only` rebuilds satellite.tar.gz (+ wheels and meta) and keeps the server's archive.tar as it is."""
     folder = os.path.join(root, "packages", tag)
     done = os.path.join(folder, ".complete")
     meta_path = os.path.join(folder, "meta.json")
-    if os.path.exists(done):
+    if os.path.exists(done) and not satellite_only:
         with open(meta_path, encoding="utf-8") as f:
             return json.load(f)
+    if satellite_only and os.path.exists(done):
+        os.remove(done)
     os.makedirs(folder, exist_ok=True)
     sat = build_satellite(repo.archive, tag, sha, vault, folder)
     server_tar = os.path.join(folder, "archive.tar")
-    with open(server_tar + ".tmp", "wb") as f:
-        f.write(repo.archive(sha, SERVER_PATHS))
-    os.replace(server_tar + ".tmp", server_tar)
+    if not (satellite_only and os.path.isfile(server_tar)):
+        with open(server_tar + ".tmp", "wb") as f:
+            f.write(repo.archive(sha, SERVER_PATHS))
+        os.replace(server_tar + ".tmp", server_tar)
     with tarfile.open(sat["path"], "r:gz") as t:
         locks = [t.extractfile("program/requirements.lock").read(), t.extractfile("agent/requirements.lock").read()]
     lock_dir = tempfile.mkdtemp()
@@ -205,11 +247,29 @@ def build_release(repo, tag: str, sha: str, vault, root: str, wheels: Callable[[
         sat["wheels"] = wheels(paths, sat["lock_sha256"])
     finally:
         shutil.rmtree(lock_dir, ignore_errors=True)
-    meta = {"tag": tag, "sha": sha, "satellite": sat, "server": {"path": server_tar}}
+    meta = {"tag": tag, "sha": sha, "satellite": sat, "server": {"path": server_tar}, "built_by": built_by}
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, sort_keys=True)
     open(done, "w").close()
     return meta
+
+
+def mark_offered(root: str, tag: str, now: float | None = None) -> None:
+    """`<root>/packages/<tag>/.offered` = {"tag", "at"}: the package reached a device once, so it is never rebuilt
+    under it. `at` is the first offer; a later call never overwrites it."""
+    folder = os.path.join(root, "packages", tag)
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, ".offered")
+    if os.path.exists(path):
+        return
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"tag": tag, "at": time.time() if now is None else now}, f, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def is_offered(root: str, tag: str) -> bool:
+    return os.path.exists(os.path.join(root, "packages", tag, ".offered"))
 
 
 def prune_packages(root: str, keep: set[str]) -> list[str]:

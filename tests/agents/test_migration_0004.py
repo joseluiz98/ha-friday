@@ -50,3 +50,13 @@ def test_installs_the_audio_files_itself_for_an_older_ota_helper(tmp_path):
     for n, dest in SYSTEM_FILES.items():
         assert (root / dest).read_text() == n, dest
     assert oct((root / SYSTEM_FILES["friday-audio-select"]).stat().st_mode & 0o777) == "0o755"
+
+
+def test_missing_source_fails(tmp_path):
+    rel = tmp_path / "release"
+    (rel / "system").mkdir(parents=True)
+    (rel / "system" / "jabra.conf").write_text("x")
+    r = subprocess.run(["bash", str(MIG)], env={"FRIDAY_OTA_ROOT": str(tmp_path / "root"), "FRIDAY_RELEASE_DIR": str(rel),
+                                                "PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
+    assert r.returncode == 1
+    assert "missing" in r.stderr

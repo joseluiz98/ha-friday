@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 import re
 import threading
 import time
 from typing import Callable
 
+from friday_agent_core import version
 from friday_agent_core.ota import channels as ch
 from friday_agent_core.ota import order
 from friday_agent_core.ota import retry
@@ -30,10 +32,20 @@ from . import wheels as wh
 LOG = logging.getLogger("friday_server_agent.ota")
 OTA_ROOT = "/srv/friday/ota"
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
+_LEAD_TAG = re.compile(r"^(v\d+\.\d+\.\d+)(?:-\d+-g[0-9a-f]+)?(?:\s|$)")
+CONTRACT_TAG = "v0.3.10"  # packages of older tags predate built_by: always kept as they are (spec 2026-11-18)
+
+
+def lead_tag(value) -> str | None:
+    """`vX.Y.Z` from a clean tag or a `git describe` version (`vX.Y.Z-N-gSHA`, written by deploy.sh); else None."""
+    m = _LEAD_TAG.match(value.strip()) if isinstance(value, str) else None
+    return m.group(1) if m else None
 RESULTS = ("installed", "rolled_back", "failed")
 REPORT_IDS_KEPT = 20  # per device: the newest report ids, to drop a resend
 BUILD_RETRY_S = 3600  # a release that failed to package is retried at most once an hour
 PROMOTE_RETRY_S = 3600  # a failed promotion on GitHub is retried at most once an hour
+WAITING_PUSH_AFTER_S = 3600  # a satellite waiting for the server: first push after an hour of waiting
+WAITING_PUSH_EVERY_S = 86400  # then at most one push a day (spec 2026-11-18)
 
 
 def parse_report(data: dict) -> dict:
@@ -79,7 +91,8 @@ def _newer(tag: str, installed: str | None) -> bool:
 class Orchestrator:
     def __init__(self, store, tokens, watcher, repo, vault, notifier, build: Callable = pk.build_release,
                  wheels: Callable = wh.build, root: str = OTA_ROOT, clock: Callable[[], float] = time.time,
-                 prune: Callable = pk.prune_packages, installer=None, images=None, publisher=None):
+                 prune: Callable = pk.prune_packages, installer=None, images=None, publisher=None,
+                 own_version: Callable[[], str] = version.installed_version):
         self.store, self.tokens, self.watcher, self.repo = store, tokens, watcher, repo
         self.vault, self.notifier, self._build, self._wheels = vault, notifier, build, wheels
         self.root, self._clock, self._prune = root, clock, prune
@@ -91,6 +104,8 @@ class Orchestrator:
         self.images = images
         self.publisher = publisher  # None (no GitHub token file): no automatic promotion
         self._promote_tried: dict[str, float] = {}
+        self._own_version = own_version
+        self._older_refused: set[str] = set()  # tags whose stale package an older agent refused to serve
 
     # ---- reads under the state lock
     def _eligible(self) -> list[ch.Release]:
@@ -149,7 +164,8 @@ class Orchestrator:
             if info is None:
                 return None
             try:
-                meta = self._build(self.repo, tag, info.release.sha, self.vault, self.root, self._wheels)
+                meta = self._build(self.repo, tag, info.release.sha, self.vault, self.root, self._wheels,
+                                   built_by=self._own_version())
             except Exception as err:  # noqa: BLE001 - a broken release must not stop the others
                 LOG.error("OTA: package %s failed: %s", tag, type(err).__name__)
                 self._build_failed[tag] = self._clock()
@@ -159,6 +175,82 @@ class Orchestrator:
             self._build_failed.pop(tag, None)
             self.meta[tag] = meta
             return meta
+
+    def _held(self, tag: str) -> bool:
+        """A package some device already has (or was offered): rebuilding it would change bytes under that device."""
+        if pk.is_offered(self.root, tag):
+            return True
+        with self.store.lock:
+            for d in self.store.data["devices"].values():
+                if d.get("installed") == tag:
+                    return True
+                # the device's last attempt or report names this tag: it may be downloading or holding it
+                if isinstance(d.get("attempts"), dict) and d["attempts"].get("version") == tag:
+                    return True
+                if isinstance(d.get("last_report"), dict) and d["last_report"].get("tag") == tag:
+                    return True
+            path = self.store.events_path
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    # satellite results only: the server's own install event is about archive.tar, not this package
+                    if (isinstance(e, dict) and e.get("tag") == tag
+                            and (e.get("event") in RESULTS or e.get("event") == "install_requested")
+                            and str(e.get("device") or "").startswith("sat-")):
+                        return True
+        except OSError:
+            pass
+        return False
+
+    def _satellite_package(self, tag: str) -> dict | None:
+        """The only door for satellite consumers (offer, package files, provisioning, image). A package packed by an
+        agent older than the release may miss files the release declares (spec 2026-11-18): it is rebuilt by a new
+        enough agent, refused by an older one, and kept as is once a device holds it."""
+        meta = self._package(tag)
+        if not meta:
+            return None
+        by = lead_tag(meta.get("built_by"))
+        if ch.version_key(tag) < ch.version_key(CONTRACT_TAG):  # pre-contract tag: kept as it is, never deleted
+            self._older_refused.discard(tag)
+            return meta
+        if by is not None and ch.version_key(by) >= ch.version_key(tag):
+            self._older_refused.discard(tag)
+            return meta
+        if self._held(tag):
+            self._older_refused.discard(tag)
+            return meta
+        own_raw = self._own_version()
+        own = lead_tag(own_raw)
+        if own is None or ch.version_key(own) < ch.version_key(tag):
+            self._older_refused.add(tag)
+            return None
+        self._older_refused.discard(tag)
+        with self._build_lock:
+            if self.meta.get(tag) is not meta:  # another thread already rebuilt it
+                return self.meta.get(tag)
+            with self.store.lock:
+                info = self.store.release_infos().get(tag)
+            if info is None:
+                return None
+            LOG.info("OTA: package %s packed by %s; rebuilding its satellite part with %s", tag,
+                     meta.get("built_by") or "an older agent", own_raw)
+            try:  # satellite.tar.gz only: the server's archive.tar stays (spec 2026-11-18, review finding 2)
+                new = self._build(self.repo, tag, info.release.sha, self.vault, self.root, self._wheels,
+                                  built_by=own_raw, satellite_only=True)
+            except Exception as err:  # noqa: BLE001 - the old package stays; retried at the next offer
+                LOG.error("OTA: satellite rebuild %s failed: %s", tag, type(err).__name__)
+                with self.store.lock:
+                    self.store.event("server", tag, "package_failed", "rebuild", type(err).__name__)
+                return None
+            self.meta[tag] = new
+            return new
+
+    def _missing_reason(self, tag: str) -> str:
+        return "server_older" if tag in self._older_refused else "package_missing"
 
     def poll(self, full: bool = False) -> dict:
         """One cycle. A down GitHub or repo keeps the previous state; nothing here raises."""
@@ -381,8 +473,10 @@ class Orchestrator:
             info = self.store.release_infos().get(tag)
             if isinstance(self.store.data["server_ota"].get("run"), dict):
                 return {"ok": False, "error": "server_busy"}
-        if info is None or not self._package(tag):
+        if info is None:
             return {"ok": False, "error": "package_missing"}
+        if not self._satellite_package(tag):
+            return {"ok": False, "error": self._missing_reason(tag)}
         out = self.images.start(tag, info.release.sha)
         try:
             with self.store.lock:
@@ -422,7 +516,7 @@ class Orchestrator:
     def package_for_update(self) -> str | None:
         """The stable package, for the frozen `prepare_bundle kind=update` path (provisioning of a new satellite)."""
         tag = self.target("stable")
-        meta = self._package(tag) if tag else None
+        meta = self._satellite_package(tag) if tag else None
         return meta["satellite"]["path"] if meta else None
 
     def package_file(self, tag: str, name: str) -> str | None:
@@ -431,14 +525,66 @@ class Orchestrator:
             return None
         if tag not in self._targets() | self._installed():
             return None
-        meta = self._package(tag)
+        meta = self._satellite_package(tag)
         if not meta:
             return None
         path = meta["satellite"]["path"] if name == "satellite.tar.gz" else meta["satellite"].get("wheels")
-        return path if path and os.path.exists(path) else None
+        if not (path and os.path.exists(path)):
+            return None
+        try:  # served once: a device may hold these bytes now, so the package is never rebuilt under it
+            pk.mark_offered(self.root, tag, self._clock())
+        except OSError as err:
+            LOG.warning("OTA: offered marker failed: %s", type(err).__name__)
+        return path
 
     # ---- satellites
     def offer(self, sat_id: str, channel: str, installed: str | None, protocol: int, lock_sha256: str) -> dict:
+        out, tag = self._offer(sat_id, channel, installed, protocol, lock_sha256)
+        try:
+            self._waiting_server(sat_id, tag, out.get("reason") == "waiting_server" and out.get("tag") is None)
+        except Exception as err:  # noqa: BLE001 - the offer itself must reach the satellite
+            LOG.warning("OTA: waiting-server bookkeeping failed: %s", type(err).__name__)
+        return out
+
+    def _waiting_reason(self) -> str:
+        building = self.images is not None and self.images.status().get("status") == "building"
+        with self.store.lock:
+            so = self.store.data["server_ota"]
+            a = retry.Attempts.from_dict(so["attempts"]) if so.get("attempts") else None
+            if not self.store.auto_install and not so.get("install_requested"):
+                return "atualização automática desligada"
+        if building:
+            return "build de imagem em andamento"
+        if a is not None and a.exhausted:
+            return "tentativas esgotadas"
+        return "aguardando a janela de instalação"
+
+    def _waiting_server(self, sat_id: str, tag: str | None, waiting: bool) -> None:
+        """A satellite held by the server-first gate: one push after an hour, then at most one a day (all devices)."""
+        now = self._clock()
+        with self.store.lock:
+            d = self.store.device(sat_id)
+            if not waiting:
+                if d.get("waiting_server_since") is not None:
+                    d.pop("waiting_server_since", None)
+                    self._save_quiet()
+                return
+            since = d.get("waiting_server_since")
+            if since is None:
+                d["waiting_server_since"] = since = now
+                self._save_quiet()
+            last = float(self.store.data.get("waiting_server_push_at") or 0)  # 0: never pushed
+            due = now - since >= WAITING_PUSH_AFTER_S and (not last or now - last >= WAITING_PUSH_EVERY_S)
+        if not due or not tag:
+            return
+        why = self._waiting_reason()
+        with self.store.lock:
+            self.store.data["waiting_server_push_at"] = now
+            self.notifier.queue(nt.format_waiting_server(sat_id, tag, why), self.store.data["pushes"])
+            self._save_quiet()
+
+    def _offer(self, sat_id: str, channel: str, installed: str | None, protocol: int,
+               lock_sha256: str) -> tuple[dict, str | None]:
         now = self._clock()
         with self.store.lock:
             d = self.store.device(sat_id)
@@ -455,23 +601,34 @@ class Orchestrator:
                     d["install_requested"] = False
                     self._save_quiet()
                 return offer_payload(None, auto_install=auto,
-                                     reason="up_to_date" if not tag or tag == current else "newer_installed")
+                                     reason="up_to_date" if not tag or tag == current else "newer_installed"), tag
             sha = self.store.release_infos()[tag].release.sha
             server_proto = int(self.store.data["server_protocol"])
+            server_tag = self.store.data["server_ota"].get("installed_tag")
             a = self.store.attempts(sat_id)
         man = self._manifest(sha)
         if man is not None and not order.satellite_ready(man, server_proto):
-            return offer_payload(None, auto_install=auto, reason="waiting_server")
+            return offer_payload(None, auto_install=auto, reason="waiting_server"), tag
+        if not (isinstance(server_tag, str) and TAG.match(server_tag)) or \
+                ch.version_key(server_tag) < ch.version_key(tag):
+            # server first (spec 2026-11-18): the server's agent packs the satellite package, so it runs the release
+            return offer_payload(None, auto_install=auto, reason="waiting_server"), tag
         if not requested and not retry.may_try(a, tag, now):
-            return offer_payload(None, auto_install=auto, reason="exhausted" if a and a.exhausted else "retry_later")
-        meta = self._package(tag)
+            return offer_payload(None, auto_install=auto,
+                                 reason="exhausted" if a and a.exhausted else "retry_later"), tag
+        meta = self._satellite_package(tag)
         if not meta:
-            return offer_payload(None, auto_install=auto, reason="package_missing")
+            return offer_payload(None, auto_install=auto, reason=self._missing_reason(tag)), tag
+        try:
+            pk.mark_offered(self.root, tag, now)
+        except OSError as err:
+            LOG.warning("OTA: offered marker failed: %s", type(err).__name__)
         sat = meta["satellite"]
         wheels = sat.get("lock_sha256") != lock_sha256 and bool(sat.get("wheels"))
         # spec §16: new wheels (a pip install on the Pi 3) make the update heavy, whatever release.json says
         return offer_payload(tag, sat_id, sha, sat["sha256"], sat["size"], wheels=wheels,
-                             heavy=bool(sat.get("heavy")) or wheels, install_requested=requested, auto_install=auto)
+                             heavy=bool(sat.get("heavy")) or wheels, install_requested=requested,
+                             auto_install=auto), tag
 
     def _save_quiet(self) -> None:
         try:
@@ -534,6 +691,10 @@ class Orchestrator:
             d.update(install_requested=True, attempts=None)
             tag = self.target(d["channel"])
             self.store.event(sat_id, tag, "install_requested")
+            so = self.store.data["server_ota"]
+            if tag and _newer(tag, so.get("installed_tag")):  # server first: the satellite waits for it
+                so.update(install_requested=True, attempts=None)
+                self.store.event("server", tag, "install_requested")
             self.store.save()
             return tag
 
