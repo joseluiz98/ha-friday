@@ -1096,7 +1096,8 @@ async def _vazio() -> str:
 async def bot(runner_args: RunnerArguments):
     corpo = getattr(runner_args, "body", None)
     eh_satelite, satelite_id = sm.origem(corpo)
-    comodo = sm.comodo(corpo) if eh_satelite else None
+    # 18/11: sem o cômodo da Pi, vale o do cadastro (área do aparelho no HA); sem nenhum, o modelo adivinhava o cômodo
+    comodo = (sm.comodo(corpo) or sm.comodo_do_registro(REGISTRO_SATELITES.current(), satelite_id)) if eh_satelite else None
     nao_perturbe = [sm.nao_perturbe(corpo) if eh_satelite else False]  # lista: o handler da ferramenta muda
     # 12/10: conversa aberta pela própria Pi — entrega de mensagem do cérebro ou timer vencido (spec 2026-10-12)
     id_entrega = sm.entrega(corpo) if eh_satelite else None
