@@ -1,5 +1,6 @@
 """Ligação do programa (friday_satelite.py) com hardware e rede simulados — spec 2026-10-12.
 cd /homeassistant/tools/satelite/programa && python3 -m unittest test_satelite_ligacao -v"""
+import shutil
 import asyncio, json, os, sys, tempfile, time, types, unittest
 from unittest import mock
 
@@ -97,6 +98,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
         global F
         F.__init__()
         self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
         self.p = mock.patch.multiple(fs, CFG=os.path.join(self.d, "config.json"), ID=os.path.join(self.d, "id"),
                                      TIMERS=os.path.join(self.d, "estado", "timers.json"), SONS=self.d)
         self.p.start()
@@ -104,7 +106,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.p_placa.start()
         import sons
         sons.gerar(self.d)
-        import shutil  # 17/11: os tons de fábrica são os da ElevenLabs; os gerados fazem o papel deles aqui
+        # 17/11: os tons de fábrica são os da ElevenLabs; os gerados fazem o papel deles aqui
         for novo, gerado in (("inicio_elevenlabs.wav", "inicio_a.wav"), ("fim_elevenlabs_20261020.wav", "fim_a.wav"),
                              ("erro_b.wav", "erro_a.wav"), ("alarme_elevenlabs.wav", "alarme_a.wav"),
                              ("lembrete_elevenlabs.wav", "lembrete_a.wav")):

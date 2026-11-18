@@ -1,3 +1,4 @@
+import shutil
 import contextlib, io, json, os, subprocess, tempfile, unittest
 
 import net_recovery as nr
@@ -53,6 +54,7 @@ class Base(unittest.TestCase):
 
     def setUp(self):
         self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
         j = lambda *p: os.path.join(self.d, *p)
         os.makedirs(j("sons", "onboarding"))
         self.wav = j("sons", "onboarding", "no_wifi.wav")
