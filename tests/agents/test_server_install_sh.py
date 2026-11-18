@@ -10,7 +10,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 def _install(tmp: Path) -> subprocess.CompletedProcess:
     env = {**os.environ, "FRIDAY_OPT": str(tmp / "opt"), "FRIDAY_UNITS": str(tmp / "units"),
-           "FRIDAY_NO_SYSTEMCTL": "1", "FRIDAY_VERSION_LINE": "v0.0.0 " + "a" * 40}
+           "FRIDAY_STATE": str(tmp / "state"), "FRIDAY_NO_SYSTEMCTL": "1", "FRIDAY_VERSION_LINE": "v0.0.0 " + "a" * 40}
     return subprocess.run(["bash", str(REPO / "server" / "install.sh")], env=env, capture_output=True, text=True)
 
 
@@ -30,3 +30,18 @@ def test_the_cataloger_keeps_its_local_config(tmp_path):
     r = _install(tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "opt" / "cataloger" / "local_config.py").exists()
+
+
+def test_retired_units_and_stamp_are_removed(tmp_path):
+    units, opt_systemd, state = tmp_path / "units", tmp_path / "opt" / "systemd", tmp_path / "state"
+    for d in (units, opt_systemd, state):
+        d.mkdir(parents=True)
+    old = [units / "friday-memory-index.timer", units / "friday-memory-index.service",
+           opt_systemd / "friday-memory-index.timer", state / "memory-index.ok"]
+    for f in old:
+        f.write_text("old\n")
+    r = _install(tmp_path)
+    assert r.returncode == 0, r.stderr
+    for f in old:
+        assert not f.exists(), f
+    assert (units / "friday-status.service").exists()  # the live units stay
