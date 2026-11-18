@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
 import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 
-from .const import DEVICE_KIND_SATELLITE, DOMAIN, OPTIONS_GENERAL
+from .const import DEVICE_KIND_SATELLITE, DEVICE_KIND_SERVER, DOMAIN, OPTIONS_GENERAL
 from .general import SCOPE_ADVANCED, SCOPE_GENERAL, async_apply_general_all, log_settings_change
 from .settings import (
     GENERAL_KEYS, SettingError, check_wakewords, validate_advanced, validate_general,
@@ -127,6 +129,56 @@ async def _retry_provisioning(call: ServiceCall) -> None:
     raise ServiceValidationError("This satellite is not managed by the provisioning flow.")
 
 
+SERVICE_BUILD_IMAGE = "build_image"
+BUILD_IMAGE_SCHEMA = vol.Schema({vol.Optional("version"): cv.string})
+VERSION = re.compile(r"^[vV]?(\d+\.\d+\.\d+)$")
+IMAGE_ERRORS = {
+    "no_stable_release": "There is no stable release to build.",
+    "package_missing": "The server has no OTA package for this version (unknown release, or not downloaded yet).",
+    "server_busy": "The server is installing an update; try again when it finishes.",
+    "busy": "An image build is already running.",
+    "tag": "Invalid version.",
+    "unavailable": "The server cannot build images.",
+}
+
+
+def normalize_version(raw: str | None) -> str | None:
+    """'0.3.8' or 'v0.3.8' -> 'v0.3.8'; empty -> None (the stable release); anything else is refused."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    m = VERSION.match(text)
+    if m is None:
+        raise ServiceValidationError(f"Invalid version '{text}': use 0.3.8 or v0.3.8.")
+    return "v" + m.group(1)
+
+
+def find_server(hass: HomeAssistant):
+    """The connected server agent, or a ServiceValidationError."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        for connection in getattr(entry, "runtime_data", {}).values():
+            hello = connection.hello
+            if hello is not None and hello.device.get("kind") == DEVICE_KIND_SERVER:
+                if not connection.connected:
+                    break
+                return connection
+    raise ServiceValidationError("The F.R.I.D.A.Y. server is not connected.")
+
+
+async def _build_image(call: ServiceCall) -> None:
+    """Build the satellite provisioning image: the stable release by default, or the version given."""
+    tag = normalize_version(call.data.get("version"))
+    connection = find_server(call.hass)
+    try:
+        if tag is None:  # exactly what the button always did (the agent also refreshes the image sensor)
+            await connection.send("press", key="image_build")
+        else:
+            await connection.send("image_build", tag=tag)
+    except HomeAssistantError as err:
+        code = str(err)
+        raise ServiceValidationError(IMAGE_ERRORS.get(code, f"The server refused the build ({code}).")) from err
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     if not hass.services.has_service(DOMAIN, SERVICE_SET_WIFI):
         hass.services.async_register(DOMAIN, SERVICE_SET_WIFI, _set_wifi, schema=SCHEMA)
@@ -134,3 +186,5 @@ def async_register_services(hass: HomeAssistant) -> None:
         hass.services.async_register(DOMAIN, SERVICE_SET_SETTING, _set_setting, schema=SET_SETTING_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_RETRY):
         hass.services.async_register(DOMAIN, SERVICE_RETRY, _retry_provisioning, schema=RETRY_SCHEMA)
+    if not hass.services.has_service(DOMAIN, SERVICE_BUILD_IMAGE):
+        hass.services.async_register(DOMAIN, SERVICE_BUILD_IMAGE, _build_image, schema=BUILD_IMAGE_SCHEMA)
