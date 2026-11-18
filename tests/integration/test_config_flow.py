@@ -96,7 +96,7 @@ async def test_satellite_subentry_sets_area(hass, monkeypatch):
     hass.config_entries.async_remove_subentry(entry, sub.subentry_id)
     await hass.async_block_till_done()
     apply_satellite_area(hass, entry, sub.subentry_id, "sat-1")
-    assert reg.async_get_device(identifiers={(DOMAIN, "sat-1")}) is None
+    assert not [d for d in dr.async_entries_for_config_entry(reg, entry.entry_id) if (DOMAIN, "sat-1") in d.identifiers]
 
 
 async def test_zeroconf_discovery_offers_satellite(hass, monkeypatch):
