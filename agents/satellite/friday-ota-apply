@@ -65,6 +65,12 @@ SYSTEM = {
     "friday-ota-apply": (f"{R}/usr/local/sbin", 0o755),
 }
 SUDOERS_SRC, SUDOERS_DEST = "sudoers.friday-satellite-agent", f"{R}/etc/sudoers.d/friday-satellite-agent"
+# spec 2026-11-18 §3: what an activation overwrote or created, so a way back restores it
+SNAPSHOTS = f"{R}/var/lib/friday/ota/system-backup"
+AUDIO_DESTS = [f"{R}/{d}" for d in (  # the 0005 destinations: files a migration alone may create
+    "usr/local/sbin/friday-audio-select", "etc/friday-satelite/asound/jabra.conf",
+    "etc/friday-satelite/asound/xvf3800.conf", "etc/udev/rules.d/90-friday-audio.rules",
+    "etc/systemd/system/sendspin-cli.service.d/audio-board.conf", "etc/systemd/system/friday-silence.service")]
 if os.environ.get("FRIDAY_OTA_FAKE_BIN"):
     os.environ["PATH"] = os.environ["FRIDAY_OTA_FAKE_BIN"] + os.pathsep + os.environ.get("PATH", "")
 
@@ -236,22 +242,85 @@ def _migrations(release, tag, previous):
         raise Refused("migrations", str(e)) from None
 
 
-def _install_system(release):
+def _system_plan(release):
+    """(src, dest, mode) of every system/ file `_install_system` writes, sudoers included."""
     sysdir = os.path.join(release, "system")
     names = sorted(os.listdir(sysdir)) if os.path.isdir(sysdir) else []
-    if SUDOERS_SRC in names:  # checked before anything is installed: a bad sudoers locks the agent out
-        r = run(["visudo", "-cf", os.path.join(sysdir, SUDOERS_SRC)], capture_output=True)
-        if r.returncode != 0:
-            raise Refused("system", "sudoers does not parse")
+    plan = []
     for n in names:
         src = os.path.join(sysdir, n)
         if n == SUDOERS_SRC:
-            dest, mode = SUDOERS_DEST, 0o440
-        else:
-            rule = SYSTEM.get(n) or next((v for k, v in SYSTEM.items() if k.startswith(".") and n.endswith(k)), None)
-            if rule is None:
-                continue
-            dest, mode = os.path.join(rule[0], n), rule[1]
+            plan.append((src, SUDOERS_DEST, 0o440))
+            continue
+        rule = SYSTEM.get(n) or next((v for k, v in SYSTEM.items() if k.startswith(".") and n.endswith(k)), None)
+        if rule is not None:
+            plan.append((src, os.path.join(rule[0], n), rule[1]))
+    return plan
+
+
+def _rel(dest):
+    return os.path.relpath(dest, R or "/")
+
+
+def _snapshot(tag, dests):
+    """Saves what `dests` hold now (saved) and which do not exist yet (created); replaces any older snapshot."""
+    shutil.rmtree(SNAPSHOTS, ignore_errors=True)  # only the last activation's snapshot is ever kept
+    base = os.path.join(SNAPSHOTS, tag)
+    saved, created = [], []
+    for d in dict.fromkeys(dests):
+        rel = _rel(d)
+        if os.path.isfile(d):
+            out = os.path.join(base, "files", rel)
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            shutil.copy2(d, out)
+            saved.append(rel)
+        elif not os.path.lexists(d):
+            created.append(rel)
+    os.makedirs(base, exist_ok=True)
+    tmp = os.path.join(base, "snapshot.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"saved": saved, "created": created}, f, sort_keys=True)
+    os.replace(tmp, os.path.join(base, "snapshot.json"))
+
+
+def _restore(tag):
+    """Puts back what the activation of `tag` overwrote and removes what it created. False when no snapshot exists
+    (an activation run by an older apply): nothing is changed."""
+    base = os.path.join(SNAPSHOTS, tag or "")
+    try:
+        with open(os.path.join(base, "snapshot.json"), encoding="utf-8") as f:
+            snap = json.load(f)
+    except (OSError, ValueError):
+        return False
+    root = R or "/"
+    for rel in snap.get("saved", []):
+        src, dest = os.path.join(base, "files", rel), os.path.join(root, rel)
+        if not os.path.isfile(src):
+            continue
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(src, dest + ".new")
+        os.replace(dest + ".new", dest)
+    for rel in snap.get("created", []):
+        dest = os.path.join(root, rel)
+        if os.path.lexists(dest):
+            os.remove(dest)
+    run(["systemctl", "daemon-reload"])
+    if not R:
+        try:
+            run(["udevadm", "control", "--reload-rules"])
+        except OSError:
+            pass
+    return True
+
+
+def _install_system(release):
+    plan = _system_plan(release)
+    sudoers = next((src for src, dest, _m in plan if dest == SUDOERS_DEST), None)
+    if sudoers:  # checked before anything is installed: a bad sudoers locks the agent out
+        r = run(["visudo", "-cf", sudoers], capture_output=True)
+        if r.returncode != 0:
+            raise Refused("system", "sudoers does not parse")
+    for src, dest, mode in plan:
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         shutil.copyfile(src, dest + ".new")
         os.chmod(dest + ".new", mode)
@@ -360,6 +429,7 @@ def activate(tag, detached=False):
     previous = None
     try:
         write_state(tag=tag, previous=current_tag(), state="activating")
+        _snapshot(tag, [d for _s, d, _m in _system_plan(release)] + AUDIO_DESTS)
         _migrations(release, tag, current_tag())
         previous = current_tag()  # after 0001, a satellite of the old layout has `current` -> v0.0.0-legacy
         write_state(tag=tag, previous=previous, state="activating", stage="system")
@@ -388,6 +458,10 @@ def _back(tag, previous, stage, why):
     its restart may end this process too."""
     if previous and os.path.isdir(os.path.join(RELEASES, previous)):
         write_state(tag=tag, previous=previous, state="rolled_back", stage=stage, error=why)
+        try:
+            _restore(tag)
+        except Exception:  # noqa: BLE001 - a half restore never blocks the switch back
+            pass
         try:
             _switch(previous)
             _restart()
@@ -426,7 +500,11 @@ def recover(detached=False):
     st = read_state()
     if st.get("state") != "activating":
         return 0
-    if st.get("tag") != current_tag():  # cut before the switch: nothing to undo
+    if st.get("tag") != current_tag():  # cut before the switch: system files may already be new
+        try:
+            _restore(st.get("tag"))
+        except Exception:  # noqa: BLE001 - recorded below either way
+            pass
         write_state(tag=st.get("tag"), previous=st.get("previous"), state="failed", stage="interrupted")
         return 0
     _back(st.get("tag"), st.get("previous"), "interrupted", "")
@@ -442,6 +520,10 @@ def _vkey(tag):
 
 
 def prune():
+    if os.path.isdir(SNAPSHOTS):
+        for t in os.listdir(SNAPSHOTS):
+            if t != current_tag():
+                shutil.rmtree(os.path.join(SNAPSHOTS, t), ignore_errors=True)
     if not os.path.isdir(RELEASES):
         return 0
     keep = {current_tag(), read_state().get("previous")}  # the KEEP_RELEASES (2) good versions of the spec

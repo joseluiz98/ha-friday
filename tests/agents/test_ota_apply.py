@@ -66,7 +66,10 @@ def env(tmp_path):
     fake.mkdir()
     log = tmp_path / "calls.log"
     for name, body in {
-        "systemctl": f'echo "systemctl $*" >> {log}; case "$*" in *friday-ota-activate*) exit 3 ;; esac; exit 0',
+        "systemctl": f'echo "systemctl $*" >> {log}; case "$*" in *friday-ota-activate*) exit 3 ;; esac; '
+                     f'case "$*" in restart*) [ -f {tmp_path}/drop_snapshots ] && '
+                     f'rm -rf {tmp_path}/root/var/lib/friday/ota/system-backup ;; esac; exit 0',
+        "udevadm": f'echo "udevadm $*" >> {log}; exit 0',
         "chown": "exit 0",
         "visudo": f'echo "visudo $*" >> {log}; [ -f {tmp_path}/visudo_fails ] && exit 1; exit 0',
         # detaches like systemd-run: drops its own options, exports --setenv, runs the rest in the background
@@ -354,3 +357,91 @@ def test_prune_drops_a_stage_left_by_a_crash_hours_ago(env):
     os.symlink("releases/v0.2.0", env["root"] / "opt/friday/current")
     assert helper(env, "prune").returncode == 0
     assert sorted(p.name for p in rels.iterdir()) == [".v0.6.0.new", "v0.2.0"]
+
+
+# ---- 2026-11-18 package contract, Task 4: a rollback is whole
+SNAP = "var/lib/friday/ota/system-backup"
+
+
+def _activate_unhealthy(env, tag="v0.2.0"):
+    Health.status = {}
+    r = helper(env, "activate", tag, detached=True)
+    assert r.returncode == 2, r.stdout + r.stderr
+    return r
+
+
+def test_rollback_restores_overwritten_and_removes_created(env):
+    root = env["root"]
+    installed_current(env)
+    (root / "etc/systemd/system").mkdir(parents=True)
+    (root / "etc/systemd/system/friday-satelite.service").write_text("old")
+    (root / "usr/local/sbin").mkdir(parents=True)
+    (root / "usr/local/sbin/friday-agent-apply").write_text("old-apply")
+    staged(env, "v0.2.0", system={"friday-satelite.service": "new", "friday-agent-apply": "new-apply",
+                                  "friday-audio-select": "#!/bin/sh\n"})
+    _activate_unhealthy(env)
+    assert state(env)["state"] == "rolled_back" and current(env) == "releases/v0.1.0"
+    assert (root / "etc/systemd/system/friday-satelite.service").read_text() == "old"
+    assert (root / "usr/local/sbin/friday-agent-apply").read_text() == "old-apply"
+    assert not (root / "usr/local/sbin/friday-audio-select").exists()
+    calls = env["log"].read_text().splitlines()
+    restarts = [i for i, c in enumerate(calls) if c.startswith("systemctl restart")]
+    assert len(restarts) == 2  # the activation, then the way back
+    assert "systemctl daemon-reload" in calls[restarts[0] + 1:restarts[1]]
+
+
+def test_rollback_removes_files_created_by_a_migration(env):
+    root = env["root"]
+    installed_current(env)
+    mig = {"0001_audio.sh": 'mkdir -p "$FRIDAY_OTA_ROOT/usr/local/sbin" && '
+                            'echo x > "$FRIDAY_OTA_ROOT/usr/local/sbin/friday-audio-select"'}
+    staged(env, "v0.2.0", migrations=mig)
+    _activate_unhealthy(env)
+    assert state(env)["state"] == "rolled_back"
+    assert not (root / "usr/local/sbin/friday-audio-select").exists()
+
+
+def test_rollback_without_snapshot_behaves_as_before(env):
+    installed_current(env)
+    staged(env, "v0.2.0", system={"friday-satelite.service": "new"})
+    (env["tmp"] / "drop_snapshots").touch()  # as if an older apply had done the activation
+    r = _activate_unhealthy(env)
+    assert state(env)["state"] == "rolled_back" and current(env) == "releases/v0.1.0"
+    assert "Traceback" not in r.stderr
+    assert (env["root"] / "etc/systemd/system/friday-satelite.service").read_text() == "new"  # unchanged behavior
+
+
+def test_interrupted_before_switch_restores_snapshot(env):
+    root = env["root"]
+    installed_current(env)
+    staged(env, "v0.2.0")
+    (root / "etc/systemd/system").mkdir(parents=True)
+    (root / "etc/systemd/system/friday-satelite.service").write_text("new")
+    (root / "usr/local/sbin").mkdir(parents=True)
+    (root / "usr/local/sbin/friday-audio-select").write_text("new")
+    snap = root / SNAP / "v0.2.0"
+    (snap / "files/etc/systemd/system").mkdir(parents=True)
+    (snap / "files/etc/systemd/system/friday-satelite.service").write_text("old")
+    (snap / "snapshot.json").write_text(json.dumps({"saved": ["etc/systemd/system/friday-satelite.service"],
+                                                    "created": ["usr/local/sbin/friday-audio-select"]}))
+    (root / "var/lib/friday/ota.json").write_text(json.dumps(
+        {"tag": "v0.2.0", "previous": "v0.1.0", "state": "activating", "at": 1}))
+    assert helper(env, "recover", detached=True).returncode == 0
+    assert (state(env)["state"], state(env)["stage"]) == ("failed", "interrupted")
+    assert current(env) == "releases/v0.1.0"
+    assert (root / "etc/systemd/system/friday-satelite.service").read_text() == "old"
+    assert not (root / "usr/local/sbin/friday-audio-select").exists()
+
+
+def test_prune_keeps_only_current_snapshot(env):
+    root = env["root"]
+    installed_current(env)
+    staged(env, "v0.2.0")
+    old = root / SNAP / "v0.1.0"
+    old.mkdir(parents=True)
+    (old / "snapshot.json").write_text("{}")
+    assert helper(env, "activate", "v0.2.0", detached=True).returncode == 0  # success prunes
+    assert sorted(p.name for p in (root / SNAP).iterdir()) == ["v0.2.0"]
+    (root / SNAP / "v0.0.9").mkdir()
+    assert helper(env, "prune").returncode == 0
+    assert sorted(p.name for p in (root / SNAP).iterdir()) == ["v0.2.0"]
