@@ -24,7 +24,7 @@ from typing import Any
 
 from homeassistant.components import persistent_notification
 from homeassistant.components.logbook import async_log_entry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar, device_registry as dr
 from homeassistant.helpers.storage import Store
@@ -69,6 +69,60 @@ def write_registry(path: str, sat_id: str, fields: dict[str, Any], defaults: dic
         return
     data[sat_id] = entry
     _save_registry(path, data)
+
+
+def set_registry_room(path: str, sat_id: str, room: str) -> None:
+    """The room the voice reads follows the device's area in HA. Only a satellite already registered (it has the port
+    password) is touched: an unknown id never creates a line."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return
+    if isinstance(data, dict) and isinstance(data.get(sat_id), dict):
+        write_registry(path, sat_id, {"comodo": room})
+
+
+def satellite_id(device) -> str | None:
+    """`sat-xxxxxx` of a F.R.I.D.A.Y. satellite device, None for anything else (the Server included)."""
+    for domain, ident in getattr(device, "identifiers", ()):
+        if domain == DOMAIN and isinstance(ident, str) and ident.startswith("sat-"):
+            return ident
+    return None
+
+
+def _write_room(hass: HomeAssistant, sat_id: str, room: str) -> None:
+    """File I/O off the loop, as a tracked task (callers and tests can wait for it)."""
+    async def _job() -> None:
+        await hass.async_add_executor_job(set_registry_room, SATELLITES_JSON, sat_id, room)
+
+    hass.async_create_task(_job(), f"friday registry room {sat_id}")
+
+
+def device_area_listener(hass: HomeAssistant) -> Callable:
+    """18/11: the device's area is the single truth for the satellite's room, whoever set it (the form with the code,
+    the presentation conversation, or the user on the device page): every change rewrites satellites.json."""
+    @callback
+    def _on(event) -> None:
+        if event.data.get("action") != "update" or "area_id" not in (event.data.get("changes") or {}):
+            return
+        device = dr.async_get(hass).async_get(event.data.get("device_id"))
+        sat_id = satellite_id(device) if device else None
+        if sat_id is None:
+            return
+        area = ar.async_get(hass).async_get_area(device.area_id) if device.area_id else None
+        _write_room(hass, sat_id, area.name if area else "")
+    return _on
+
+
+def sync_registry_rooms(hass: HomeAssistant, entry) -> None:
+    """At setup: satellites.json catches up with areas changed while the integration was not listening."""
+    areas = ar.async_get(hass)
+    for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id):
+        sat_id = satellite_id(device)
+        if sat_id is not None:
+            area = areas.async_get_area(device.area_id) if device.area_id else None
+            _write_room(hass, sat_id, area.name if area else "")
 
 
 def remove_from_registry(path: str, sat_id: str) -> None:
@@ -301,8 +355,13 @@ class Orchestrator:
         areas = [{"id": a.id, "name": a.name} for a in ar.async_get(self.hass).async_list_areas()
                  if a.name != SETTINGS_AREA]  # it is not a room
         c = await self._wait_connected()
-        await c.send("start_onboarding", timeout=30,
-                     facts={"areas": areas, "known_voices": self.people, "failed_steps": failed})
+        facts = {"areas": areas, "known_voices": self.people, "failed_steps": failed}
+        device = next((d for d in dr.async_entries_for_config_entry(dr.async_get(self.hass), self._entry().entry_id)
+                       if satellite_id(d) == self.sat_id), None)
+        current = ar.async_get(self.hass).async_get_area(device.area_id) if device and device.area_id else None
+        if current is not None and current.name != SETTINGS_AREA:  # 18/11: chosen with the code: the voice does not ask
+            facts["current_area"] = {"id": current.id, "name": current.name}
+        await c.send("start_onboarding", timeout=30, facts=facts)
 
     # ---- running
     async def _attempt(self, step: str) -> None:
