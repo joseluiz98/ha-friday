@@ -203,3 +203,15 @@ def test_agent_always_builds_the_publisher_and_logs_it():  # M8
     src = (pathlib.Path(g.__file__).parents[1] / "__main__.py").read_text()
     assert "if os.path.exists(gh_token_file) else None" not in src
     assert "automatic promotion" in src and "publisher.check()" in src
+
+
+def test_promotion_on_github_is_seen_without_refetching_ci():
+    calls = []
+    first = _watcher("v0.3.8", "a" * 40, runs(("completed", "success")), [], prerelease=True).poll({})
+    assert first["v0.3.8"].release.prerelease is True
+    r = rel("v0.3.8")
+    r["prerelease"] = False
+    w = g.GitHubWatcher("o/r", fake({f"{BASE}/releases?per_page=30": [r]}, calls))
+    out = w.poll(first)["v0.3.8"]
+    assert out.release.prerelease is False and out.release.ci == "green" and out.release.sha == "a" * 40
+    assert calls == [f"{BASE}/releases?per_page=30"]

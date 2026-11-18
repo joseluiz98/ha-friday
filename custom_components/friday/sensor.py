@@ -46,4 +46,4 @@ class FridaySensor(FridayEntity, SensorEntity):
         if self.descriptor.key != "image_latest":
             return attrs
         files = (attrs or {}).get("files")
-        return {**(attrs or {}), "download_url": image_view.download_url(files) if isinstance(files, list) else None}
+        return {**(attrs or {}), "download_url": image_view.download_url(files, self.native_value) if isinstance(files, list) else None}

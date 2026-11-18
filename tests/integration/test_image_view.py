@@ -93,6 +93,14 @@ def test_download_url():
     assert image_view.download_url([]) is None and image_view.download_url(None) is None
 
 
+def test_download_url_prefers_the_sensor_tag_then_the_newest():
+    files = ["friday-satellite-v0.3.4.img.xz", "friday-satellite-v0.3.4.json",
+             "friday-satellite-v0.3.10.img.xz", "friday-satellite-v0.3.5.img.xz"]
+    assert image_view.download_url(files, "v0.3.5") == "/api/friday/image/friday-satellite-v0.3.5.img.xz"
+    assert image_view.download_url(files) == "/api/friday/image/friday-satellite-v0.3.10.img.xz"
+    assert image_view.download_url(files, "v9.9.9") == "/api/friday/image/friday-satellite-v0.3.10.img.xz"
+
+
 async def test_list_view_returns_images(hass, hass_client, view_ready):
     client = await hass_client()
     r = await client.get("/api/friday/image")

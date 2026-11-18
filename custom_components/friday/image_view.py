@@ -31,10 +31,17 @@ def version_key(tag: str) -> tuple[int, int, int]:
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
 
-def download_url(files: list[str] | None) -> str | None:
-    """The URL of the image itself among the files the server reports (the checksum and manifest are not it)."""
-    name = next((f for f in files or [] if isinstance(f, str) and IMAGE_RE.fullmatch(f)), None)
-    return f"{IMAGE_URL}/{name}" if name else None
+def download_url(files: list[str] | None, tag: str | None = None) -> str | None:
+    """The URL of the image among the files the server reports (the checksum and manifest are not it).
+
+    The server keeps older images next to the newest, so the image of `tag` wins, else the newest version
+    (17/11: the first file of the list was v0.3.4 while the sensor said v0.3.5)."""
+    images = {m.group(1): f for f in files or [] if isinstance(f, str) and (m := IMAGE_RE.fullmatch(f))}
+    if not images:
+        return None
+    name = images.get(tag) if isinstance(tag, str) else None
+    name = name or images[max(images, key=version_key)]
+    return f"{IMAGE_URL}/{name}"
 
 
 def _folder(hass) -> str:
