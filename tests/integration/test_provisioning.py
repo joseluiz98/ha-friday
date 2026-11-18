@@ -520,3 +520,41 @@ async def test_converge_says_nothing_when_the_satellite_refuses(hass, reg, notes
     _, orch, _ = make(hass, sat, server)
     await orch.run()
     assert (await orch.steps_state())["ota_converge"] == "failed" and ["updating"] not in said(sat)
+
+
+async def test_onboarding_tells_the_voice_the_area_chosen_with_the_code(hass, reg, notes):
+    """18/11: an area picked in the add-satellite form reaches the presentation conversation, which then does not ask."""
+    sat = good_sat()
+    entry, orch, _ = make(hass, sat, good_server())
+    area = ar.async_get(hass).async_create("Sala")
+    dev = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, config_subentry_id="s1", identifiers={(DOMAIN, SAT)})
+    dr.async_get(hass).async_update_device(dev.id, area_id=area.id)
+    await orch.run()
+    facts = [c for c in sat.calls if c[0] == "start_onboarding"][0][1]["facts"]
+    assert facts["current_area"] == {"id": area.id, "name": "Sala"}
+
+
+async def test_device_area_change_updates_the_registry_room(hass, reg, notes):
+    """18/11: the device's area in HA is the truth; moving it (form, voice or by hand) rewrites the room the voice
+    reads from satellites.json. A satellite not registered yet (no port password) is never created there."""
+    sat = good_sat()
+    entry, orch, _ = make(hass, sat, good_server())
+    await orch.run()  # registers SAT with comodo ""
+    hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, pv.device_area_listener(hass))
+    sala = ar.async_get(hass).async_create("Sala")
+    devs = dr.async_get(hass)
+    dev = devs.async_get_or_create(config_entry_id=entry.entry_id, config_subentry_id="s1", identifiers={(DOMAIN, SAT)})
+    devs.async_update_device(dev.id, area_id=sala.id)
+    await hass.async_block_till_done()
+    data = json.loads(reg.read_text())
+    assert data[SAT]["comodo"] == "Sala" and data[SAT]["senha"] == "pw-from-pi"
+    assert data["sat-0a1b2c"]["comodo"] == "Escritório"
+    devs.async_update_device(dev.id, area_id=None)
+    await hass.async_block_till_done()
+    assert json.loads(reg.read_text())[SAT]["comodo"] == ""
+    other = devs.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, "sat-999999")})
+    devs.async_update_device(other.id, area_id=sala.id)
+    await hass.async_block_till_done()
+    assert "sat-999999" not in json.loads(reg.read_text())
+
