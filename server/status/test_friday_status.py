@@ -16,6 +16,7 @@ class Deps:
     def warm_brain(self): return {"key": "on", "patched": True, "at": "2026-10-20T01:00:00-03:00"}
     def lucid(self): return {"date": "2026-10-20", "status": "ok"}
     def memory_views(self): return {"mode": "ab", "sessions": {"off": 3, "on": 2}, "since": "2026-10-22T09:00:00-03:00"}
+    def memory_watcher(self): return {"degraded": False, "since": None, "reason": None}
     def meminfo(self): return "MemTotal: 11534336 kB\nMemAvailable: 6291456 kB\n"
     def log_tail(self): return self.log
     def activity(self): return self._activity
@@ -59,7 +60,8 @@ class TestServidor(Base):
                                 '"warm_brain": {"key": "on", "patched": true, "at": "2026-10-20T01:00:00-03:00"}, '
                                 '"memory": {"total_mb": 11264, "available_mb": 6144}, "openclaw_version": "2026.9.9", '
                                 '"lucid": {"date": "2026-10-20", "status": "ok"}, "memory_views": {"mode": "ab", '
-                                '"sessions": {"off": 3, "on": 2}, "since": "2026-10-22T09:00:00-03:00"}}')
+                                '"sessions": {"off": 3, "on": 2}, "since": "2026-10-22T09:00:00-03:00"}, '
+                                '"memory_watcher": {"degraded": false, "since": null, "reason": null}}')
 
     def test_status_traz_lucid_e_memory_views(self):
         self.sobe(Deps())
@@ -168,6 +170,71 @@ class TestFuncoesPuras(unittest.TestCase):
         self.assertFalse(fs.conversation_open(""))
         self.assertFalse(fs.conversation_open("a\ncliente desconectado\nb\n"))
         self.assertTrue(fs.conversation_open("cliente desconectado\ncliente conectado\n"))
+
+T1, T2, T3 = "2026-11-17T08:00:00.000Z", "2026-11-17T20:31:32.857Z", "2026-11-18T12:22:49.101Z"
+AVISO = "memory watcher unavailable; memory will refresh on search: FsSafeError: root path changed"
+
+
+def L(date, subsystem, msg):
+    """Linha do log do gateway no formato real: "0" é uma string JSON com o subsistema."""
+    return json.dumps({"0": json.dumps({"subsystem": subsystem}), "1": msg, "_meta": {"date": date}})
+
+
+def partida(date):
+    return L(date, "gateway", "starting...")
+
+
+class TestMemoryWatcher(unittest.TestCase):
+    def test_memory_watcher_sem_log_e_none(self):
+        saved = {"started": "S", "since": "X", "reason": "r"}
+        self.assertEqual(fs.memory_watcher(None, saved), (None, saved))
+
+    def test_memory_watcher_saudavel(self):
+        self.assertEqual(fs.memory_watcher([partida(T1)], None),
+                         ({"degraded": False, "since": None, "reason": None},
+                          {"started": T1, "since": None, "reason": None}))
+
+    def test_memory_watcher_degradado_depois_da_partida(self):
+        r, novo = fs.memory_watcher([partida(T1), L(T2, "memory", AVISO)], None)
+        self.assertTrue(r["degraded"])
+        self.assertEqual(r["since"], T2)
+        self.assertTrue(r["reason"].startswith("memory watcher unavailable"))
+        self.assertEqual(novo, {"started": T1, "since": T2, "reason": r["reason"]})
+
+    def test_memory_watcher_aviso_da_vida_anterior_nao_conta(self):
+        r, _ = fs.memory_watcher([L(T1, "memory", AVISO), partida(T2)], None)
+        self.assertFalse(r["degraded"])
+
+    def test_memory_watcher_outro_subsistema_nao_conta(self):
+        r, _ = fs.memory_watcher([partida(T1), L(T2, "gateway/ws", AVISO)], None)
+        self.assertFalse(r["degraded"])
+
+    def test_memory_watcher_trava_sem_linha_de_partida(self):
+        saved = {"started": T1, "since": T2, "reason": "r"}
+        r, novo = fs.memory_watcher([L(T3, "gateway", "outra coisa")], saved)
+        self.assertEqual(r, {"degraded": True, "since": T2, "reason": "r"})
+        self.assertEqual(novo, saved)
+
+    def test_memory_watcher_partida_nova_destrava(self):
+        saved = {"started": T1, "since": T2, "reason": "r"}
+        r, novo = fs.memory_watcher([partida(T3)], saved)
+        self.assertFalse(r["degraded"])
+        self.assertEqual(novo["started"], T3)
+
+    def test_memory_watcher_ignora_lixo(self):
+        lixo = ["nao json", '{"0": "No change", "_meta": {"date": "2026-11-18T00:00:00Z"}}', "{}"]
+        for saved in (None, {"started": None, "since": None, "reason": None}):
+            r, _ = fs.memory_watcher(lixo + [partida(T1)], saved)
+            self.assertFalse(r["degraded"])
+
+    def test_memory_watcher_reason_cortado(self):
+        r, _ = fs.memory_watcher([partida(T1), L(T2, "memory", "memory watcher unavailable " + "x" * 300)], None)
+        self.assertEqual(len(r["reason"]), 160)
+
+    def test_memory_watcher_capacidade_e_polling_contam(self):
+        for msg in ("memory watcher capacity exhausted: 8192", "memory watcher using fallback polling"):
+            r, _ = fs.memory_watcher([partida(T1), L(T2, "memory", msg)], None)
+            self.assertTrue(r["degraded"], msg)
 
 
 if __name__ == "__main__":
