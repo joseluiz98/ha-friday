@@ -58,6 +58,13 @@ def comodo(body):
     return c if _COMODO.match(c) else None
 
 
+def comodo_do_registro(sats, sid):
+    """18/11: cômodo do cadastro dos satélites (satellites.json; a integração o mantém igual à área do aparelho no HA).
+    Reserva para quando a Pi não informa o dela; mesma regra de saneamento do `comodo`."""
+    item = sats.get(sid) if isinstance(sats, dict) else None
+    return comodo(item) if isinstance(item, dict) else None
+
+
 def nao_perturbe(body) -> bool:
     """Estado do não perturbe que a Pi manda na oferta (D11)."""
     return isinstance(body, dict) and body.get("nao_perturbe") is True
@@ -685,7 +692,14 @@ def apresentacao(body):
         return None
     if not all(isinstance(e, str) and _ETAPA.match(e) for e in etapas):
         return None
-    return {"areas": limpas, "known_voices": list(vozes), "failed_steps": list(etapas), "wake_word_ok": ok}
+    fatos = {"areas": limpas, "known_voices": list(vozes), "failed_steps": list(etapas), "wake_word_ok": ok}
+    if "current_area" in p:  # 18/11: área escolhida junto com o código, na página do HA (opcional)
+        a = p["current_area"]
+        if not (isinstance(a, dict) and isinstance(a.get("id"), str) and _ID_AREA.match(a["id"])
+                and isinstance(a.get("name"), str) and _NOME_CURTO.match(a["name"])):
+            return None
+        fatos["current_area"] = {"id": a["id"], "name": a["name"]}
+    return fatos
 
 
 def mensagem_de_abertura_apresentacao(fatos: dict) -> dict:
@@ -694,9 +708,12 @@ def mensagem_de_abertura_apresentacao(fatos: dict) -> dict:
     vozes = ", ".join(fatos["known_voices"]) or "Nenhuma voz cadastrada ainda"
     falhas = ", ".join(fatos["failed_steps"]) or "Nenhuma etapa da instalação falhou"
     palavra = "deu certo" if fatos["wake_word_ok"] else "não deu certo"
+    atual = fatos.get("current_area")
+    onde = (f"já está na área {atual['name']} (id {atual['id']}), escolhida na instalação pelo Home Assistant"
+            if atual else "ainda não sabe em que cômodo está")
     return {"role": "developer", "content": (
-        "Esta conversa foi aberta pelo satélite porque ele acabou de ser instalado (recém-instalado) e ainda não sabe "
-        f"em que cômodo está. As áreas da casa são: {areas}. "
+        f"Esta conversa foi aberta pelo satélite porque ele acabou de ser instalado (recém-instalado) e {onde}. "
+        f"As áreas da casa são: {areas}. "
         f"Vozes que a F.R.I.D.A.Y. já conhece: {vozes}. "
         f"Etapas da instalação que falharam: {falhas}. "
         f"O teste da palavra de ativação {palavra}. "

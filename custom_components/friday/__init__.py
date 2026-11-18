@@ -180,6 +180,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
             entry.async_on_unload(_area_listener(hass, entry, subentry_id, connection))
         await connection.start()
 
+    # 18/11: the satellite's room (satellites.json, read by the voice) follows its device's area in HA
+    entry.async_on_unload(hass.bus.async_listen(dr.EVENT_DEVICE_REGISTRY_UPDATED, provisioning.device_area_listener(hass)))
+    provisioning.sync_registry_rooms(hass, entry)
     hass.data.setdefault(DOMAIN, {}).setdefault("fingerprints", {})[entry.entry_id] = _reload_fingerprint(entry)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
