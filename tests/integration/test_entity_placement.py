@@ -94,3 +94,7 @@ def test_no_live_key_ends_with_a_retired_key(monkeypatch):
         live |= {d["key"] for d in all_descriptors(kind, monkeypatch) if not d.get("hidden")}
     clashes = sorted(k for k in live for r in RETIRED_KEYS if k == r or k.endswith(f"_{r}"))
     assert clashes == []
+
+
+def test_memory_index_sensor_is_retired():
+    assert "memory_index_last_success" in RETIRED_KEYS

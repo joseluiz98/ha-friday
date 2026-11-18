@@ -3,7 +3,9 @@
 
 GET  /v1/status   estado da F.R.I.D.A.Y. (pronta, último sonho, reinício no mesmo processo, cérebro quente, RAM,
                   `lucid` = última linha do runs.ndjson do Lucid Dreaming ou null, `memory_views` = modo
-                  off|ab|on e quantas conversas cada braço do A/B já teve; spec 2026-10-21)
+                  off|ab|on e quantas conversas cada braço do A/B já teve; spec 2026-10-21;
+                  `memory_watcher` = vigia da memória do OpenClaw, lida do log do gateway no container: degradado
+                  ou não, desde quando e por quê, ou null sem log legível; spec 2026-11-18)
 POST /v1/restart  reinicia o container, recusando (409) se houver conversa aberta ou turno do cérebro a caminho
                   (arquivo de atividade do bot; sem ele, o log do container)
 Toda rota exige `Authorization: Bearer <chave>`; a chave vem de FRIDAY_STATUS_TOKEN_FILE e nunca é registrada."""
@@ -145,6 +147,76 @@ def memory_views(ab_path, mode_path):
     return {"mode": modo, "sessions": sessoes, "since": desde}
 
 
+WATCHER_PREFIXES = (
+    "memory watcher unavailable",
+    "memory watcher capacity exhausted",
+    "memory watcher close failed",
+    "memory watcher using fallback polling",
+)
+
+
+# Sem arquivo de log: sai 3. grep achou: 100; não achou: 101; erro do grep (2 etc.) sai como veio. Docker fora ou
+# container parado devolvem 1/125/126/127: nenhum desses vira "saudável".
+WATCHER_CMD = ('set -- $(ls -1 /tmp/openclaw/openclaw-*.log 2>/dev/null | tail -2); [ $# -gt 0 ] || exit 3; '
+               'grep -h -F -e "starting..." -e "memory watcher" "$@"; rc=$?; [ $rc -le 1 ] && exit 10$rc; exit $rc')
+
+
+def _watcher_lines_from(rc, stdout):
+    """Só 100 (casou) e 101 (nada casou, arquivo lido) são prova de leitura; o resto é None (nunca "saudável")."""
+    if rc == 100:
+        return (stdout or "").splitlines()
+    if rc == 101:
+        return []
+    return None
+
+
+def _log_entry(linha):
+    """(data, subsistema, mensagem) de uma linha do log do gateway, ou None se não for JSON com `_meta.date`."""
+    try:
+        dado = json.loads(linha)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(dado, dict) or not isinstance(dado.get("_meta"), dict):
+        return None
+    data = dado["_meta"].get("date")
+    if not isinstance(data, str):
+        return None
+    subsistema = None
+    try:
+        sub = json.loads(dado.get("0"))
+        if isinstance(sub, dict):
+            subsistema = sub.get("subsystem")
+    except (ValueError, TypeError):
+        pass
+    msg = dado.get("1")
+    return data, subsistema, msg if isinstance(msg, str) else ""
+
+
+def memory_watcher(lines, saved):
+    """Vigia da memória do OpenClaw (spec 2026-11-18), a partir das linhas do log do gateway.
+    Devolve (resultado, estado_novo). Sem log (lines None): (None, saved). O degradado trava no estado salvo até
+    aparecer uma partida do gateway mais nova que a gravada; aviso anterior à última partida é de outra vida."""
+    if lines is None:
+        return None, saved
+    saved = saved if isinstance(saved, dict) else {}
+    entradas = [e for e in map(_log_entry, lines) if e]
+    start = saved.get("started")
+    for data, sub, msg in entradas:
+        if sub == "gateway" and msg == "starting...":
+            start = data
+    if saved.get("since") and saved.get("started") == start:
+        since, reason = saved["since"], saved.get("reason")
+    else:
+        since = reason = None
+        for data, sub, msg in entradas:
+            # _meta.date é sempre ISO UTC no mesmo formato: ordem de string = ordem do tempo
+            if sub == "memory" and msg.startswith(WATCHER_PREFIXES) and (start is None or data > start):
+                since, reason = data, msg[:160]
+                break
+    return ({"degraded": since is not None, "since": since, "reason": reason},
+            {"started": start, "since": since, "reason": reason})
+
+
 # ---- servidor ---------------------------------------------------------------------------------------------------
 
 def _json(handler, codigo, dado):
@@ -185,6 +257,7 @@ def make_server(port, token, deps):
                     "openclaw_version": OPENCLAW_VERSION,
                     "lucid": deps.lucid(),
                     "memory_views": deps.memory_views(),
+                    "memory_watcher": deps.memory_watcher(),
                 })
             if self.command == "POST" and rota == "/v1/restart":
                 ocupado = busy_from_activity(deps.activity(), time.time())
@@ -217,6 +290,7 @@ class RealDeps:
         self.lucid_runs = os.environ.get("FRIDAY_LUCID_RUNS", "/srv/friday/state/cataloger/state/runs.ndjson")
         self.views_ab = os.environ.get("FRIDAY_MEMORY_VIEWS_AB", "/srv/friday/state/memory-views-ab.ndjson")
         self.views_mode = os.environ.get("FRIDAY_MEMORY_VIEWS_MODE", "/srv/friday/state/memory-views-mode")
+        self.watcher_state = os.environ.get("FRIDAY_MEMORY_WATCHER_STATE", "/srv/friday/state/memory-watcher.json")
         self.activity_path = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")
 
     def activity(self):
@@ -248,6 +322,35 @@ class RealDeps:
 
     def memory_views(self):
         return memory_views(self.views_ab, self.views_mode)
+
+    def _watcher_lines(self):
+        """Linhas de partida e de aviso do log do gateway (os dois arquivos mais novos), ou None se não deu para ler.
+        O shell do container classifica o desfecho com códigos próprios (ver _watcher_lines_from)."""
+        try:
+            r = subprocess.run(["docker", "exec", "friday", "sh", "-c", WATCHER_CMD], stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, timeout=15, text=True, errors="replace")
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return _watcher_lines_from(r.returncode, r.stdout)
+
+    def memory_watcher(self):
+        try:
+            with open(self.watcher_state, encoding="utf-8") as f:
+                saved = json.load(f)
+            if not isinstance(saved, dict):
+                saved = None
+        except (OSError, ValueError):
+            saved = None
+        resultado, novo = memory_watcher(self._watcher_lines(), saved)
+        if resultado is not None and novo != saved:
+            try:
+                tmp = self.watcher_state + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(novo, f)
+                os.replace(tmp, self.watcher_state)
+            except OSError:
+                pass
+        return resultado
 
     def meminfo(self):
         try:

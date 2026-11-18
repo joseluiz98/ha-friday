@@ -88,6 +88,8 @@ RETIRED_KEYS = frozenset({
     "ota_channel", "sw_version",  # 14/11: Advanced step / the update entity "Software" shows the version
     # 17/11: semantics or unit changed (spec 2026-11-17-diagnostic-sensors)
     "cpu_load", "memory_available", "memory_total", "vm_cpu_load_pct", "host_available_mb",
+    # 18/11: the 04:15 reindex was retired (spec 2026-11-18-memory-watcher-health)
+    "memory_index_last_success",
 })
 _RETIRED_WAKEWORD = re.compile(r"^.+_wakeword_.+_(mode|sensitivity)$")
 
