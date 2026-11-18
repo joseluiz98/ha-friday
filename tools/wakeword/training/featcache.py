@@ -48,6 +48,20 @@ def arquivos(alvos):
     return out
 
 
+def ler(caminho, tolerante=False):
+    """Amostras int16 do wav. tolerante (modo ambiente): wav vazio ou de cabeçalho cortado volta None em vez de derrubar
+    o dia inteiro (17/11/2026: a Pi desligou com a gravação aberta, 0 bytes, e o cache noturno falhou nesse arquivo)."""
+    try:
+        with wave.open(caminho) as w:
+            assert w.getframerate() == 16000 and w.getnchannels() == 1, caminho
+            b = w.readframes(w.getnframes())
+    except (EOFError, wave.Error):
+        if tolerante:
+            return None
+        raise
+    return np.frombuffer(b[:len(b) // 2 * 2], dtype=np.int16)
+
+
 def cache(d, conjunto, modo, alvos):
     from openwakeword.utils import AudioFeatures
     from openwakeword.vad import VAD
@@ -57,10 +71,13 @@ def cache(d, conjunto, modo, alvos):
     z = np.zeros(PASSO, dtype=np.int16)
     linhas, vads, idx, total = [], [], [], 0
     rnd = np.random.default_rng(7)
+    pulados = []
     for i, caminho in enumerate(arquivos(alvos)):
-        with wave.open(caminho) as w:
-            assert w.getframerate() == 16000 and w.getnchannels() == 1, caminho
-            a = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+        a = ler(caminho, tolerante=modo == "ambiente")
+        if a is None:
+            pulados.append(os.path.basename(caminho))
+            print(f"{i + 1} {os.path.basename(caminho)} pulado (wav vazio ou cortado)", flush=True)
+            continue
         if modo == "clipe":
             a = np.concatenate([a, np.zeros(PASSO * DEPOIS, dtype=np.int16)])
         pre.reset()
@@ -90,7 +107,7 @@ def cache(d, conjunto, modo, alvos):
     np.save(os.path.join(d, f"{conjunto}.emb.npy"), np.vstack(linhas))
     if modo == "ambiente":
         np.save(os.path.join(d, f"{conjunto}.vad.npy"), np.array(vads, dtype=np.float32))
-    json.dump({"modo": modo, "arquivos": idx}, open(os.path.join(d, f"{conjunto}.json"), "w"))
+    json.dump({"modo": modo, "arquivos": idx, "pulados": pulados}, open(os.path.join(d, f"{conjunto}.json"), "w"))
 
 
 def score(d, saida, conjuntos, pkl, modelos):
