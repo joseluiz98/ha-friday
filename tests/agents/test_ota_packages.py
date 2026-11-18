@@ -353,3 +353,38 @@ def test_mark_offered_roundtrip(tmp_path):
     assert (tmp_path / "packages" / "v0.4.0" / ".offered").exists()
     assert pk.is_offered(str(tmp_path), "v0.4.0") is True
     assert pk.is_offered(str(tmp_path), "v0.3.0") is False
+
+
+def test_mark_offered_records_first_offer_only(tmp_path):
+    pk.mark_offered(str(tmp_path), "v0.4.0", now=100.0)
+    pk.mark_offered(str(tmp_path), "v0.4.0", now=200.0)
+    data = json.loads((tmp_path / "packages/v0.4.0/.offered").read_text())
+    assert data == {"tag": "v0.4.0", "at": 100.0}
+
+
+def test_satellite_only_rebuild_keeps_server_archive(src):
+    archive, _, tmp = src
+    root = tmp / "ota"
+    repo = FakeRepo(archive)
+    pk.build_release(repo, "v9.9.9", SHA, pv._vault(), str(root), wheels=lambda locks, sha: "w", built_by="v9.9.8")
+    server = root / "packages/v9.9.9/archive.tar"
+    before = server.read_bytes()
+    repo.calls.clear()
+    out = pk.build_release(repo, "v9.9.9", SHA, pv._vault(), str(root), wheels=lambda locks, sha: "w2",
+                           built_by="v9.9.9", satellite_only=True)
+    assert server.exists() and server.read_bytes() == before
+    assert not any(c[2] == tuple(pk.SERVER_PATHS) for c in repo.calls)
+    assert out["built_by"] == "v9.9.9" and out["satellite"]["wheels"] == "w2" and out["server"]["path"] == str(server)
+    assert json.loads((root / "packages/v9.9.9/meta.json").read_text())["built_by"] == "v9.9.9"
+
+
+def test_build_satellite_without_release_json_uses_builtin_lists(src):
+    archive, _, tmp = src
+
+    def no_release(sha, paths):
+        if list(paths) == ["ota/release.json"]:
+            raise rp.RepoError("nothing to archive")
+        return archive(sha, paths)
+
+    info = pk.build_satellite(no_release, "v9.9.9", SHA, pv._vault(), str(tmp / "pkg"))
+    assert "program/friday_satelite.py" in _members(info["path"])

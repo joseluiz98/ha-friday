@@ -387,7 +387,9 @@ def test_rollback_restores_overwritten_and_removes_created(env):
     calls = env["log"].read_text().splitlines()
     restarts = [i for i, c in enumerate(calls) if c.startswith("systemctl restart")]
     assert len(restarts) == 2  # the activation, then the way back
-    assert "systemctl daemon-reload" in calls[restarts[0] + 1:restarts[1]]
+    between = calls[restarts[0] + 1:restarts[1]]
+    # the restore reloads units before the switch, then the restart reloads again: without _restore only one
+    assert between.count("systemctl daemon-reload") == 2, between
 
 
 def test_rollback_removes_files_created_by_a_migration(env):

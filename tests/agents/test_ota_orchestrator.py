@@ -28,7 +28,7 @@ class World:
         self.releases = {r.release.tag: r for r in releases}
         # releases of the OTA era unless a test says otherwise ({} = every release is pre-OTA)
         self.manifests = {r.release.sha: man() for r in releases} if manifests is None else manifests
-        self.built, self.pushed, self.now = [], [], 1000.0
+        self.built, self.pushed, self.now, self.rebuilds = [], [], 1000.0, []
         self.repo_calls, self.repo_down, self.build_fails, self.gate = [], False, False, None
         self.store = st.OtaStore(str(tmp / "state.json"), str(tmp / "events.ndjson"))
         self.tokens = st.TokenBook(str(tmp / "tokens.json"))
@@ -58,7 +58,9 @@ class World:
             def flush(self, pushes):
                 return 0
 
-        def build(repo, tag, sha, vault, root, wheels, built_by=""):
+        def build(repo, tag, sha, vault, root, wheels, built_by="", satellite_only=False):
+            if satellite_only:
+                world.rebuilds.append(True)
             if world.gate is not None:
                 world.gate.wait(5)
             world.built.append(tag)
@@ -688,3 +690,82 @@ def test_waiting_push_says_auto_install_is_off(tmp_path):
     w.now += 3601
     w.offer("stable", installed="v0.3.0")
     assert w.pushed and w.pushed[0].endswith("(atualização automática desligada).")
+
+
+# ---- review findings (2026-11-18): what counts as held, which tags rebuild, describe versions
+def _legacy(w, tag="v0.4.0"):
+    """A package packed by the v0.3.9 agent: no built_by."""
+    w.orch.meta[tag] = {"tag": tag, "sha": "x", "server": {"path": "a.tar"},
+                        "satellite": {"path": "p", "sha256": "k" * 64, "size": 10, "lock_sha256": "L" * 64,
+                                      "wheels": "/w"}}
+
+
+def test_legacy_package_held_by_install_requested_event(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0")])
+    _legacy(w)
+    w.orch.poll()
+    w.store.event("sat-0000b2", "v0.4.0", "install_requested")
+    o = w.offer("stable", installed="v0.3.0")
+    assert o["tag"] == "v0.4.0" and o["sha256"] == "k" * 64 and w.built == []
+
+
+@pytest.mark.parametrize("field", ["attempts", "last_report"])
+def test_legacy_package_held_by_device_last_attempt(tmp_path, field):
+    w = World(tmp_path, [rel("v0.4.0")])
+    _legacy(w)
+    w.orch.poll()
+    d = w.store.device("sat-0000b2")
+    d[field] = ({"version": "v0.4.0", "failures": 1} if field == "attempts"
+                else {"at": 1.0, "tag": "v0.4.0", "result": "failed", "stage": "download", "error": "x"})
+    o = w.offer("stable", installed="v0.3.0")
+    assert o["tag"] == "v0.4.0" and o["sha256"] == "k" * 64 and w.built == []
+
+
+def test_package_file_marks_offered(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0")])
+    w.orch.poll()
+    meta = w.orch.meta["v0.4.0"]
+    Path(meta["satellite"]["path"]).parent.mkdir(parents=True, exist_ok=True)
+    Path(meta["satellite"]["path"]).write_bytes(b"x")
+    assert not pk.is_offered(_ota_root(tmp_path), "v0.4.0")
+    assert w.orch.package_file("v0.4.0", "satellite.tar.gz") == meta["satellite"]["path"]
+    assert pk.is_offered(_ota_root(tmp_path), "v0.4.0")
+
+
+def test_pre_contract_tag_without_built_by_never_rebuilt(tmp_path):
+    w = World(tmp_path, [rel("v0.3.9")])
+    _legacy(w, "v0.3.9")
+    w.orch.poll()
+    o = w.offer("stable", installed="v0.3.0")
+    assert o["tag"] == "v0.3.9" and o["sha256"] == "k" * 64 and w.built == []
+
+
+def test_pre_contract_tag_kept_even_by_older_agent(tmp_path):
+    w = World(tmp_path, [rel("v0.3.9")], own="v0.3.8")
+    _legacy(w, "v0.3.9")
+    w.orch.poll()
+    assert w.offer("stable", installed="v0.3.0")["tag"] == "v0.3.9" and w.built == []
+
+
+def test_rebuild_is_satellite_only(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0")], own="v0.3.0")
+    w.orch.poll()
+    w.agent_at("v0.4.0")
+    w.offer("stable", installed="v0.3.0")
+    assert w.built == ["v0.4.0", "v0.4.0"] and w.rebuilds == [True]
+
+
+def test_own_version_describe_string_parsed(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0")], own="v0.3.0")
+    w.orch.poll()
+    w.agent_at("v0.4.0-3-gabc1234")  # deploy.sh writes `git describe`
+    assert w.offer("stable", installed="v0.3.0")["tag"] == "v0.4.0"
+    assert w.built == ["v0.4.0", "v0.4.0"]
+
+
+def test_built_by_describe_string_counts_as_fresh(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0")], own="v0.4.0-1-gdeadbee")
+    w.orch.poll()
+    assert w.orch.meta["v0.4.0"]["built_by"] == "v0.4.0-1-gdeadbee"
+    w.agent_at("v0.5.0")
+    assert w.offer("stable", installed="v0.3.0")["tag"] == "v0.4.0" and w.built == ["v0.4.0"]

@@ -15,6 +15,7 @@ import os
 import shutil
 import tarfile
 import tempfile
+import time
 from typing import Callable
 
 from .. import provisioning as pv
@@ -196,8 +197,8 @@ def build_satellite(archive: Callable[[str, list], bytes], tag: str, sha: str, v
             with tarfile.open(fileobj=io.BytesIO(archive(sha, ["ota/release.json"]))) as t:
                 m = t.extractfile("ota/release.json") if "ota/release.json" in t.getnames() else None
                 release = json.loads(m.read().decode("utf-8")) if m else {}
-        except (tarfile.TarError, ValueError, KeyError):
-            release = {}
+        except (tarfile.TarError, ValueError, KeyError, RuntimeError, OSError):
+            release = {}  # a tag without ota/release.json (RepoError "nothing to archive"): the built-in lists
         raw = archive(sha, declared(release)[0])
         with tarfile.open(tmp, "w:gz") as tar:
             manifest = pack_satellite(tar, raw, tag, sha, vault)
@@ -214,21 +215,25 @@ def build_satellite(archive: Callable[[str, list], bytes], tag: str, sha: str, v
 
 
 def build_release(repo, tag: str, sha: str, vault, root: str, wheels: Callable[[list, str], str],
-                  built_by: str = "") -> dict:
+                  built_by: str = "", satellite_only: bool = False) -> dict:
     """`<root>/packages/<tag>/`: satellite.tar.gz, archive.tar (server side), meta.json, `.complete`. Idempotent.
-    `built_by` is the version of the agent that packed it (spec 2026-11-18): an older packager may miss files."""
+    `built_by` is the version of the agent that packed it (spec 2026-11-18): an older packager may miss files.
+    `satellite_only` rebuilds satellite.tar.gz (+ wheels and meta) and keeps the server's archive.tar as it is."""
     folder = os.path.join(root, "packages", tag)
     done = os.path.join(folder, ".complete")
     meta_path = os.path.join(folder, "meta.json")
-    if os.path.exists(done):
+    if os.path.exists(done) and not satellite_only:
         with open(meta_path, encoding="utf-8") as f:
             return json.load(f)
+    if satellite_only and os.path.exists(done):
+        os.remove(done)
     os.makedirs(folder, exist_ok=True)
     sat = build_satellite(repo.archive, tag, sha, vault, folder)
     server_tar = os.path.join(folder, "archive.tar")
-    with open(server_tar + ".tmp", "wb") as f:
-        f.write(repo.archive(sha, SERVER_PATHS))
-    os.replace(server_tar + ".tmp", server_tar)
+    if not (satellite_only and os.path.isfile(server_tar)):
+        with open(server_tar + ".tmp", "wb") as f:
+            f.write(repo.archive(sha, SERVER_PATHS))
+        os.replace(server_tar + ".tmp", server_tar)
     with tarfile.open(sat["path"], "r:gz") as t:
         locks = [t.extractfile("program/requirements.lock").read(), t.extractfile("agent/requirements.lock").read()]
     lock_dir = tempfile.mkdtemp()
@@ -249,11 +254,18 @@ def build_release(repo, tag: str, sha: str, vault, root: str, wheels: Callable[[
     return meta
 
 
-def mark_offered(root: str, tag: str) -> None:
-    """`<root>/packages/<tag>/.offered`: the package reached a device once, so it is never rebuilt under it."""
+def mark_offered(root: str, tag: str, now: float | None = None) -> None:
+    """`<root>/packages/<tag>/.offered` = {"tag", "at"}: the package reached a device once, so it is never rebuilt
+    under it. `at` is the first offer; a later call never overwrites it."""
     folder = os.path.join(root, "packages", tag)
     os.makedirs(folder, exist_ok=True)
-    open(os.path.join(folder, ".offered"), "a").close()
+    path = os.path.join(folder, ".offered")
+    if os.path.exists(path):
+        return
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"tag": tag, "at": time.time() if now is None else now}, f, sort_keys=True)
+    os.replace(tmp, path)
 
 
 def is_offered(root: str, tag: str) -> bool:

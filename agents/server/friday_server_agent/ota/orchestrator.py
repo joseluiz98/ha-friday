@@ -14,7 +14,6 @@ import logging
 import os
 import json
 import re
-import shutil
 import threading
 import time
 from typing import Callable
@@ -33,6 +32,14 @@ from . import wheels as wh
 LOG = logging.getLogger("friday_server_agent.ota")
 OTA_ROOT = "/srv/friday/ota"
 TAG = re.compile(r"^v\d+\.\d+\.\d+$")
+_LEAD_TAG = re.compile(r"^(v\d+\.\d+\.\d+)(?:-\d+-g[0-9a-f]+)?(?:\s|$)")
+CONTRACT_TAG = "v0.3.10"  # packages of older tags predate built_by: always kept as they are (spec 2026-11-18)
+
+
+def lead_tag(value) -> str | None:
+    """`vX.Y.Z` from a clean tag or a `git describe` version (`vX.Y.Z-N-gSHA`, written by deploy.sh); else None."""
+    m = _LEAD_TAG.match(value.strip()) if isinstance(value, str) else None
+    return m.group(1) if m else None
 RESULTS = ("installed", "rolled_back", "failed")
 REPORT_IDS_KEPT = 20  # per device: the newest report ids, to drop a resend
 BUILD_RETRY_S = 3600  # a release that failed to package is retried at most once an hour
@@ -174,8 +181,14 @@ class Orchestrator:
         if pk.is_offered(self.root, tag):
             return True
         with self.store.lock:
-            if any(d.get("installed") == tag for d in self.store.data["devices"].values()):
-                return True
+            for d in self.store.data["devices"].values():
+                if d.get("installed") == tag:
+                    return True
+                # the device's last attempt or report names this tag: it may be downloading or holding it
+                if isinstance(d.get("attempts"), dict) and d["attempts"].get("version") == tag:
+                    return True
+                if isinstance(d.get("last_report"), dict) and d["last_report"].get("tag") == tag:
+                    return True
             path = self.store.events_path
         try:
             with open(path, encoding="utf-8") as f:
@@ -185,7 +198,8 @@ class Orchestrator:
                     except ValueError:
                         continue
                     # satellite results only: the server's own install event is about archive.tar, not this package
-                    if (isinstance(e, dict) and e.get("tag") == tag and e.get("event") in RESULTS
+                    if (isinstance(e, dict) and e.get("tag") == tag
+                            and (e.get("event") in RESULTS or e.get("event") == "install_requested")
                             and str(e.get("device") or "").startswith("sat-")):
                         return True
         except OSError:
@@ -199,24 +213,41 @@ class Orchestrator:
         meta = self._package(tag)
         if not meta:
             return None
-        by = meta.get("built_by")
-        if isinstance(by, str) and TAG.match(by) and ch.version_key(by) >= ch.version_key(tag):
+        by = lead_tag(meta.get("built_by"))
+        if ch.version_key(tag) < ch.version_key(CONTRACT_TAG):  # pre-contract tag: kept as it is, never deleted
+            self._older_refused.discard(tag)
+            return meta
+        if by is not None and ch.version_key(by) >= ch.version_key(tag):
             self._older_refused.discard(tag)
             return meta
         if self._held(tag):
             self._older_refused.discard(tag)
             return meta
-        own = self._own_version()
-        if not (isinstance(own, str) and TAG.match(own)) or ch.version_key(own) < ch.version_key(tag):
+        own_raw = self._own_version()
+        own = lead_tag(own_raw)
+        if own is None or ch.version_key(own) < ch.version_key(tag):
             self._older_refused.add(tag)
             return None
         self._older_refused.discard(tag)
         with self._build_lock:
-            if self.meta.get(tag) is meta:
-                self.meta.pop(tag, None)
-                shutil.rmtree(os.path.join(self.root, "packages", tag), ignore_errors=True)
-                LOG.info("OTA: package %s packed by %s; rebuilding with %s", tag, by or "an older agent", own)
-        return self._package(tag)
+            if self.meta.get(tag) is not meta:  # another thread already rebuilt it
+                return self.meta.get(tag)
+            with self.store.lock:
+                info = self.store.release_infos().get(tag)
+            if info is None:
+                return None
+            LOG.info("OTA: package %s packed by %s; rebuilding its satellite part with %s", tag,
+                     meta.get("built_by") or "an older agent", own_raw)
+            try:  # satellite.tar.gz only: the server's archive.tar stays (spec 2026-11-18, review finding 2)
+                new = self._build(self.repo, tag, info.release.sha, self.vault, self.root, self._wheels,
+                                  built_by=own_raw, satellite_only=True)
+            except Exception as err:  # noqa: BLE001 - the old package stays; retried at the next offer
+                LOG.error("OTA: satellite rebuild %s failed: %s", tag, type(err).__name__)
+                with self.store.lock:
+                    self.store.event("server", tag, "package_failed", "rebuild", type(err).__name__)
+                return None
+            self.meta[tag] = new
+            return new
 
     def _missing_reason(self, tag: str) -> str:
         return "server_older" if tag in self._older_refused else "package_missing"
@@ -498,7 +529,13 @@ class Orchestrator:
         if not meta:
             return None
         path = meta["satellite"]["path"] if name == "satellite.tar.gz" else meta["satellite"].get("wheels")
-        return path if path and os.path.exists(path) else None
+        if not (path and os.path.exists(path)):
+            return None
+        try:  # served once: a device may hold these bytes now, so the package is never rebuilt under it
+            pk.mark_offered(self.root, tag, self._clock())
+        except OSError as err:
+            LOG.warning("OTA: offered marker failed: %s", type(err).__name__)
+        return path
 
     # ---- satellites
     def offer(self, sat_id: str, channel: str, installed: str | None, protocol: int, lock_sha256: str) -> dict:
@@ -583,7 +620,7 @@ class Orchestrator:
         if not meta:
             return offer_payload(None, auto_install=auto, reason=self._missing_reason(tag)), tag
         try:
-            pk.mark_offered(self.root, tag)
+            pk.mark_offered(self.root, tag, now)
         except OSError as err:
             LOG.warning("OTA: offered marker failed: %s", type(err).__name__)
         sat = meta["satellite"]
