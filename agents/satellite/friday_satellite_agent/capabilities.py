@@ -19,7 +19,10 @@ VERSION = _version.installed_version(_version.FILE)
 WHISPER_DEFAULT_DB = 5.5
 DUCK_DEFAULT = 15
 FOLLOW_UP_DEFAULT = 5
-INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window", "continuous_speech_limit"}
+INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window", "continuous_speech_limit", "xvf_sys_delay"}
+AUDIO_BOARD_FILE = "/etc/friday-satelite/audio_board"
+XVF_DELAY_DEFAULT = 12  # AUDIO_MGR_SYS_DELAY de fábrica do XVF3800
+MODELS = {"xvf3800": "Raspberry Pi 3 + XVF3800", "jabra": "Raspberry Pi 3 + Jabra Speak 410", "none": "Raspberry Pi 3"}
 MODES = {"ativa": "active", "sombra": "shadow", "desligada": "off"}
 MODES_BACK = {v: k for k, v in MODES.items()}
 STATES = {"parada": "idle", "alarme": "idle", "cadastro": "idle", "conectando": "listening",
@@ -28,6 +31,21 @@ ONBOARDING_RESULTS = ("wake_word_ok", "wake_word_failed", "area_selected")
 ORIGINS = {"voz": "voice", "botao": "button", "porta": "agent"}
 RESULTS = {"conversa": "conversation", "barrada": "rejected", "sombra": "shadow"}
 _WW = re.compile(r"^wakeword_(.+)_(mode|sensitivity)$")
+
+
+def read_board(path: str = AUDIO_BOARD_FILE) -> str | None:
+    """`xvf3800` | `jabra` | `none` as the boot step wrote it; None = no (or an unknown) file."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            board = f.read().strip()
+    except OSError:
+        return None
+    return board if board in MODELS else None
+
+
+def model_for_board(board: str | None) -> str:
+    """The device model HA shows. No file = a satellite older than the board detection: all of those had the Jabra."""
+    return MODELS.get(board or "jabra", MODELS["jabra"])
 
 
 def percent_from_position(pos) -> int:
@@ -42,7 +60,7 @@ def _d(key, platform, name, **kw) -> dict:
     return {"key": key, "platform": platform, "name": name, **kw}
 
 
-def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
+def controls_from_config(cfg: dict, wakewords: list[dict], board: str | None = None) -> list[dict]:
     c = "config"
     # 10/11: names tested on an end user without context (two rounds); the entity_id stays
     out = [
@@ -83,6 +101,17 @@ def controls_from_config(cfg: dict, wakewords: list[dict]) -> list[dict]:
         # 15/11: every ring state in a row (~2.5 min), only while idle
         _d("ring_preview", "button", "LED ring preview", category="diagnostic", icon="mdi:led-strip-variant"),
     ]
+    if board == "xvf3800":  # settings of the XVF3800 only; the Jabra satellites never see them
+        out += [
+            _d("xvf_sys_delay", "number", "XVF3800 delay", min=0, max=256, step=1, category=c, mode="box",
+               icon="mdi:timer-cog-outline"),
+            _d("beam_lock", "switch", "Beam lock", category=c, icon="mdi:crosshairs-gps"),
+            # 17/11: USB watchdog (usb_watch.py): reboots of the Pi it made, and one event per reboot or exhausted hour
+            _d("usb_recoveries", "sensor", "USB recoveries", state_class="total_increasing", category="diagnostic",
+               icon="mdi:usb"),
+            _d("usb_recovery", "event", "USB recovery", event_types=["rebooted", "exhausted"], category="diagnostic",
+               icon="mdi:usb"),
+        ]
     for w in wakewords:
         n = w["nome"]
         out.append(_d(f"wakeword_{n}_mode", "select", f"Wake word {n} mode", category=c,
@@ -133,7 +162,8 @@ def timers_state(timers) -> dict:
 
 
 class Mapper:
-    def __init__(self) -> None:
+    def __init__(self, board: str | None = None) -> None:
+        self.board = board  # the XVF-only keys exist only on the XVF3800
         self.last_duck = DUCK_DEFAULT
         self.last_follow_up = FOLLOW_UP_DEFAULT
         self.program_keys: set[str] = set()  # every key a program answer produced: all go None when it stops
@@ -178,6 +208,9 @@ class Mapper:
             "ducking_restore": cfg.get("music_restore_s"),
             "program_state": "idle",
         }
+        if self.board == "xvf3800":
+            st["xvf_sys_delay"] = cfg.get("xvf_sys_delay", XVF_DELAY_DEFAULT)
+            st["beam_lock"] = cfg.get("beam_lock", True) is not False
         if pos is not None:
             st["volume"] = percent_from_position(pos)
         for w in wakewords:
@@ -198,7 +231,8 @@ class Mapper:
                   "ducking_level": "music_duck_percent", "ducking_restore": "music_restore_s",
                   "close_mic_awaiting_reply": "close_mic_awaiting_reply",
                   "continuous_speech_limit": "speech_max_s",
-                  "continue_listening_while_speaking": "keep_listening_while_speaking"}
+                  "continue_listening_while_speaking": "keep_listening_while_speaking",
+                  "xvf_sys_delay": "xvf_sys_delay", "beam_lock": "beam_lock"}
         if key in simple:
             if key in INT_KEYS and isinstance(value, float) and value.is_integer():
                 value = int(value)  # HA number entities send 20.0; the program accepts only int here

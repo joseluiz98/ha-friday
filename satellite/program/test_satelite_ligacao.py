@@ -6,7 +6,7 @@ from unittest import mock
 # Módulos que só existem na Pi (ou que mexem em hardware) viram simulados SÓ durante o import do programa; depois
 # os originais voltam, senão os outros testes da suíte (test_conexao, test_hardware) pegariam os simulados.
 _SIMULADOS = ("numpy", "aiohttp", "openwakeword", "openwakeword.model", "openwakeword.vad", "hardware", "conexao",
-              "porta_local", "friday_satelite", "whisper")
+              "porta_local", "friday_satelite", "whisper", "placa")
 _ORIGINAIS = {n: sys.modules.get(n) for n in _SIMULADOS}
 for nome in ("numpy", "aiohttp", "openwakeword", "openwakeword.model", "openwakeword.vad"):
     sys.modules.setdefault(nome, types.ModuleType(nome))
@@ -31,6 +31,7 @@ class Mixer:
 
 
 class MusicMixer:
+    def __init__(self, card="USB", control="Music"): self.card = card
     def write(self, p): F.music.append(p)
     def prime(self): F.primed = True
 
@@ -81,6 +82,7 @@ sys.modules["whisper"] = wh
 pl = types.ModuleType("porta_local")
 sys.modules["porta_local"] = pl
 
+sys.modules.pop("placa", None)  # a fresh one binds to the simulated hardware; the original comes back below
 import friday_satelite as fs  # noqa: E402
 
 for _n, _m in _ORIGINAIS.items():
@@ -98,6 +100,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.p = mock.patch.multiple(fs, CFG=os.path.join(self.d, "config.json"), ID=os.path.join(self.d, "id"),
                                      TIMERS=os.path.join(self.d, "estado", "timers.json"), SONS=self.d)
         self.p.start()
+        self.p_placa = mock.patch.object(fs.placa, "ler_placa", return_value="jabra")  # never the host's audio_board
+        self.p_placa.start()
         import sons
         sons.gerar(self.d)
         import shutil  # 17/11: os tons de fábrica são os da ElevenLabs; os gerados fazem o papel deles aqui
@@ -113,6 +117,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.s._parar_alarme()
+        self.p_placa.stop()
         self.p.stop()
 
 
@@ -203,6 +208,19 @@ class TestComandos(Base):
         self.s.comando_porta({"acao": "update_pending", "ligado": False})
         self.assertFalse(self.s.estado_publico()["update_pendente"])
         self.assertFalse(self.s.comando_porta({"acao": "update_pending", "ligado": "x"})["ok"])
+
+    async def test_status_publishes_the_capture_rate(self):
+        """Task 5 (xvf3800-support): `captura_taxa` (3 casas) e `captura_idade_s` (monotônico, revisão I5) no /status; None até a 1ª janela."""
+        e = self.s.estado_publico()
+        self.assertIsNone(e["captura_taxa"])
+        self.assertIsNone(e["captura_idade_s"])
+        t0 = 100.0
+        for i in range(70):  # 11,2 s a tempo real, pedaços de 2560 amostras
+            self.s.taxa_captura.alimentar(2560, t0 + i * 0.16)
+        e = self.s.estado_publico()
+        self.assertEqual(e["captura_taxa"], round(self.s.taxa_captura.atual(), 3))
+        self.assertAlmostEqual(e["captura_taxa"], 1.0, delta=0.01)
+        self.assertIsInstance(e["captura_idade_s"], float)
 
     async def test_estado_publico_lista_as_palavras_carregadas(self):
         # a saúde do OTA (friday-ota-apply) exige palavra carregada: lista vazia até a captura criar o modelo
@@ -527,7 +545,7 @@ class TestRedeEsgotadaLigacao(unittest.TestCase):
         self.assertIn('tipo == "desfazer_mudo"', corpo)
         self.assertIn("ring.ESTADO_DO_MAESTRO[self.maestro._luz_do_estado()]", corpo)
         self.assertIn('"undo_mute"', corpo)
-        self.assertIn("unsupported_xvf3800", corpo)
+        self.assertIn("\"undo_mute\": \"xvf3800\"", corpo)  # 17/11: o pino do XVF desfaz o mudo
 
 
 if __name__ == "__main__":
@@ -923,3 +941,122 @@ class TestPararFala(Base):
         self.s._agir("conectar", None)
         self.s.evento("fala_comecou", None)
         self.assertEqual(F.falas_pessoa, 1)
+
+
+class LinkFalso:
+    """XvfLink falso (spec 2026-11-17): registra escritas."""
+    def __init__(self):
+        self.escritas = []
+
+    def write(self, nome, valores):
+        self.escritas.append((nome, list(valores)))
+        return True
+
+    def read(self, nome):
+        return None
+
+
+class TestXvf3800(Base):
+    async def asyncSetUp(self):
+        self.link = LinkFalso()
+        self.p_link = mock.patch.object(fs.xvf_link, "XvfLink", return_value=self.link)
+        self.p_link.start()
+        await super().asyncSetUp()
+
+    async def asyncTearDown(self):
+        await super().asyncTearDown()
+        self.p_link.stop()
+
+    def _novo_satelite_xvf(self):
+        self.p_placa.stop()
+        self.p_placa = mock.patch.object(fs.placa, "ler_placa", return_value="xvf3800")
+        self.p_placa.start()
+        self.link.escritas.clear()
+        return fs.Satelite(asyncio.get_running_loop())
+
+    async def test_startup_reapplies_the_board_settings_unlocking_first(self):
+        s = self._novo_satelite_xvf()
+        self.assertEqual(self.link.escritas[0], ("AEC_FIXEDBEAMSONOFF", [0]))
+        self.assertIn(("AUDIO_MGR_OP_R", [7, 3]), self.link.escritas)
+        self.assertEqual(s.placa, "xvf3800")
+        self.assertIsInstance(s.anel, fs.ring.Xvf3800Ring)  # a placa do audio-select decide, não a busca USB do anel
+
+    async def test_button_mute_turns_the_ring_red_on_the_xvf(self):
+        s = self._novo_satelite_xvf()
+        s.maestro.mudo = True  # o detector viu os zeros do botão
+        self.assertTrue(s._mudo_visivel())
+
+    async def test_undo_mute_writes_the_pin_on_the_xvf(self):
+        s = self._novo_satelite_xvf()
+        self.link.escritas.clear()
+        s._agir("desfazer_mudo", None)
+        self.assertIn(("GPO_WRITE_VALUE", [30, 0]), self.link.escritas)
+
+    async def test_jabra_ring_ignores_the_button_mute_as_today(self):
+        self.s.maestro.mudo = True
+        self.assertFalse(self.s._mudo_visivel())
+
+
+class TestXvf3800Atraso(TestXvf3800):
+    async def test_delay_change_from_ha_is_written_live(self):
+        s = self._novo_satelite_xvf()
+        self.link.escritas.clear()
+        s.ao_mudar_config(dict(s.cfg, xvf_sys_delay=3))
+        self.assertEqual(self.link.escritas, [("AUDIO_MGR_SYS_DELAY", [3])])
+
+
+class TestXvf3800Trava(TestXvf3800):
+    """DOA v0 (17/11): trava na palavra, solta no fim do primeiro pedido e ao fechar a conversa."""
+    def _xvf_com_direcao(self, graus=45):
+        s = self._novo_satelite_xvf()
+        agora = fs.time.monotonic()
+        for dt in (0.6, 0.4, 0.2):
+            s.doa_dir.alimentar(agora - dt, fs.math.radians(graus))
+        self.link.escritas.clear()
+        return s
+
+    async def test_wake_word_locks_and_first_request_end_releases(self):
+        s = self._xvf_com_direcao()
+        s._travar_na_palavra()
+        self.assertIn(("AEC_FIXEDBEAMSONOFF", [1]), self.link.escritas)
+        self.assertAlmostEqual(s.anel._dir_fixa, 45, delta=1)
+        s._doa_evento("fala_parou")  # fim da própria palavra: segue travada
+        self.assertTrue(s.doa_trava.travado)
+        s._doa_evento("fala_comecou"); s._doa_evento("fala_parou")
+        self.assertFalse(s.doa_trava.travado)
+        self.assertIn(("AUDIO_MGR_OP_R", [7, 3]), self.link.escritas)
+
+    async def test_beam_lock_switch_off_never_locks(self):
+        s = self._xvf_com_direcao()
+        s.cfg["beam_lock"] = False
+        s._travar_na_palavra()
+        self.assertNotIn(("AEC_FIXEDBEAMSONOFF", [1]), self.link.escritas)
+
+    async def test_conversation_close_releases_and_clears_the_ring(self):
+        s = self._xvf_com_direcao()
+        s._travar_na_palavra()
+        s._doa_evento("parada")
+        self.assertFalse(s.doa_trava.travado)
+        self.assertIsNone(s.anel._dir_fixa)
+
+    async def test_jabra_has_no_beam_lock(self):
+        self.assertIsNone(self.s.doa_regra)
+        self.s._travar_na_palavra()  # não faz nada no Jabra
+
+
+class TestXvf3800MudoRevisao(TestXvf3800):
+    async def test_button_mute_is_saved_so_a_restart_keeps_it(self):
+        # review I1: apply_startup writes the pin from cfg["mudo"]; a button mute must be recorded there
+        s = self._novo_satelite_xvf()
+        s.maestro.mudo = False
+        s.evento("mudo", True)
+        self.assertTrue(s.cfg["mudo"])
+        self.assertTrue(fs.cfgmod.carregar(fs.CFG)["mudo"])
+
+    async def test_undo_mute_never_lifts_a_mute_the_user_made(self):
+        # review I2: a mute from HA or the button (cfg) stays when the network comes back
+        s = self._novo_satelite_xvf()
+        s.cfg["mudo"] = True
+        self.link.escritas.clear()
+        s._agir("desfazer_mudo", None)
+        self.assertNotIn(("GPO_WRITE_VALUE", [30, 0]), self.link.escritas)

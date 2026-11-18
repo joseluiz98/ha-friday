@@ -5,7 +5,7 @@
   "requires": {"satellite": {"server": 2}},
   "heavy": ["container"],
   "components": {
-    "satellite": ["satellite/program", "satellite/migrations", "satellite/asound.conf", "satellite/sync",
+    "satellite": ["satellite/program", "satellite/migrations", "satellite/audio", "satellite/sync",
                   "agents/satellite", "agents/common", "vault/manifest.json"],
     "server-agent": ["agents/server", "agents/common", "scripts/vault.py", "vault/manifest.json"],
     "server": ["server/status", "server/essentials", "server/cataloger", "server/cost", "server/aec", "server/asr", "server/browser",
