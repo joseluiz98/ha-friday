@@ -111,7 +111,10 @@ class FridayConnection:
                     fut.set_exception(HomeAssistantError("not connected"))
             self._pending.clear()
         for cb in list(self._availability_listeners):
-            cb(value)
+            try:
+                cb(value)
+            except Exception:  # noqa: BLE001 - one bad listener must not fail stop() and with it the entry's unload
+                _LOGGER.exception("Availability listener failed for %s", self._subentry_id)
 
     @property
     def subentry_id(self) -> str:

@@ -389,8 +389,12 @@ def _area_listener(hass, entry, subentry_id, connection):
 def apply_satellite_area(
     hass: HomeAssistant, entry: ConfigEntry, subentry_id: str, device_id: str
 ) -> None:
-    """Set the subentry's area on its device, unless the user already placed it elsewhere."""
-    area_id = entry.subentries[subentry_id].data.get(CONF_AREA_ID)
+    """Set the subentry's area on its device, unless the user already placed it elsewhere. A subentry already removed
+    (factory reset / "Forget") is skipped: raising here, inside the connection's last callback, failed the unload."""
+    sub = entry.subentries.get(subentry_id)
+    if sub is None:
+        return
+    area_id = sub.data.get(CONF_AREA_ID)
     if not area_id:
         return
     reg = dr.async_get(hass)

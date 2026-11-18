@@ -91,6 +91,13 @@ async def test_satellite_subentry_sets_area(hass, monkeypatch):
     apply_satellite_area(hass, entry, sub.subentry_id, "sat-1")
     assert reg.async_get(dev.id).area_id == area.id
 
+    # 18/11: "Forget" removes the subentry; the connection's last availability callback must not raise (it left the
+    # whole entry in FAILED_UNLOAD) nor bring the device back
+    hass.config_entries.async_remove_subentry(entry, sub.subentry_id)
+    await hass.async_block_till_done()
+    apply_satellite_area(hass, entry, sub.subentry_id, "sat-1")
+    assert reg.async_get_device(identifiers={(DOMAIN, "sat-1")}) is None
+
 
 async def test_zeroconf_discovery_offers_satellite(hass, monkeypatch):
     from ipaddress import ip_address

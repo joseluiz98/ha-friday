@@ -238,3 +238,22 @@ async def test_silent_peer_detected_by_heartbeat(hass, monkeypatch):
     assert not c.connected
     await c.stop()
     await agent.stop()
+
+
+async def test_stop_survives_a_failing_availability_listener(hass):
+    """18/11: one listener raising inside stop() left the whole config entry in FAILED_UNLOAD."""
+    agent = FakeAgent()
+    c = await make(hass, agent)
+    avail = []
+
+    def boom(_up):
+        raise KeyError("gone")
+
+    c.add_availability_listener(boom)
+    c.add_availability_listener(avail.append)
+    await c.start()
+    await wait_for(lambda: c.connected)
+    await c.stop()  # must not raise
+    assert avail[-1] is False and not c.connected
+    await agent.stop()
+
