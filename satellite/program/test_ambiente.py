@@ -1,4 +1,5 @@
 """cd /homeassistant/tools/satelite/programa && python3 -m unittest -q test_ambiente"""
+import shutil
 import datetime, glob, os, tempfile, unittest, wave
 
 import ambiente as a
@@ -60,6 +61,7 @@ class TestJanela(unittest.TestCase):
 class TestGravador(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
         self.g = a.GravadorAmbiente(self.dir, bloco_s=60)
 
     def _rodar(self, segundos, ate, inicio=T0):
@@ -94,6 +96,7 @@ class TestGravador(unittest.TestCase):
 class TestGravadorJanela(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
         self.g = a.GravadorAmbiente(self.dir, bloco_s=60)
 
     def _rodar(self, segundos, inicio, ate=None, janela=None):

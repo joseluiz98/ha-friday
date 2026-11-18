@@ -1,5 +1,6 @@
 """Camada da placa de áudio (spec 2026-11-17 xvf3800-support, Task 3).
 cd satellite/program && python3 -m unittest -q test_placa"""
+import shutil
 import os
 import tempfile
 import types
@@ -40,6 +41,7 @@ class FakeLink:
 class TestLerPlaca(unittest.TestCase):
     def _arq(self, texto):
         d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
         p = os.path.join(d, "audio_board")
         if texto is not None:
             with open(p, "w") as f:

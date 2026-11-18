@@ -1,4 +1,5 @@
 """cd /homeassistant/tools/satelite/programa && python3 -m unittest test_hardware -v"""
+import shutil
 import unittest
 from unittest import mock
 import hardware
@@ -265,6 +266,7 @@ class TestCaminhoDoJabra(unittest.TestCase):
     def _raiz(self, nomes):
         import tempfile, os
         raiz = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, raiz, True)
         for i, nome in enumerate(nomes):
             os.makedirs(os.path.join(raiz, f"hidraw{i}", "device"))
             with open(os.path.join(raiz, f"hidraw{i}", "device", "uevent"), "w") as f:
