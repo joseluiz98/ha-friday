@@ -227,6 +227,16 @@
           "description": "O novo valor (número, ligado/desligado ou texto)."
         }
       }
+    },
+    "build_image": {
+      "name": "Gerar imagem de instalação",
+      "description": "Gera no servidor a imagem de instalação do satélite. Sem versão, gera a release stable, como o botão; com uma versão (0.3.8 ou v0.3.8), gera essa release, inclusive alpha. Leva cerca de meia hora e o resultado aparece no sensor da imagem.",
+      "fields": {
+        "version": {
+          "name": "Versão",
+          "description": "Release a gerar, com ou sem o v (por exemplo 0.3.8). Vazio = a release stable."
+        }
+      }
     }
   },
   "selector": {
