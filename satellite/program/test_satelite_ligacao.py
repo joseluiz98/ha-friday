@@ -72,7 +72,7 @@ class Conexao:
 hw = types.ModuleType("hardware")
 hw.AltoFalante, hw.Anel, hw.Mixer, hw.MusicMixer = AltoFalante, Anel, Mixer, MusicMixer
 hw.ControleMudo = ControleMudo
-hw.Botao = hw.Captura = hw.TeclasVolume = object
+hw.Botao = hw.Captura = hw.CapturaDupla = hw.TeclasVolume = object
 sys.modules["hardware"] = hw
 cx = types.ModuleType("conexao")
 cx.ConexaoFriday = Conexao

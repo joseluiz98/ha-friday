@@ -369,3 +369,13 @@ class TestVersaoPendente(unittest.TestCase):
             c.promover_versao(d)
             with open(os.path.join(d, "FRIDAY_VERSION")) as f:
                 self.assertEqual(f.read(), "v0.2.1 def\n")
+
+
+class TestConversaCanal0(unittest.TestCase):
+    """18/11 (dono, opção b): no XVF a conversa vai pelo canal 0; desligável pela config para comparar."""
+    def test_padrao_ligado_e_so_booleano(self):
+        self.assertIs(c.PADROES["xvf_conversa_canal0"], True)
+        self.assertIs(c.validar_mudancas(c.PADROES, {"xvf_conversa_canal0": False})["xvf_conversa_canal0"], False)
+        with self.assertRaises(ValueError):
+            c.validar_mudancas(c.PADROES, {"xvf_conversa_canal0": "sim"})
+

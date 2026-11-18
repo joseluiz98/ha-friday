@@ -41,11 +41,11 @@ class TestVolumeInicial(unittest.TestCase):
         self.assertEqual(vi.aplicar(65, XVF, r, pct_xvf=80)["via"], "xvf3800")
         self.assertEqual(r.chamadas[0][-1], "80%")
 
-    def test_xvf3800_de_fabrica_sai_em_100(self):
-        """18/11 (dono): o PCM do XVF só vai até 0 dB; em 65% (-20 dB) o código do pareamento não se ouvia."""
+    def test_xvf3800_de_fabrica_sai_em_75(self):
+        """18/11 (dono): 75% com o segundo controle da placa em 0 dB (antes eram 100% com ele em -20 dB)."""
         r = Run()
         vi.aplicar(cards_texto=XVF, run=r)
-        self.assertEqual(r.chamadas[0][-1], "100%")
+        self.assertEqual(r.chamadas[0][-1], "75%")
 
     def test_jabra_de_fabrica_segue_em_65(self):
         r = Run()

@@ -40,6 +40,9 @@ PADROES = {
     "mudo": False, "sons_turno": True,
     # spec 2026-11-17 (XVF3800): atraso do sistema (amostras a 16 kHz, fábrica 12) e trava de feixe (switch Beam lock)
     "xvf_sys_delay": 12, "beam_lock": True,
+    # 18/11 (dono, opção b): no XVF a conversa vai ao Gemini pelo canal 0 do chip (com a supressão do eco residual);
+    # palavra, VAD e gravações seguem no canal 1. False = tudo pelo canal 1, como antes
+    "xvf_conversa_canal0": True,
     # spec 2026-11-04: portão de eco, dBFS; None = desligado (o áudio passa inalterado). Ligar só depois de medir.
     "eco_portao_db": None,
     # 04/11 (teste do dono): fecha o microfone quando a pessoa para de falar e só reabre quando ela responde
@@ -79,6 +82,7 @@ _REGRAS = {
     "music_duck_percent": ((int,), 0, 25), "music_restore_s": ((int, float), 0, 10),
     "agente_url": ((str, type(None)), 1, 200),
     "mudo": ((bool,), None, None), "sons_turno": ((bool,), None, None), "xvf_sys_delay": ((int,), 0, 256), "beam_lock": ((bool,), None, None),
+    "xvf_conversa_canal0": ((bool,), None, None),
     "speech_max_s": ((int, float), 5, 120), "alarm_ramp_s": ((int, float), 0, 120),
     "eco_portao_db": ((int, float, type(None)), -90, 0),
     "close_mic_awaiting_reply": ((bool,), None, None), "keep_listening_while_speaking": ((bool,), None, None),
