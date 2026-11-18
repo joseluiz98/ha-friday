@@ -15,7 +15,7 @@ from arbitragem import ESPERA_DISPUTA_S, ClienteDisputa, novo_claim_id
 from conexao import ConexaoFriday
 from detectores import (DetectorBotaoTelefone, DetectorFala, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
                         MedidorEco, PicoDaFala, escolher_acao, portao_eco, rms_dbfs, trecho_do_episodio)
-from hardware import AltoFalante, Anel, Captura, TeclasVolume
+from hardware import AltoFalante, Anel, Captura, CapturaDupla, TeclasVolume
 from maestro import Ajustes, Maestro
 from taxa_captura import TaxaCaptura
 import palavra_modelo
@@ -864,7 +864,10 @@ class Satelite:
 
     # ---- threads de hardware
     def captura(self):
-        cap = Captura()
+        # 18/11 (dono, opção b): no XVF lê os dois canais; a conversa vai pelo canal 0 (`cap.conversa`)
+        dupla = self.placa == "xvf3800" and self.cfg.get("xvf_conversa_canal0", True) is not False
+        cap = CapturaDupla() if dupla else Captura()
+        print(json.dumps({"captura": "xvf canal 1 + conversa no canal 0" if dupla else "um canal"}), flush=True)
         aviso = lambda t: print(t, flush=True)
         chave_modelo = palavra_modelo.chave(self.cfg)
         palavra, com_verificador = palavra_modelo.criar(Model, self.cfg, aviso)
@@ -882,8 +885,20 @@ class Satelite:
         pico, reg_falas = PicoDaFala(), registro_palavra.Registro(registro_palavra.ARQUIVO_FALAS)  # 20/10
         pulou, gravando, vozes, pont_ant = False, None, collections.deque(maxlen=self.cfg.get("janela_voz_palavra", 6)), 0.0
         razao_ep, piso_ep, calculou = None, 0.0, False  # spec 2026-10-20 D3: a razão sai uma vez por episódio
+        primeira = True
         while True:
-            pcm = cap.ler()  # EOFError → sai do processo → systemd religa
+            try:
+                pcm = cap.ler()  # EOFError → sai do processo → systemd religa
+            except EOFError:
+                if not (primeira and isinstance(cap, CapturaDupla)):
+                    raise
+                # 18/11: a leitura dupla nem começou (PCM xvf_dois ausente ou quebrado): volta ao canal único em vez
+                # de reiniciar em laço
+                print(json.dumps({"captura": "xvf_dois falhou; um canal"}), flush=True)
+                cap.fechar()
+                cap = Captura()
+                pcm = cap.ler()
+            primeira = False
             self.taxa_captura.alimentar(len(pcm) // 2, time.monotonic())
             x = np.frombuffer(pcm, dtype=np.int16)
             self.recentes.append(pcm)
@@ -1119,9 +1134,10 @@ class Satelite:
                 # só zera o que está abaixo do limiar nesse intervalo; o medidor sempre vê o áudio cru.
                 ult = self.alto.ultimo_envio
                 ela_falando = ult is not None and time.monotonic() - ult < 0.3
+                saida = getattr(cap, "conversa", None) or pcm  # 18/11: XVF = canal 0; Jabra = o canal único
                 if ela_falando:
-                    self.medidor_eco.alimentar(pcm)
-                self.loop.call_soon_threadsafe(self.conexao.enviar, portao_eco(pcm, ela_falando, self.cfg.get("eco_portao_db")))
+                    self.medidor_eco.alimentar(saida)  # mede o que vai ao Gemini
+                self.loop.call_soon_threadsafe(self.conexao.enviar, portao_eco(saida, ela_falando, self.cfg.get("eco_portao_db")))
 
     def botao(self):
         if self._botao_cls is None:  # XVF3800: o botão da placa corta o microfone em hardware, sem evento aqui

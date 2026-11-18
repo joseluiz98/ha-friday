@@ -218,7 +218,11 @@ class TestPalavrasExtras(unittest.TestCase):
 
     def test_padroes_palavras(self):
         self.assertEqual(c.PADROES["modo_friday"], "ativa")
-        self.assertEqual(c.PADROES["palavras_extras"], [])
+        # 18/11 (dono): satélite novo nasce com as duas palavras ativas; a Sexta-feira sem verificador (só existe
+        # depois do cadastro de voz) e com a paciência de 2 quadros do MK1
+        self.assertEqual(c.PADROES["palavras_extras"], [{"nome": "sexta_feira", "arquivo": "/home/jose/modelos/sexta_feira.onnx",
+                                                         "limiar": 0.5, "modo": "ativa", "paciencia": 2}])
+        self.assertEqual(c.validar_palavras_extras(c.PADROES["palavras_extras"]), c.PADROES["palavras_extras"])
 
     def test_extras_valida_ok(self):
         r = c.validar_palavras_extras([dict(self.EXTRA, limiar=1 - 0.5)])
@@ -365,3 +369,13 @@ class TestVersaoPendente(unittest.TestCase):
             c.promover_versao(d)
             with open(os.path.join(d, "FRIDAY_VERSION")) as f:
                 self.assertEqual(f.read(), "v0.2.1 def\n")
+
+
+class TestConversaCanal0(unittest.TestCase):
+    """18/11 (dono, opção b): no XVF a conversa vai pelo canal 0; desligável pela config para comparar."""
+    def test_padrao_ligado_e_so_booleano(self):
+        self.assertIs(c.PADROES["xvf_conversa_canal0"], True)
+        self.assertIs(c.validar_mudancas(c.PADROES, {"xvf_conversa_canal0": False})["xvf_conversa_canal0"], False)
+        with self.assertRaises(ValueError):
+            c.validar_mudancas(c.PADROES, {"xvf_conversa_canal0": "sim"})
+
