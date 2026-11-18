@@ -168,7 +168,7 @@ class Satelite:
                     palavras=self._modos_palavras(),  # spec 2026-10-24: {nome: modo}, para o futuro sensor do HA
                     palavras_carregadas=sorted(self.palavras_carregadas()),  # saúde do OTA (spec 2026-11-10 §6.9)
                     captura_taxa=None if self.taxa_captura.atual() is None else round(self.taxa_captura.atual(), 3),
-                    captura_ts=self.taxa_captura.ts,  # spec 2026-11-17: vigia da USB (agente)
+                    captura_idade_s=None if self.taxa_captura.idade() is None else round(self.taxa_captura.idade(), 1),
                     timers=[{"nome": t["nome"], "duracao_s": t["duracao_s"], "falta_s": t["falta_s"]}
                             for t in self.timers.consultar(agora)])
 
@@ -362,6 +362,13 @@ class Satelite:
         if nome == "mudo" and valor is not None:  # 31/10: botão de mudo do Jabra chega ao HA na hora
             self.emissor.emitir("config", {"mudancas": {"mudo_botao": bool(valor)}, "origem": "botao"})
             if self.placa == "xvf3800":  # 17/11: o anel do XVF mostra o mudo do botão (no Jabra, a luz é dele)
+                if bool(valor) != bool(self.cfg.get("mudo")):  # revisão I1: o botão do XVF vira o mudo gravado (a
+                    self.cfg["mudo"] = bool(valor)              # partida reaplica o pino; o HA pode desfazer)
+                    try:
+                        cfgmod.gravar(CFG, self.cfg)
+                    except OSError as e:
+                        print(json.dumps({"mudo_gravar_erro": str(e)}), flush=True)
+                    self.emissor.emitir("config", {"mudancas": {"mudo": bool(valor)}, "origem": "botao"})
                 self.anel.set_muted(self._mudo_visivel())
         if nome in ("fala_comecou", "fala_parou"):  # 17/11: DOA v0 — fim do primeiro pedido solta a trava
             self._doa_evento(nome)
@@ -387,7 +394,8 @@ class Satelite:
             self.anel.show_maestro(ring.ESTADO_DO_MAESTRO[arg])
         elif tipo == "desfazer_mudo":  # spec 2026-11-08: a rede voltou e o mudo veio da luz de erro; não ficar mudo
             if self.placa == "xvf3800":  # 17/11: o pino X0D30 do XVF desfaz o mudo do botão por software
-                self.controle_mudo.aplicar(False)
+                if not self.cfg.get("mudo"):  # revisão I2: um mudo do usuário (HA ou botão, gravado) fica
+                    self.controle_mudo.aplicar(False)
                 print(json.dumps({"undo_mute": "xvf3800"}), flush=True)
             else:  # Jabra: escrever a luz religa o microfone mudo (medido em 06/10)
                 self.anel.set_muted(self._mudo_visivel())

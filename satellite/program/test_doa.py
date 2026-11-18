@@ -134,3 +134,10 @@ class TestRegra(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRevisaoDoa(unittest.TestCase):
+    def test_theta_is_normalized_to_0_2pi(self):
+        link = Link()
+        doa.TravaFeixe(link, log=lambda m: None, relogio=lambda: 1.0).travar(rad(-90))
+        self.assertAlmostEqual(link.escritas[0][1][0], rad(270))

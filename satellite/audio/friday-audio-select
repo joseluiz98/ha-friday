@@ -5,12 +5,14 @@ Runs as root in the ExecCondition of the voice program and of the Sendspin playe
 the udev rule restarts them). XVF3800 (2886:001a) wins over the Jabra Speak 410 (0b0e:0410). It points /etc/asound.conf
 at the board's file in /etc/friday-satelite/asound/, writes audio_board and mic, and starts or stops the silence feeder.
 
-  friday-audio-select --check   exit 0 = a board is present and the voice is wanted (the unit starts), 1 = skip
+  friday-audio-select --check        (voice program) exit 0 = a board is present and the voice is wanted, 1 = skip
+  friday-audio-select --check-board  (music player)  exit 0 = a board is present (the voice switch does not matter)
   friday-audio-select           just select and print the board
 
 No board keeps the Jabra file in place (programs that open ALSA still find a valid config) and skips the units, so the
 Pi, the agent and the OTA keep working without any audio hardware. Stdlib only.
 """
+import fcntl
 import os
 import subprocess
 import sys
@@ -86,11 +88,23 @@ def voice_wanted(root: str = "") -> bool:
     return _read(os.path.join(root, "home/jose/.friday-agent/voice-enabled")) != "off"
 
 
-def check(sys_usb: str = "/sys/bus/usb/devices", root: str = "", run=subprocess.run) -> int:
+def check(sys_usb: str = "/sys/bus/usb/devices", root: str = "", run=subprocess.run, voice: bool = True) -> int:
+    """The program's and the player's ExecCondition. Never fails because of the bookkeeping: the board decides."""
     board = detect(sys_usb)
-    apply(board, root, run)
-    up = board != "none" and voice_wanted(root)
-    run(["systemctl", "--no-block", "start" if board != "none" else "stop", "friday-silence.service"])
+    lock_path = os.path.join(root, "run/friday-audio-select.lock")
+    try:
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        with open(lock_path, "w") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)  # program and player check at the same time on boot and hotplug
+            apply(board, root, run)
+    except Exception as e:  # noqa: BLE001 - a failed symlink must never skip the voice
+        print(f"friday-audio-select: {type(e).__name__}: {e}", file=sys.stderr)
+    # the silence feeder only on the XVF3800 (on the Jabra an always-on output lowered the wake score, 06/10)
+    try:
+        run(["systemctl", "--no-block", "start" if board == "xvf3800" else "stop", "friday-silence.service"])
+    except Exception:  # noqa: BLE001
+        pass
+    up = board != "none" and (not voice or voice_wanted(root))
     return 0 if up else 1
 
 
@@ -98,6 +112,8 @@ def main(argv) -> int:
     root = os.environ.get("FRIDAY_OTA_ROOT", "")
     if "--check" in argv:
         return check(root=root)
+    if "--check-board" in argv:
+        return check(root=root, voice=False)
     board = detect()
     apply(board, root)
     print(board)

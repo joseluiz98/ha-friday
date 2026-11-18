@@ -16,7 +16,7 @@ class Clock:
 
 
 def ok(clock, rate=1.0):
-    return {"captura_taxa": rate, "captura_ts": clock.t - 2}
+    return {"captura_taxa": rate, "captura_idade_s": 2.0}
 
 
 def watch(tmp_path, clock):
@@ -40,7 +40,7 @@ def test_two_slow_then_ok_no_reboot(tmp_path):
 
 def test_stale_capture_reboots(tmp_path):
     c = Clock(); w = watch(tmp_path, c)
-    assert w.observe("xvf3800", {"captura_taxa": 1.0, "captura_ts": c.t - 31}, 0) == "reboot"
+    assert w.observe("xvf3800", {"captura_taxa": 1.0, "captura_idade_s": 31.0}, 0) == "reboot"
     assert w.reason == "capture_stopped"
 
 
@@ -65,7 +65,7 @@ def test_program_stopped_on_purpose_never_reboots(tmp_path):
 def test_rate_unknown_yet_is_not_a_stall(tmp_path):
     c = Clock(); w = watch(tmp_path, c)
     for _ in range(5):
-        assert w.observe("xvf3800", {"captura_taxa": None, "captura_ts": None}, 0) is None
+        assert w.observe("xvf3800", {"captura_taxa": None, "captura_idade_s": None}, 0) is None
 
 
 def test_max_three_per_hour_then_exhausted(tmp_path):
@@ -121,8 +121,11 @@ def test_descriptors_only_on_the_xvf():
 
 
 class Core:
-    def __init__(self):
-        self.states, self.events, self.logs = [], [], []
+    def __init__(self, connected=True):
+        self.states, self.events, self.logs, self._connected = [], [], [], connected
+
+    def connected(self):
+        return self._connected
 
     async def push_state(self, changes, origin):
         self.states.append(changes)
@@ -139,7 +142,7 @@ class Program:
         self.statuses = list(statuses)
 
     async def status(self):
-        return self.statuses.pop(0) if self.statuses else {"captura_taxa": 1.0, "captura_ts": None}
+        return self.statuses.pop(0) if self.statuses else {"captura_taxa": 1.0, "captura_idade_s": None}
 
 
 def test_loop_reboots_on_new_kernel_71(tmp_path):
@@ -171,3 +174,38 @@ def test_loop_does_nothing_on_the_jabra(tmp_path):
     core = Core()
     asyncio.run(uw.run("jabra", Program([]), core, lambda: 0, uw.UsbWatch(str(tmp_path / "u.json")), None))
     assert core.states == [] and core.events == []
+
+
+def test_wall_clock_jump_is_not_a_stall(tmp_path):
+    # review I5: only the program's monotonic age counts; no epoch is compared any more
+    c = Clock(); w = watch(tmp_path, c)
+    c.t += 3600  # NTP stepped the wall clock forward
+    assert w.observe("xvf3800", {"captura_taxa": 1.0, "captura_idade_s": 2.0}, 0) is None
+
+
+def test_count_goes_in_the_hello_state_and_event_waits_for_ha(tmp_path):
+    # review I4: the count must be in the state HA reads on connect; the after-boot event waits for HA
+    import asyncio
+    c = Clock()
+    w = uw.UsbWatch(str(tmp_path / "usb.json"), now=c)
+    w.observe("xvf3800", ok(c), 1); w.record_reboot()
+    c.t += 30
+    w2 = uw.UsbWatch(str(tmp_path / "usb.json"), now=c)
+    memo = {}
+    core = Core(connected=False)
+    sleeps = {"n": 0}
+
+    async def sleep(_s):
+        sleeps["n"] += 1
+        if sleeps["n"] == 2:
+            core._connected = True
+        if sleeps["n"] > 3:
+            raise asyncio.CancelledError
+
+    try:
+        asyncio.run(uw.run(lambda: "xvf3800", Program([ok(c)] * 5), core, lambda: 0, w2, None, sleep=sleep,
+                           state=memo))
+    except asyncio.CancelledError:
+        pass
+    assert memo["usb_recoveries"] == 1
+    assert [e[1] for e in core.events] == ["rebooted"]

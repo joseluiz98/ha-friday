@@ -210,17 +210,17 @@ class TestComandos(Base):
         self.assertFalse(self.s.comando_porta({"acao": "update_pending", "ligado": "x"})["ok"])
 
     async def test_status_publishes_the_capture_rate(self):
-        """Task 5 (xvf3800-support): `captura_taxa` (3 casas) e `captura_ts` no /status; None até a 1ª janela."""
+        """Task 5 (xvf3800-support): `captura_taxa` (3 casas) e `captura_idade_s` (monotônico, revisão I5) no /status; None até a 1ª janela."""
         e = self.s.estado_publico()
         self.assertIsNone(e["captura_taxa"])
-        self.assertIsNone(e["captura_ts"])
+        self.assertIsNone(e["captura_idade_s"])
         t0 = 100.0
         for i in range(70):  # 11,2 s a tempo real, pedaços de 2560 amostras
             self.s.taxa_captura.alimentar(2560, t0 + i * 0.16)
         e = self.s.estado_publico()
         self.assertEqual(e["captura_taxa"], round(self.s.taxa_captura.atual(), 3))
         self.assertAlmostEqual(e["captura_taxa"], 1.0, delta=0.01)
-        self.assertIsInstance(e["captura_ts"], float)
+        self.assertIsInstance(e["captura_idade_s"], float)
 
     async def test_estado_publico_lista_as_palavras_carregadas(self):
         # a saúde do OTA (friday-ota-apply) exige palavra carregada: lista vazia até a captura criar o modelo
@@ -1042,3 +1042,21 @@ class TestXvf3800Trava(TestXvf3800):
     async def test_jabra_has_no_beam_lock(self):
         self.assertIsNone(self.s.doa_regra)
         self.s._travar_na_palavra()  # não faz nada no Jabra
+
+
+class TestXvf3800MudoRevisao(TestXvf3800):
+    async def test_button_mute_is_saved_so_a_restart_keeps_it(self):
+        # review I1: apply_startup writes the pin from cfg["mudo"]; a button mute must be recorded there
+        s = self._novo_satelite_xvf()
+        s.maestro.mudo = False
+        s.evento("mudo", True)
+        self.assertTrue(s.cfg["mudo"])
+        self.assertTrue(fs.cfgmod.carregar(fs.CFG)["mudo"])
+
+    async def test_undo_mute_never_lifts_a_mute_the_user_made(self):
+        # review I2: a mute from HA or the button (cfg) stays when the network comes back
+        s = self._novo_satelite_xvf()
+        s.cfg["mudo"] = True
+        self.link.escritas.clear()
+        s._agir("desfazer_mudo", None)
+        self.assertNotIn(("GPO_WRITE_VALUE", [30, 0]), self.link.escritas)

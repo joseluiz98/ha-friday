@@ -58,6 +58,7 @@ class TravaFeixe:
         self.travado, self._desde = False, None
 
     def travar(self, theta: float) -> bool:
+        theta = theta % (2 * math.pi)  # o firmware espera [0, 2π); a média circular devolve (−π, π]
         ok = (self._link.write("AEC_FIXEDBEAMSAZIMUTH_VALUES", [theta, theta])
               and self._link.write("AEC_FIXEDBEAMSONOFF", [1])
               and self._link.write("AUDIO_MGR_OP_R", [7, 0]))

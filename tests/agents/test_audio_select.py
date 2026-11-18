@@ -111,13 +111,38 @@ def test_silence_follows_the_board(tmp_path):
     run2 = Run()
     m.check(usb(tmp_path / "n"), root(tmp_path / "b", "on"), run2)
     assert ["systemctl", "--no-block", "stop", "friday-silence.service"] in run2.calls
+    run3 = Run()  # review C2: never on the Jabra (always-on output dropped the wake score there, 06/10)
+    m.check(usb(tmp_path / "j", ("0b0e", "0410")), root(tmp_path / "c", "on"), run3)
+    assert ["systemctl", "--no-block", "stop", "friday-silence.service"] in run3.calls
+
+
+def test_player_check_ignores_the_voice_intent(tmp_path):
+    # the player played music with "Voice Program" off before 17/11; it keeps doing so (MK1 unchanged)
+    m = load()
+    r = root(tmp_path, "off")
+    assert m.check(usb(tmp_path / "x", ("0b0e", "0410")), r, Run(), voice=False) == 0
+    assert m.check(usb(tmp_path / "n"), r, Run(), voice=False) == 1
+
+
+def test_a_failing_apply_still_starts_the_unit_with_a_board(tmp_path, monkeypatch):
+    # review I6: two checks at once (program and player) or any error in apply must not skip the voice
+    m = load()
+    def boom(*a, **k):
+        raise OSError("race")
+    monkeypatch.setattr(m, "apply", boom)
+    assert m.check(usb(tmp_path / "x", ("2886", "001a")), root(tmp_path, "on"), Run()) == 0
+
+
+def test_check_takes_a_lock(tmp_path):
+    src = SCRIPT.read_text()
+    assert "fcntl.flock" in src and "--check-board" in src
 
 
 def test_units_use_the_check():
     sat = (ROOT / "satellite/program/friday-satelite.service").read_text()
     assert "ExecCondition=+/usr/local/sbin/friday-audio-select --check" in sat
     drop = (ROOT / "satellite/audio/audio-board.conf").read_text()
-    assert "ExecCondition=+/usr/local/sbin/friday-audio-select --check" in drop
+    assert "ExecCondition=+/usr/local/sbin/friday-audio-select --check-board" in drop
     sil = (ROOT / "satellite/audio/friday-silence.service").read_text()
     assert "/dev/zero" in sil and "-D voice" in sil and "User=jose" in sil
     rules = (ROOT / "satellite/audio/90-friday-audio.rules").read_text()

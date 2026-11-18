@@ -455,8 +455,9 @@ async def main() -> None:
         tasks = [poll(), midnight(), hardware_loop(), room_loop(), timers_watch(),
                  server_watch.ServerWatch(CONFIG, program).run(), keeper.run(), updater.run(),
                  # 17/11: USB watchdog of the XVF3800 (does nothing on the Jabra)
-                 usb_watch.run(board, program, core, k71.sample, usb_watch.UsbWatch(),
-                               lambda: power_mod.run_command(power_mod.REBOOT))]
+                 usb_watch.run(lambda: cap.read_board(os.path.join(ETC_DIR, "audio_board")), program, core,
+                               k71.sample, usb_watch.UsbWatch(), lambda: power_mod.run_command(power_mod.REBOOT),
+                               state=memo["state"])]
         if pairable:
             tasks.append(speak_code())
         await asyncio.gather(*tasks)

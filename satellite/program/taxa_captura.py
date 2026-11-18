@@ -7,12 +7,12 @@ import time
 
 
 class TaxaCaptura:
-    def __init__(self, janela_s=10.0, taxa_hz=16000, relogio=time.time):
+    def __init__(self, janela_s=10.0, taxa_hz=16000, relogio=time.monotonic):
         self.janela_s, self.taxa_hz, self._relogio = janela_s, taxa_hz, relogio
         self._inicio = None
         self._amostras = 0
         self._taxa = None
-        self.ts = None  # epoch (relogio) em que a última janela fechou
+        self.ts = None  # relógio monotônico em que a última janela fechou (17/11: nunca o de parede, o NTP pula)
 
     def alimentar(self, n_amostras: int, agora: float):
         """`agora` é um relógio monotônico qualquer (segundos); só a diferença entre chamadas importa."""
@@ -25,6 +25,10 @@ class TaxaCaptura:
             self._taxa = self._amostras / (decorrido * self.taxa_hz)
             self.ts = self._relogio()
             self._inicio, self._amostras = agora, 0
+
+    def idade(self):
+        """Segundos desde que a última janela fechou (monotônico), ou None antes da primeira."""
+        return None if self.ts is None else self._relogio() - self.ts
 
     def atual(self):
         """Taxa da última janela fechada, ou None antes da primeira."""

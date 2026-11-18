@@ -86,3 +86,30 @@ class TestRingCalibration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRevisao(unittest.TestCase):
+    def test_no_process_wide_stdout_swap(self):
+        # review I3: redirect_stdout at 8 Hz from the DOA thread swallowed program log lines
+        self.assertNotIn("redirect_stdout", open(xvf_link.__file__).read())
+
+    def test_busy_lock_times_out(self):
+        log = []
+        link = xvf_link.XvfLink(lambda: Dev(), log=log.append, lock_timeout_s=0.05)
+        link._lock.acquire()
+        try:
+            self.assertFalse(link.write("LED_EFFECT", [1]))
+        finally:
+            link._lock.release()
+        self.assertTrue(any("ocupado" in m for m in log))
+
+    def test_repeated_failure_logs_once_a_minute(self):
+        dev, log, t = Dev(), [], {"t": 0.0}
+        dev.falhar = True
+        link = xvf_link.XvfLink(lambda: dev, log=log.append, relogio=lambda: t["t"])
+        for _ in range(8):
+            link.write("X", [1])
+        self.assertEqual(len(log), 1)
+        t["t"] = 61.0
+        link.write("X", [1])
+        self.assertEqual(len(log), 2)

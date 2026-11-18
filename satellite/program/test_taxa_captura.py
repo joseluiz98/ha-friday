@@ -55,3 +55,14 @@ class TestTaxaCaptura(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIdade(unittest.TestCase):
+    def test_age_is_monotonic_not_wall_clock(self):
+        # review I5 (17/11): the NTP step after boot moved the wall clock and looked like a stopped capture
+        m = {"t": 100.0}
+        t = TaxaCaptura(relogio=lambda: m["t"])
+        self.assertIsNone(t.idade())
+        t.alimentar(160, 0.0); t.alimentar(160000, 10.0)
+        m["t"] = 103.0
+        self.assertAlmostEqual(t.idade(), 3.0)

@@ -26,3 +26,27 @@ def test_removes_the_jabra_only_dropins_and_keeps_others(tmp_path):
 def test_idempotent(tmp_path):
     assert run(tmp_path).returncode == 0
     assert run(tmp_path).returncode == 0
+
+
+SYSTEM_FILES = {"friday-audio-select": "usr/local/sbin/friday-audio-select",
+                "jabra.conf": "etc/friday-satelite/asound/jabra.conf",
+                "xvf3800.conf": "etc/friday-satelite/asound/xvf3800.conf",
+                "90-friday-audio.rules": "etc/udev/rules.d/90-friday-audio.rules",
+                "audio-board.conf": "etc/systemd/system/sendspin-cli.service.d/audio-board.conf",
+                "friday-silence.service": "etc/systemd/system/friday-silence.service"}
+
+
+def test_installs_the_audio_files_itself_for_an_older_ota_helper(tmp_path):
+    # Review C1 (17/11): an update from v0.3.8 runs the OLD friday-ota-apply, whose SYSTEM map does not know these
+    # files; without them the new friday-satelite.service ExecCondition points at a missing script and voice dies.
+    rel = tmp_path / "release"
+    (rel / "system").mkdir(parents=True)
+    for n in SYSTEM_FILES:
+        (rel / "system" / n).write_text(n)
+    root = tmp_path / "root"
+    r = subprocess.run(["bash", str(MIG)], env={"FRIDAY_OTA_ROOT": str(root), "FRIDAY_RELEASE_DIR": str(rel),
+                                                "PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    for n, dest in SYSTEM_FILES.items():
+        assert (root / dest).read_text() == n, dest
+    assert oct((root / SYSTEM_FILES["friday-audio-select"]).stat().st_mode & 0o777) == "0o755"

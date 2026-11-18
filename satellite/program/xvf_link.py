@@ -5,11 +5,10 @@ threads), prazo curto e nunca levanta — uma falha de USB vira uma linha de log
 reabre a placa. O firmware não guarda nada (# nunca SAVE_CONFIGURATION: desde o 2.0.9 ele gravaria o feixe travado), por
 isso `apply_startup` reaplica tudo a cada partida do programa, começando por soltar a trava de feixe.
 """
-import contextlib
-import io
 import os
 import sys
 import threading
+import time
 
 VID_SEEED, PID_XVF3800 = 0x2886, 0x001A
 SYS_DELAY_PADRAO = 12  # amostras a 16 kHz, valor de fábrica (calibrar no lugar pelo HA)
@@ -24,6 +23,7 @@ def abrir_vendor(timeout_ms: int = 1000):
         import xvf_host  # vendor: pyusb + libusb_package
     finally:
         sys.path.pop(0)
+    xvf_host.print = lambda *a, **k: None  # o vendor imprime cada leitura; calado só ele (nunca o stdout do processo)
     dev = xvf_host.find(VID_SEEED, PID_XVF3800)
     if dev is None:
         raise RuntimeError("XVF3800 não encontrado")
@@ -31,23 +31,38 @@ def abrir_vendor(timeout_ms: int = 1000):
     return dev
 
 
+LOG_INTERVALO_S = 60.0  # a mesma falha repetida (placa fora, 8 leituras/s do DOA) vira uma linha por minuto
+
+
 class XvfLink:
-    def __init__(self, dev_factory=abrir_vendor, log=None):
+    def __init__(self, dev_factory=abrir_vendor, log=None, lock_timeout_s: float = 2.0, relogio=time.monotonic):
         self._fabrica, self._log = dev_factory, log or (lambda m: print(m, file=sys.stderr, flush=True))
         self._lock = threading.Lock()
+        self._lock_timeout, self._relogio = lock_timeout_s, relogio
         self._dev = None
+        self._ultimo_log = {}
+
+    def _avisar(self, chave, msg):
+        agora = self._relogio()
+        if agora - self._ultimo_log.get(chave, -1e9) >= LOG_INTERVALO_S:
+            self._ultimo_log[chave] = agora
+            self._log(msg)
 
     def _chamar(self, metodo, nome, *args):
-        with self._lock:
-            try:
-                if self._dev is None:
-                    self._dev = self._fabrica()
-                with contextlib.redirect_stdout(io.StringIO()):  # o vendor imprime cada leitura
-                    return True, getattr(self._dev, metodo)(nome, *args)
-            except Exception as e:  # noqa: BLE001 - USB nunca derruba o programa
-                self._dev = None  # reabre na próxima
-                self._log(f"xvf3800: {metodo} {nome} falhou ({type(e).__name__}: {e})")
-                return False, None
+        if not self._lock.acquire(timeout=self._lock_timeout):  # USB degradado nunca prende quem chama
+            self._avisar(("ocupado", nome), f"xvf3800: {metodo} {nome}: canal ocupado, pulado")
+            return False, None
+        try:
+            if self._dev is None:
+                self._dev = self._fabrica()
+            return True, getattr(self._dev, metodo)(nome, *args)
+        except Exception as e:  # noqa: BLE001 - USB nunca derruba o programa
+            self._dev = None  # reabre na próxima
+            self._avisar(("falha", metodo, nome, type(e).__name__),
+                         f"xvf3800: {metodo} {nome} falhou ({type(e).__name__}: {e})")
+            return False, None
+        finally:
+            self._lock.release()
 
     def write(self, nome: str, valores) -> bool:
         return self._chamar("write", nome, list(valores))[0]
