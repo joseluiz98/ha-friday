@@ -47,7 +47,7 @@ def all_descriptors(kind: str, monkeypatch=None) -> list[dict]:
         patch(hw, "nmcli_available", lambda: True)
     eq = eqmod.Equalizer()
     eq.available = True
-    found = (cap.controls_from_config(CFG, WW) + cap.room_descriptors(cap.ROOM_DESCRIPTORS) + eq.descriptors()
+    found = (cap.controls_from_config(CFG, WW, board="xvf3800") + cap.room_descriptors(cap.ROOM_DESCRIPTORS) + eq.descriptors()
              + ota.OtaClient.descriptors() + hw.descriptors(network=True))
     by_key: dict[str, dict] = {}
     for d in found:

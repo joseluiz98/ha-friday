@@ -27,8 +27,8 @@ ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "falando": "speak", "
 SPEED_FAST = 3
 SPEED_SLOW = 1
 BRIGHTNESS = 255
-LED_OFFSET = 0     # calibrar na chegada: índice do LED 0 em relação a 0° do DOA_VALUE
-LED_SENTIDO = 1    # calibrar na chegada: +1 / -1
+LED_OFFSET = 5     # 17/11 (bancada): índice do LED 0 em relação a 0° do DOA (LED 0 às 7h, USB às 12h)
+LED_SENTIDO = 1    # 17/11 (bancada): sentido horário
 ERROR_HOLD_S = 10.0  # erro no XVF3800 é momentâneo: depois disso volta ao estado anterior
 COR_BASE_CONVERSA = 0x000010
 COR_PONTEIRO = 0x0000FF
@@ -36,8 +36,8 @@ COR_PONTEIRO_VIZINHO = 0x000060
 COR_CONTAGEM = 0xFF8000  # laranja: não confunde com o vermelho do mudo nem do erro
 
 COR_MUDO = 0xFF0000
-MUTE_LEDS = (0,)          # calibrar na chegada: LEDs que ficam vermelhos com o mudo (XVF3800)
-DND_LOW = 0.15            # não perturbe discreto: brilho baixo (cor escalada) a maior parte do tempo
+MUTE_LEDS = (10, 11, 0)   # 17/11 (bancada, opção B do dono): LEDs vermelhos com o mudo (XVF3800)
+DND_LOW = 0.25            # 17/11 (dono: roxo a 25%) não perturbe discreto: brilho baixo (cor escalada) a maior parte do tempo
 DND_PULSE_EVERY_S = 30.0  # ... e um "relapso" de brilho cheio, respirando, de tempos em tempos
 DND_PULSE_S = 2.0
 
@@ -85,6 +85,7 @@ class _Composto:
     def _init_composto(self):
         self._estado = RingState()
         self._direcao = None
+        self._dir_fixa = None     # 17/11 (DOA v0): direção travada, desenhada na escuta enquanto a trava durar
         self._cru = None          # prévia / `muted` legado: desenhado como está
         self._iniciado = False    # nada desenha antes do primeiro show
 
@@ -138,6 +139,13 @@ class _Composto:
             if self._iniciado and self._cru is None and self._estado.resolve() != antes:
                 self._redesenhar()
 
+    def fixar_direcao(self, graus) -> None:
+        """DOA v0 (17/11): ponteiro na direção travada durante a conversa; None apaga (em repouso o anel segue apagado)."""
+        with self._trava:
+            self._dir_fixa = graus
+            if self._iniciado:
+                self._redesenhar()
+
     def set_muted(self, on: bool) -> None:
         self._mudar(lambda: self._estado.set_muted(on))
 
@@ -151,7 +159,8 @@ class _Composto:
                        self._direcao if self._cru == "listen" else None)
             return
         base, mudo = self._estado.resolve()
-        self._draw(base, mudo, self._direcao if base == "listen" else None)
+        direcao = self._direcao if self._direcao is not None else self._dir_fixa
+        self._draw(base, mudo, direcao if base == "listen" else None)
 
     def _comecar_erro(self):  # só no driver com erro momentâneo
         pass

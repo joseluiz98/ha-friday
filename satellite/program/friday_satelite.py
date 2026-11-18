@@ -15,9 +15,13 @@ from arbitragem import ESPERA_DISPUTA_S, ClienteDisputa, novo_claim_id
 from conexao import ConexaoFriday
 from detectores import (DetectorBotaoTelefone, DetectorFala, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
                         MedidorEco, PicoDaFala, escolher_acao, portao_eco, rms_dbfs, trecho_do_episodio)
-from hardware import AltoFalante, Anel, Botao, Captura, ControleMudo, Mixer, MusicMixer, TeclasVolume
+from hardware import AltoFalante, Anel, Captura, TeclasVolume
 from maestro import Ajustes, Maestro
+from taxa_captura import TaxaCaptura
 import palavra_modelo
+import placa
+import xvf_link
+import doa
 from ativacao_detalhes import payload as payload_ativacao
 import net_recovery
 import porta_local
@@ -62,12 +66,29 @@ class Satelite:
         self.det_botao = DetectorBotaoTelefone()
         self.alto = AltoFalante()
         # spec 2026-11-05 §11: o anel é uma camada de estados com dois drivers (Jabra, XVF3800); nunca derruba o programa
-        self.mixer = Mixer()
-        self.anel = ring.make_ring(lambda: Anel(detector=self.det_botao), posicao_fn=self.mixer.escrever)
+        # spec 2026-11-17: a placa de áudio (Jabra ou XVF3800) vem do audio-select; Jabra = o código de sempre.
+        # No XVF um canal USB único (xvf_link) atende anel, mudo, ajustes e DOA; os ajustes voltam a cada partida.
+        self.placa = placa.ler_placa()
+        self.xvf = xvf_link.XvfLink() if self.placa == "xvf3800" else None
+        if self.xvf is not None:
+            xvf_link.apply_startup(self.xvf, self.cfg, mudo=bool(self.cfg.get("mudo")))
+        # 17/11 (DOA v0): direção e trava de feixe só no XVF; a regra lê o switch Beam lock a cada palavra
+        self.doa_dir = doa.Direcao() if self.xvf is not None else None
+        self.doa_trava = doa.TravaFeixe(self.xvf, log=lambda m: print(json.dumps({"doa": m}), flush=True)) \
+            if self.xvf is not None else None
+        self.doa_regra = doa.Regra(self.doa_dir, self.doa_trava, ligada=lambda: bool(self.cfg.get("beam_lock", True))) \
+            if self.xvf is not None else None
+        camada = placa.montar(self.placa, link=self.xvf)
+        self.mixer = camada["mixer"]
+        self._botao_cls = camada["botao"]  # None no XVF: sem botão nem teclas (volume só por voz e pelo HA)
+        self.anel = ring.make_ring(lambda: Anel(detector=self.det_botao), posicao_fn=self.mixer.escrever,
+                                   xvf_factory=(lambda: self.xvf) if self.xvf is not None else None,
+                                   usb_find=(lambda **kw: True) if self.xvf is not None else None)
         self._rede_checada = None  # spec 2026-11-08: instante (monotonic) da última leitura do estado do netwatch
         self.contagem = ring.Contagem()
         self.conexao = None
         self._modelo_palavra = None  # spec 2026-10-24: o Model atual (a captura o (re)cria); a porta lê os nomes
+        self.taxa_captura = TaxaCaptura()  # spec 2026-11-17: o agente vigia a USB do XVF3800 por esta taxa (/status)
         self.microfone_aberto = False
         self.conversa_sussurrada = False
         self.fala_em_andamento = False
@@ -84,7 +105,7 @@ class Satelite:
         self.contexto = collections.deque(maxlen=375)  # 20/10: ~30 s antes de cada ativação (tentativas perdidas)
         self.ambiente = ambiente.GravadorAmbiente()  # 02/11: gravação contínua para o retreino (gravar_ambiente_ate)
         # spec 2026-10-12: volume (o gravado, ou o que o aparelho tem) e timers
-        self.controle_mudo = ControleMudo()
+        self.controle_mudo = camada["controle_mudo"]
         fabrica = self.cfg["volume"] is None  # 06/11: Mark novo começa em 65%, não no que o aparelho guardou
         if fabrica:
             print(json.dumps({"volume_inicial": volume_inicial.aplicar()}), flush=True)
@@ -97,7 +118,7 @@ class Satelite:
         self.timers = tm.Timers(self._gravar_timers)
         # spec 2026-10-21 §6.2: ducking da música. O `softvol` Music só nasce no primeiro uso do PCM (prime);
         # start() põe 100%: depois de um crash a música não fica presa em 15%.
-        self.music_mixer = MusicMixer()
+        self.music_mixer = camada["music_mixer"]
         try:
             self.music_mixer.prime()
         except Exception as e:
@@ -146,6 +167,8 @@ class Satelite:
         return dict(self.maestro.publico(), volume=self.volume.atual, update_pendente=bool(self.anel.pendente),
                     palavras=self._modos_palavras(),  # spec 2026-10-24: {nome: modo}, para o futuro sensor do HA
                     palavras_carregadas=sorted(self.palavras_carregadas()),  # saúde do OTA (spec 2026-11-10 §6.9)
+                    captura_taxa=None if self.taxa_captura.atual() is None else round(self.taxa_captura.atual(), 3),
+                    captura_idade_s=None if self.taxa_captura.idade() is None else round(self.taxa_captura.idade(), 1),
                     timers=[{"nome": t["nome"], "duracao_s": t["duracao_s"], "falta_s": t["falta_s"]}
                             for t in self.timers.consultar(agora)])
 
@@ -303,6 +326,26 @@ class Satelite:
         except Exception:
             return -120.0
 
+    # ---- DOA v0 (spec 2026-11-17): regra do ESPHome, só no XVF
+    def _travar_na_palavra(self):
+        if self.doa_regra is None:
+            return
+        graus = self.doa_regra.palavra(time.monotonic())
+        if graus is not None:
+            self.anel.fixar_direcao(graus)
+
+    def _doa_evento(self, nome):
+        if self.doa_regra is None:
+            return
+        if nome == "fala_comecou":
+            self.doa_regra.fala_comecou()
+        elif nome == "fala_parou":
+            self.doa_regra.fala_parou()
+        elif nome == "parada":
+            self.doa_regra.conversa_fechou()
+        if not self.doa_trava.travado:
+            self.anel.fixar_direcao(None)
+
     def _despachar(self, nome, valor=None):
         if nome != "tique":  # 06/10: rastro no journal para entender fechamentos (sem áudio)
             print(json.dumps({"evento": nome, "valor": valor, "estado": self.maestro.estado}), flush=True)
@@ -318,6 +361,19 @@ class Satelite:
             self.conexao.pessoa_falou()
         if nome == "mudo" and valor is not None:  # 31/10: botão de mudo do Jabra chega ao HA na hora
             self.emissor.emitir("config", {"mudancas": {"mudo_botao": bool(valor)}, "origem": "botao"})
+            if self.placa == "xvf3800":  # 17/11: o anel do XVF mostra o mudo do botão (no Jabra, a luz é dele)
+                if bool(valor) != bool(self.cfg.get("mudo")):  # revisão I1: o botão do XVF vira o mudo gravado (a
+                    self.cfg["mudo"] = bool(valor)              # partida reaplica o pino; o HA pode desfazer)
+                    try:
+                        cfgmod.gravar(CFG, self.cfg)
+                    except OSError as e:
+                        print(json.dumps({"mudo_gravar_erro": str(e)}), flush=True)
+                    self.emissor.emitir("config", {"mudancas": {"mudo": bool(valor)}, "origem": "botao"})
+                self.anel.set_muted(self._mudo_visivel())
+        if nome in ("fala_comecou", "fala_parou"):  # 17/11: DOA v0 — fim do primeiro pedido solta a trava
+            self._doa_evento(nome)
+        if self.doa_trava is not None and self.doa_trava.travado and self.maestro.estado == "parada":
+            self._doa_evento("parada")  # a conversa fechou com a trava ainda ligada
 
     @staticmethod
     async def _fechar_depois(conexao, atraso_s):
@@ -337,14 +393,18 @@ class Satelite:
         elif tipo == "luz":
             self.anel.show_maestro(ring.ESTADO_DO_MAESTRO[arg])
         elif tipo == "desfazer_mudo":  # spec 2026-11-08: a rede voltou e o mudo veio da luz de erro; não ficar mudo
-            if isinstance(self.anel, ring.Xvf3800Ring):  # sem caminho de software conhecido no código: só registra
-                print(json.dumps({"undo_mute": "unsupported_xvf3800"}), flush=True)
+            if self.placa == "xvf3800":  # 17/11: o pino X0D30 do XVF desfaz o mudo do botão por software
+                if not self.cfg.get("mudo"):  # revisão I2: um mudo do usuário (HA ou botão, gravado) fica
+                    self.controle_mudo.aplicar(False)
+                print(json.dumps({"undo_mute": "xvf3800"}), flush=True)
             else:  # Jabra: escrever a luz religa o microfone mudo (medido em 06/10)
                 self.anel.set_muted(self._mudo_visivel())
                 self.anel.show_maestro(ring.ESTADO_DO_MAESTRO[self.maestro._luz_do_estado()])
                 print(json.dumps({"undo_mute": "jabra"}), flush=True)
         elif tipo == "conectar":  # arg: None (palavra/botão) ou {"timer": ...}/{"entrega": id} (spec 2026-10-12)
             com_voz = arg is None or arg.get("whisper") or arg.get("wake_word")
+            if arg is not None and arg.get("wake_word"):  # 17/11: DOA v0 — trava na direção de quem disse a palavra
+                self._travar_na_palavra()
             if self._claim_id and arg is not None:  # spec 2026-11-16: o bot cruza a conversa com o aviso da disputa
                 arg = dict(arg, claim_id=self._claim_id)
             self.conexao = ConexaoFriday(self.cfg["endereco_friday"], cfgmod.dados_conexao(self.sid, self.cfg, arg),
@@ -692,6 +752,10 @@ class Satelite:
             self.mixer.escrever(self.volume.atual)
 
     def tique(self):
+        if self.doa_trava is not None and self.doa_trava.travado:  # 17/11: teto de 90 s da trava de feixe
+            self.doa_trava.tique()
+            if not self.doa_trava.travado:
+                self.anel.fixar_direcao(None)
         if not self._claim_pendente:  # no máximo 0,3 s: o tique não abre a fila de entregas por cima do aviso
             self.evento("tique")
         agora = time.monotonic()
@@ -745,6 +809,8 @@ class Satelite:
         self.cfg = novo
         if mudou_mudo:
             self._aplicar_mudo()
+        if self.xvf is not None and "xvf_sys_delay" in mudancas:  # 17/11: atraso calibrado pelo HA vale na hora
+            self.xvf.write("AUDIO_MGR_SYS_DELAY", [int(novo["xvf_sys_delay"])])
         self.emissor.url = novo.get("agente_url")
         if mudancas:  # PUT /config pela porta local
             self.emissor.emitir("config", {"mudancas": mudancas, "origem": "porta"})
@@ -758,8 +824,9 @@ class Satelite:
 
     def _mudo_visivel(self) -> bool:
         """O indicador de mudo do anel (v0.3.7) segue só o mudo por software (config). O do botão é do próprio Jabra
-        (vermelho dele, luzes retidas pelo maestro); e os zeros que o próprio bit causa na captura não podem prendê-lo."""
-        return bool(self.cfg.get("mudo"))
+        (vermelho dele, luzes retidas pelo maestro); e os zeros que o próprio bit causa na captura não podem prendê-lo.
+        No XVF3800 (17/11) o botão não tem luz própria: o mudo do botão (zeros exatos na captura) também acende o anel."""
+        return bool(self.cfg.get("mudo")) or (self.placa == "xvf3800" and self.maestro.mudo is True)
 
     def arranque_do_anel(self):
         """Arranque: o mudo gravado entra no anel ANTES da primeira luz (16/11: o não perturbe apagava o vermelho)."""
@@ -815,6 +882,7 @@ class Satelite:
         razao_ep, piso_ep, calculou = None, 0.0, False  # spec 2026-10-20 D3: a razão sai uma vez por episódio
         while True:
             pcm = cap.ler()  # EOFError → sai do processo → systemd religa
+            self.taxa_captura.alimentar(len(pcm) // 2, time.monotonic())
             x = np.frombuffer(pcm, dtype=np.int16)
             self.recentes.append(pcm)
             self.contexto.append(pcm)
@@ -1054,13 +1122,17 @@ class Satelite:
                 self.loop.call_soon_threadsafe(self.conexao.enviar, portao_eco(pcm, ela_falando, self.cfg.get("eco_portao_db")))
 
     def botao(self):
-        b = Botao(self.det_botao)
+        if self._botao_cls is None:  # XVF3800: o botão da placa corta o microfone em hardware, sem evento aqui
+            return
+        b = self._botao_cls(self.det_botao)
         while True:
             cor = b.esperar_toque()
             self.loop.call_soon_threadsafe(self.evento, "botao", cor)
 
     def teclas(self):
         """Botões +/− do Jabra. Falha aqui NÃO derruba o programa: sem ela só se perde a sincronia do volume."""
+        if self._botao_cls is None:  # XVF3800 não tem teclas de volume
+            return
         try:
             t = TeclasVolume()
             while True:
@@ -1097,6 +1169,8 @@ async def principal():
         threading.Thread(target=corpo, daemon=True).start()
 
     em_thread(s.captura); em_thread(s.botao)
+    if s.doa_dir is not None:  # 17/11: DOA v0 — leitura contínua da direção (só no XVF)
+        threading.Thread(target=doa.ler_continuo, args=(s.xvf, s.doa_dir, threading.Event()), daemon=True).start()
     presenca = asyncio.ensure_future(s.disputa.laco_presenca())  # spec 2026-11-16: quantos outros satélites estão online
     threading.Thread(target=s.teclas, daemon=True).start()
     threading.Thread(target=s.duck_laco, daemon=True).start()

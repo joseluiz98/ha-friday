@@ -69,7 +69,7 @@ devolve 200.
 
 ## Conteúdo (resumo)
 usuário `jose` (sem senha, só a chave do HA, sudo sem senha, grupos `audio`/`plugdev`); Wi-Fi sem economia
-(`wifi.powersave = 2`); journal persistente (500 MB); `asound.conf` do mestre (Jabra, `dmix`); venv `~/oww` com as versões
+(`wifi.powersave = 2`); journal persistente (500 MB); `asound.conf` como link para o arquivo da placa em `/etc/friday-satelite/asound/` (Jabra por padrão, `dmix`); venv `~/oww` com as versões
 do satélite de produção (`requirements.lock`, mais `spake2`, `pyusb`, `libusb-package`); modelos `friday`/`sexta_feira`
 (sem verificador); programa em `~/satelite`, agente em `/opt/friday-satellite-agent` (+ helpers e sudoers); unidades
 `friday-firstboot` (antes das outras duas), `friday-satelite`, `friday-satellite-agent`, `friday-sync-recordings.{service,timer}`;

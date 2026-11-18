@@ -19,7 +19,7 @@ from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
 from . import local, ota, pairing, provision, recordings, server_watch
-from . import ring_preview, room_sensors
+from . import ring_preview, room_sensors, usb_watch
 from . import wifi
 from .announce import Keeper, lan_ip as _lan_ip
 from . import power as power_mod
@@ -138,11 +138,12 @@ async def main() -> None:
     ha_token = secrets.token_urlsafe(32) if pairable else pairing.agent_token(ETC_DIR, {"senha_porta_local": token})
     session = pairing.PairingSession() if pairable else None
     zc_box: list = []
-    mapper, tracker = cap.Mapper(), cap.Tracker(path=COUNTERS)
+    board = cap.read_board(os.path.join(ETC_DIR, "audio_board"))  # read once: a board swap restarts the program, not the agent
+    mapper, tracker = cap.Mapper(board=board), cap.Tracker(path=COUNTERS)
     memo: dict = {"cfg": None, "ww": [], "state": {"program_state": "off", **tracker.counters(),
                                                    "sw_version": cap.VERSION, "wifi_change": "idle"}}
     device = {"id": sat_id, "kind": "satellite", "name": f"Satellite {sat_id}",
-              "model": "Raspberry Pi 3 + Jabra", "sw_version": cap.VERSION}
+              "model": cap.model_for_board(board), "sw_version": cap.VERSION}
 
     async def power_log(message: str) -> None:
         await core.push_log(message, {})
@@ -229,7 +230,7 @@ async def main() -> None:
     equalizer = eqmod.Equalizer()
 
     def capabilities() -> list[dict]:
-        return (cap.controls_from_config(memo["cfg"] or {}, memo["ww"]) + cap.room_descriptors(room.keys)
+        return (cap.controls_from_config(memo["cfg"] or {}, memo["ww"], board=board) + cap.room_descriptors(room.keys)
                 + equalizer.descriptors() + ota.OtaClient.descriptors())
 
     async def room_state(values: dict) -> None:
@@ -450,8 +451,13 @@ async def main() -> None:
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     keeper = Keeper(sat_id, PORT, "pairable" if pairable else "paired", zc_box)
     try:
+        k71 = hw.UndervoltageCounter(path=os.path.expanduser("~/.friday-agent/usb71.json"), match="error -71")
         tasks = [poll(), midnight(), hardware_loop(), room_loop(), timers_watch(),
-                 server_watch.ServerWatch(CONFIG, program).run(), keeper.run(), updater.run()]
+                 server_watch.ServerWatch(CONFIG, program).run(), keeper.run(), updater.run(),
+                 # 17/11: USB watchdog of the XVF3800 (does nothing on the Jabra)
+                 usb_watch.run(lambda: cap.read_board(os.path.join(ETC_DIR, "audio_board")), program, core,
+                               k71.sample, usb_watch.UsbWatch(), lambda: power_mod.run_command(power_mod.REBOOT),
+                               state=memo["state"])]
         if pairable:
             tasks.append(speak_code())
         await asyncio.gather(*tasks)

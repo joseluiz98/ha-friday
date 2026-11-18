@@ -1,9 +1,11 @@
 [Unit]
-Description=Satélite de voz da F.R.I.D.A.Y. (Jabra + palavra "Friday")
+Description=Satélite de voz da F.R.I.D.A.Y. (Jabra ou XVF3800 + palavra "Friday")
 After=network-online.target sound.target
 Wants=network-online.target
 
 [Service]
+# 17/11: só com uma placa de áudio suportada; a checagem também aponta o /etc/asound.conf da placa
+ExecCondition=+/usr/local/sbin/friday-audio-select --check
 User=jose
 WorkingDirectory=/opt/friday/current/program
 ExecStart=/opt/friday/current/venv/bin/python -u /opt/friday/current/program/friday_satelite.py

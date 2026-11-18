@@ -1,6 +1,7 @@
 """Anel de LEDs: estados -> aparência, dois drivers (spec 2026-11-05 §11–§12).
 cd /homeassistant/tools/satelite/programa && python3 -m unittest test_ring -v"""
 import unittest
+from unittest import mock
 
 import ring
 
@@ -40,6 +41,10 @@ class TimerFalso:
 
 class TestXvf(unittest.TestCase):
     def setUp(self):
+        # 17/11: estes testes descrevem a composição com a geometria de fábrica (LED 0 = 0°, mudo só no LED 0);
+        # a calibração da bancada tem teste próprio em test_xvf_link.TestRingCalibration
+        for nome, valor in (("LED_OFFSET", 0), ("MUTE_LEDS", (0,))):
+            p = mock.patch.object(ring, nome, valor); p.start(); self.addCleanup(p.stop)
         self.t = Falso()
         self.timers = []
         self.r = ring.Xvf3800Ring(self.t, timer_factory=lambda a, f: TimerFalso(a, f, self.timers))
@@ -456,6 +461,10 @@ class TestComposicaoJabra(unittest.TestCase):
 
 class TestComposicaoXvf(unittest.TestCase):
     def setUp(self):
+        # 17/11: estes testes descrevem a composição com a geometria de fábrica (LED 0 = 0°, mudo só no LED 0);
+        # a calibração da bancada tem teste próprio em test_xvf_link.TestRingCalibration
+        for nome, valor in (("LED_OFFSET", 0), ("MUTE_LEDS", (0,))):
+            p = mock.patch.object(ring, nome, valor); p.start(); self.addCleanup(p.stop)
         self.t = Falso()
         self.timers = []
         self.r = ring.Xvf3800Ring(self.t, timer_factory=lambda a, f: TimerFalso(a, f, self.timers))
@@ -512,8 +521,8 @@ class TestComposicaoXvf(unittest.TestCase):
         self.assertTrue(proximo.cancelado)
 
     def test_dnd_values(self):
-        self.assertEqual((ring.DND_LOW, ring.DND_PULSE_EVERY_S, ring.DND_PULSE_S), (0.15, 30.0, 2.0))
-        self.assertEqual(ring.escalar(0x8000FF, 0.15), 0x130026)
+        self.assertEqual((ring.DND_LOW, ring.DND_PULSE_EVERY_S, ring.DND_PULSE_S), (0.25, 30.0, 2.0))
+        self.assertEqual(ring.escalar(0x8000FF, 0.15), 0x130026)  # a escala em si
 
     def test_preview_is_unitary_and_off_returns_to_the_composition(self):
         self.r.set_muted(True)

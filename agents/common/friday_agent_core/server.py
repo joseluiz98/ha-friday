@@ -114,6 +114,10 @@ class AgentCore:
         self._last.update(diff)
         await self._broadcast({"type": "state", "changes": diff, "origin": origin})
 
+    def connected(self) -> bool:
+        """Some client (Home Assistant) is connected now: an event sent with nobody listening is lost."""
+        return bool(self._clients)
+
     async def push_event(self, key: str, event_type: str, data: dict) -> None:
         await self._broadcast({"type": "event", "key": key, "event_type": event_type, "data": data})
 
