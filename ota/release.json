@@ -15,5 +15,40 @@
     "container": ["server/image"],
     "wwt": ["tools/wakeword/training", "tools/wakeword/wwt"],
     "integration": ["custom_components/friday"]
+  },
+  "package": {
+    "satellite": {
+      "paths": [
+        "satellite/program",
+        "satellite/migrations",
+        "satellite/audio",
+        "satellite/sync",
+        "agents/satellite/friday_satellite_agent",
+        "agents/satellite/friday-satellite-agent.service",
+        "agents/satellite/sudoers.friday-satellite-agent",
+        "agents/satellite/friday-agent-apply",
+        "agents/satellite/friday-wifi-apply",
+        "agents/satellite/friday-ota-apply",
+        "agents/satellite/requirements.lock",
+        "agents/common/friday_agent_core",
+        "vault/manifest.json",
+        "ota/release.json"
+      ],
+      "system": [
+        "satellite/program",
+        "satellite/sync",
+        "satellite/audio/jabra.conf",
+        "satellite/audio/xvf3800.conf",
+        "satellite/audio/friday-audio-select",
+        "satellite/audio/90-friday-audio.rules",
+        "satellite/audio/audio-board.conf",
+        "satellite/audio/friday-silence.service",
+        "agents/satellite/friday-satellite-agent.service",
+        "agents/satellite/sudoers.friday-satellite-agent",
+        "agents/satellite/friday-agent-apply",
+        "agents/satellite/friday-wifi-apply",
+        "agents/satellite/friday-ota-apply"
+      ]
+    }
   }
 }
