@@ -7,7 +7,20 @@ VM=${FRIDAY_TEST_VM:-$(cat /config/.friday/vm 2>/dev/null)}
 ALL="${FRIDAY_TEST_DIR:-ha-friday}-all"
 [ -n "$VM" ] || { echo "set FRIDAY_TEST_VM=user@host (or /config/.friday/vm)" >&2; exit 2; }
 fail=0
-step() { echo "== $1"; shift; "$@" || { echo "FAILED: $*" >&2; fail=1; }; }
+# Every suite runs with a private TMPDIR, removed at the end. A suite that leaves anything there fails: leaked test
+# folders filled the HAOS eMMC on 18/11/2026 (11.8 GB in /tmp of the SSH add-on, ~120 MB per satellite run).
+TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/test-all.XXXXXX") || exit 2
+export TMPDIR
+trap 'rm -rf "$TMPDIR"' EXIT
+step() {
+  echo "== $1"; local name=$1; shift
+  "$@" || { echo "FAILED: $*" >&2; fail=1; }
+  local left; left=$(ls -A "$TMPDIR")
+  if [ -n "$left" ]; then
+    echo "FAILED: $name leaked $(echo "$left" | wc -l) temp entr(ies), e.g. $(echo "$left" | head -3 | tr '\n' ' ')" >&2
+    fail=1; find "$TMPDIR" -mindepth 1 -delete
+  fi
+}
 step "sweep (private list)" python3 scripts/sweep.py
 step "integration + agents + tools (VM, python:3.14)" bash scripts/test.sh
 step "satellite program" sh -c 'cd satellite/program && python3 -m unittest -q 2>&1 | tail -3 | grep -q "^OK"'
