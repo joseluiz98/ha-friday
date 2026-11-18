@@ -40,8 +40,3 @@ def test_withdrawn_message():
 def test_format_promoted():
     assert n.format_promoted("v0.3.7") == \
         "F.R.I.D.A.Y. v0.3.7 passou na prova do alpha e agora é a versão stable."
-
-
-def test_format_waiting_server():
-    assert n.format_waiting_server("d", "v0.4.0", "tentativas esgotadas") == \
-        "F.R.I.D.A.Y.: d está esperando o servidor instalar a v0.4.0 para atualizar (tentativas esgotadas)."

@@ -650,24 +650,19 @@ def test_manual_satellite_install_leaves_an_up_to_date_server_alone(tmp_path):
     assert not w.store.data["server_ota"].get("install_requested")
 
 
-def test_waiting_server_push_once_per_day(tmp_path):
+def test_waiting_server_listed_after_an_hour_without_telegram(tmp_path):
     w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0")])
     w.server_at("v0.3.0")
     w.orch.poll()
+    t0 = w.now
     assert w.offer("stable", installed="v0.3.0")["reason"] == "waiting_server"
-    w.now += 59 * 60  # steps add up: 59 min
+    w.now += 59 * 60
     w.offer("stable", installed="v0.3.0")
+    assert w.orch.waiting_server() == {}
+    w.now += 2 * 60
+    w.offer("stable", installed="v0.3.0")
+    assert w.orch.waiting_server() == {SAT: {"tag": "v0.4.0", "since": t0, "why": "aguardando a janela de instalação"}}
     assert w.pushed == []
-    w.now += 61 * 60  # 2 h of waiting
-    w.offer("stable", installed="v0.3.0")
-    assert w.pushed == [f"F.R.I.D.A.Y.: {SAT} está esperando o servidor instalar a v0.4.0 para atualizar "
-                        "(aguardando a janela de instalação)."]
-    w.now += 2 * 3600
-    w.offer("stable", installed="v0.3.0")
-    assert len(w.pushed) == 1
-    w.now += 25 * 3600  # more than a day after the first push
-    w.offer("stable", installed="v0.3.0")
-    assert len(w.pushed) == 2
 
 
 def test_waiting_server_since_clears_on_another_answer(tmp_path):
@@ -676,12 +671,14 @@ def test_waiting_server_since_clears_on_another_answer(tmp_path):
     w.orch.poll()
     w.offer("stable", installed="v0.3.0")
     assert w.store.device(SAT).get("waiting_server_since") == w.now
+    w.now += 3601
     w.server_at("v0.4.0")
     w.offer("stable", installed="v0.3.0")
     assert w.store.device(SAT).get("waiting_server_since") is None
+    assert w.orch.waiting_server() == {}
 
 
-def test_waiting_push_says_auto_install_is_off(tmp_path):
+def test_waiting_reason_says_auto_install_is_off(tmp_path):
     w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0")])
     w.server_at("v0.3.0")
     w.orch.set_auto(False)
@@ -689,7 +686,7 @@ def test_waiting_push_says_auto_install_is_off(tmp_path):
     w.offer("stable", installed="v0.3.0")
     w.now += 3601
     w.offer("stable", installed="v0.3.0")
-    assert w.pushed and w.pushed[0].endswith("(atualização automática desligada).")
+    assert w.orch.waiting_server()[SAT]["why"] == "atualização automática desligada"
 
 
 # ---- review findings (2026-11-18): what counts as held, which tags rebuild, describe versions

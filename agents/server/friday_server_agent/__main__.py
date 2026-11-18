@@ -209,6 +209,8 @@ async def main() -> None:
         return {"ota_server": orch.server_entity(),
                 "ota_integration_target": orch.status()["server"].get("integration_target"),
                 "image_latest": img.get("tag"),
+                "ota_waiting_server": len(waiting := orch.waiting_server()),
+                "ota_waiting_server_attributes": {"satellites": waiting},
                 "image_latest_attributes": {k: img.get(k) for k in ("built_at", "status", "error", "files")}}
 
     state.update(ota_state())
