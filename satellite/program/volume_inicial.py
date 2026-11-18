@@ -1,4 +1,5 @@
-"""Volume de fábrica de um Mark novo: 65%, definido pelo dono no teste do MK2 (06/11). Sem isto, a primeira fala sai no
+"""Volume de fábrica de um Mark novo: 65%, definido pelo dono no teste do MK2 (06/11); no XVF3800, 100% (dono, 18/11:
+o PCM dele só vai até 0 dB, e em 65% = -20 dB o código do pareamento não se ouvia no kit 2.1). Sem isto, a primeira fala sai no
 nível que o aparelho guardou, e o "oi" dela pode passar sem ser ouvido. Só roda enquanto `volume` da config é None.
 
 Três caminhos, nesta ordem: Jabra (posição 0–11 do PCM, conferido); XVF3800 (tenta PCM; o nome real do controle se
@@ -8,6 +9,7 @@ import re, subprocess
 from volume import posicao_de_percentual
 
 PADRAO_PCT = 65
+PADRAO_XVF_PCT = 100
 PREFERIDOS = ("PCM", "Master", "Speaker", "Headphone")
 
 
@@ -39,7 +41,7 @@ def _contents(run, card) -> str:
         return ""
 
 
-def aplicar(pct=PADRAO_PCT, cards_texto=None, run=subprocess.run) -> dict:
+def aplicar(pct=PADRAO_PCT, cards_texto=None, run=subprocess.run, pct_xvf=PADRAO_XVF_PCT) -> dict:
     """Devolve {"via", "card", "controle"}; via None quando nenhum aparelho aceitou (nunca levanta)."""
     if cards_texto is None:
         try:
@@ -52,7 +54,7 @@ def aplicar(pct=PADRAO_PCT, cards_texto=None, run=subprocess.run) -> dict:
         if "jabra" in c["desc"].lower() and _sset(run, c["id"], "PCM", str(posicao_de_percentual(pct))):
             return {"via": "jabra", "card": c["id"], "controle": "PCM"}
     for c in todas:
-        if re.search(r"xvf3800|respeaker", c["desc"], re.I) and _sset(run, c["id"], "PCM", f"{int(pct)}%"):
+        if re.search(r"xvf3800|respeaker", c["desc"], re.I) and _sset(run, c["id"], "PCM", f"{int(pct_xvf)}%"):
             return {"via": "xvf3800", "card": c["id"], "controle": "PCM"}
     for c in sorted(todas, key=lambda x: "usb" not in x["desc"].lower()):
         for nome in _ordenar(controles_de_reproducao(_contents(run, c["id"]))):
