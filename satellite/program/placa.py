@@ -45,6 +45,17 @@ class MixerXvf:
         valor = VOLUME_XVF[max(0, min(len(VOLUME_XVF) - 1, int(posicao)))]
         self._executar(["amixer", "-q", "-c", self.card, "sset", self.controle, f"{valor},{valor}"], timeout=5)
 
+    def fixar_mestre(self) -> bool:
+        """18/11 (dono): o segundo controle de reprodução da placa (PCM índice 1) nasce em −20 dB e o ALSA o restaura
+        assim a cada boot; com ele a saída P2 ficava fraca demais. Fica em 0 dB a cada partida; o volume da casa
+        segue só no PCM índice 0. Falha vira False (o programa sobe do mesmo jeito)."""
+        try:
+            r = self._executar(["amixer", "-q", "-c", self.card, "cset", f"name={self.controle} Playback Volume,index=1",
+                                str(VOLUME_XVF[-1])], timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return getattr(r, "returncode", 0) == 0
+
 
 class MudoXvf:
     """Mudo da captura no XVF3800 pelo pino X0D30, pelo mesmo canal USB do anel e da trava de feixe. Botão e HA
