@@ -213,8 +213,10 @@ def build_satellite(archive: Callable[[str, list], bytes], tag: str, sha: str, v
             "lock_sha256": manifest["lock_sha256"], "protocol": manifest["protocol"], "heavy": manifest["heavy"]}
 
 
-def build_release(repo, tag: str, sha: str, vault, root: str, wheels: Callable[[list, str], str]) -> dict:
-    """`<root>/packages/<tag>/`: satellite.tar.gz, archive.tar (server side), meta.json, `.complete`. Idempotent."""
+def build_release(repo, tag: str, sha: str, vault, root: str, wheels: Callable[[list, str], str],
+                  built_by: str = "") -> dict:
+    """`<root>/packages/<tag>/`: satellite.tar.gz, archive.tar (server side), meta.json, `.complete`. Idempotent.
+    `built_by` is the version of the agent that packed it (spec 2026-11-18): an older packager may miss files."""
     folder = os.path.join(root, "packages", tag)
     done = os.path.join(folder, ".complete")
     meta_path = os.path.join(folder, "meta.json")
@@ -240,11 +242,22 @@ def build_release(repo, tag: str, sha: str, vault, root: str, wheels: Callable[[
         sat["wheels"] = wheels(paths, sat["lock_sha256"])
     finally:
         shutil.rmtree(lock_dir, ignore_errors=True)
-    meta = {"tag": tag, "sha": sha, "satellite": sat, "server": {"path": server_tar}}
+    meta = {"tag": tag, "sha": sha, "satellite": sat, "server": {"path": server_tar}, "built_by": built_by}
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, sort_keys=True)
     open(done, "w").close()
     return meta
+
+
+def mark_offered(root: str, tag: str) -> None:
+    """`<root>/packages/<tag>/.offered`: the package reached a device once, so it is never rebuilt under it."""
+    folder = os.path.join(root, "packages", tag)
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, ".offered"), "a").close()
+
+
+def is_offered(root: str, tag: str) -> bool:
+    return os.path.exists(os.path.join(root, "packages", tag, ".offered"))
 
 
 def prune_packages(root: str, keep: set[str]) -> list[str]:

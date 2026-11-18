@@ -37,7 +37,8 @@ def _write_json(path: str, data, mode: int = 0o644) -> None:
 
 def _empty() -> dict:
     return {"releases": {}, "soak": {}, "devices": {}, "server": {}, "server_ota": {}, "auto_install": True, "pushes": [],
-            "server_protocol": 1, "promotions": {}}
+            "server_protocol": 1, "promotions": {},
+            "waiting_server_push_at": 0.0}  # the last "satellite waiting for the server" push (spec 2026-11-18)
 
 
 def _coerce(raw) -> dict | None:

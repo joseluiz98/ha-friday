@@ -335,3 +335,21 @@ def test_apply_system_names_are_declared():
     for n in names:
         if n in existing:
             assert n in covered, f"{n} is installed by friday-ota-apply but no package.satellite.system entry covers it"
+
+
+def test_build_release_records_built_by(src):
+    archive, _, tmp = src
+    root = tmp / "ota"
+    out = pk.build_release(FakeRepo(archive), "v9.9.9", SHA, pv._vault(), str(root), wheels=lambda locks, sha: "w",
+                           built_by="v9.9.8")
+    assert out["built_by"] == "v9.9.8"
+    assert json.loads((root / "packages/v9.9.9/meta.json").read_text())["built_by"] == "v9.9.8"
+
+
+def test_mark_offered_roundtrip(tmp_path):
+    assert pk.is_offered(str(tmp_path), "v0.4.0") is False
+    (tmp_path / "packages" / "v0.4.0").mkdir(parents=True)
+    pk.mark_offered(str(tmp_path), "v0.4.0")
+    assert (tmp_path / "packages" / "v0.4.0" / ".offered").exists()
+    assert pk.is_offered(str(tmp_path), "v0.4.0") is True
+    assert pk.is_offered(str(tmp_path), "v0.3.0") is False

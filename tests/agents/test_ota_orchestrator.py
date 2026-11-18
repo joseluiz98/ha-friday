@@ -24,7 +24,7 @@ def man(server_proto=1, requires=1):
 
 
 class World:
-    def __init__(self, tmp, releases, manifests=None):
+    def __init__(self, tmp, releases, manifests=None, own="v99.0.0"):
         self.releases = {r.release.tag: r for r in releases}
         # releases of the OTA era unless a test says otherwise ({} = every release is pre-OTA)
         self.manifests = {r.release.sha: man() for r in releases} if manifests is None else manifests
@@ -58,7 +58,7 @@ class World:
             def flush(self, pushes):
                 return 0
 
-        def build(repo, tag, sha, vault, root, wheels):
+        def build(repo, tag, sha, vault, root, wheels, built_by=""):
             if world.gate is not None:
                 world.gate.wait(5)
             world.built.append(tag)
@@ -66,10 +66,21 @@ class World:
                 raise RuntimeError("no vault")
             return {"tag": tag, "sha": sha, "satellite": {"path": f"{root}/packages/{tag}/satellite.tar.gz",
                     "sha256": "s" * 64, "size": 10, "lock_sha256": "L" * 64, "wheels": f"/w/{tag}.tar.gz",
-                    "protocol": {}}, "server": {"path": "a.tar"}}
+                    "protocol": {}}, "server": {"path": "a.tar"}, "built_by": built_by}
+        self.own = own
+        # by default the server already runs the newest release (the server-first gate is open)
+        newest = max(self.releases, key=ch.version_key) if self.releases else None
+        self.store.data["server_ota"]["installed_tag"] = newest
         self.orch = orc.Orchestrator(self.store, self.tokens, Watcher(), Repo(), vault=None, notifier=Notifier(),
                                      build=build, wheels=lambda *a: "", root=str(tmp / "ota"),
-                                     clock=lambda: world.now, prune=lambda root, keep: [])
+                                     clock=lambda: world.now, prune=lambda root, keep: [],
+                                     own_version=lambda: world.own)
+
+    def server_at(self, tag):
+        self.store.data["server_ota"]["installed_tag"] = tag
+
+    def agent_at(self, tag):
+        self.own = tag
 
     def offer(self, channel="stable", installed="v0.2.0", lock="L" * 64, sat=SAT):
         return self.orch.offer(sat, channel, installed, 1, lock)
@@ -344,6 +355,7 @@ def test_token_book_refuses_to_issue_over_a_corrupt_file(tmp_path):
 def test_a_pre_ota_release_is_never_a_channel_target(tmp_path):
     old, new = rel("v0.2.1"), rel("v0.3.0", pre=True)
     w = World(tmp_path, [old, new], {new.release.sha: man()})  # v0.2.1 has no ota/release.json
+    w.server_at(None)  # the server too predates the OTA
     w.orch.poll()
     assert w.orch.target("stable") is None and w.orch.target("alpha") == "v0.3.0"
     assert w.orch.offer(SAT, "stable", None, 1, "")["tag"] is None
@@ -516,3 +528,163 @@ def test_a_tag_promoted_by_us_counts_as_stable(tmp_path):
     w.orch.poll()
     assert pub.calls == []
     assert w.store.data["promotions"]["v0.3.5"]["result"] == "superseded"
+
+
+# ---- server-first gate, built_by, offered marker (plan 2026-11-18 Task 3)
+from friday_server_agent.ota import packages as pk  # noqa: E402
+
+
+def _ota_root(tmp_path):
+    return str(tmp_path / "ota")
+
+
+def test_offer_waits_for_server_install(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0")])
+    w.server_at("v0.3.0")
+    w.orch.poll()
+    o = w.offer("stable", installed="v0.3.0")
+    assert o["tag"] is None and o["reason"] == "waiting_server"
+    w.server_at("v0.4.0")
+    assert w.offer("stable", installed="v0.3.0")["tag"] == "v0.4.0"
+
+
+def test_offer_marks_package_offered(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0")])
+    w.orch.poll()
+    assert not pk.is_offered(_ota_root(tmp_path), "v0.3.0")
+    assert w.offer("stable")["tag"] == "v0.3.0"
+    assert pk.is_offered(_ota_root(tmp_path), "v0.3.0")
+
+
+def test_stale_package_rebuilt_when_not_held(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0")], own="v0.3.0")
+    w.orch.poll()
+    assert w.built == ["v0.4.0"] and w.orch.meta["v0.4.0"]["built_by"] == "v0.3.0"
+    w.agent_at("v0.4.0")
+    assert w.offer("stable", installed="v0.3.0")["tag"] == "v0.4.0"
+    assert w.built == ["v0.4.0", "v0.4.0"] and w.orch.meta["v0.4.0"]["built_by"] == "v0.4.0"
+
+
+def test_installed_package_without_built_by_is_kept(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0")])
+    w.orch.meta["v0.4.0"] = {"tag": "v0.4.0", "sha": "x", "server": {"path": "a.tar"},
+                             "satellite": {"path": "p", "sha256": "k" * 64, "size": 10, "lock_sha256": "L" * 64,
+                                           "wheels": "/w"}}  # built by the v0.3.9 agent: no built_by
+    w.orch.poll()
+    w.offer("stable", installed="v0.4.0", sat="sat-0000b2")  # a device already runs it
+    o = w.offer("stable", installed="v0.3.0")
+    assert o["tag"] == "v0.4.0" and o["sha256"] == "k" * 64 and w.built == []
+
+
+class FakeImages:
+    def __init__(self):
+        self.started = []
+
+    def status(self):
+        return {"status": None}
+
+    def start(self, tag, sha):
+        self.started.append(tag)
+        return {"ok": True}
+
+
+def test_older_agent_refuses_satellite_package(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0")], own="v0.3.0")
+    w.orch.images = FakeImages()
+    w.store.data["server_ota"]["image_auto"] = "v0.4.0"  # keep the poll's image step out of the way
+    w.orch.poll()
+    o = w.offer("stable", installed="v0.3.0")
+    assert o["tag"] is None and o["reason"] == "server_older"
+    assert w.orch.image_build("v0.4.0") == {"ok": False, "error": "server_older"}
+    assert w.orch.images.started == []
+    assert w.orch.package_for_update() is None
+    assert not pk.is_offered(_ota_root(tmp_path), "v0.4.0")
+
+
+class FakeInstaller:
+    def __init__(self):
+        self.applied = []
+
+    def recover(self):
+        return None
+
+    def absorb_self_result(self):
+        return None
+
+    def prune_snapshots(self):
+        pass
+
+    def apply(self, tag, sha, man, manual=False):
+        self.applied.append(tag)
+        return {"result": "deferred"}
+
+
+def test_server_step_still_builds_archive_with_older_agent(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0")], own="v0.3.0")
+    w.server_at("v0.3.0")
+    w.orch.installer = FakeInstaller()
+    w.orch.poll()
+    assert w.orch.installer.applied == ["v0.4.0"]
+    assert "v0.4.0" in w.built and w.orch.meta["v0.4.0"]["server"]["path"]
+
+
+def test_manual_satellite_install_requests_server_install(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0")])
+    w.server_at("v0.3.0")
+    w.orch.poll()
+    w.store.data["server_ota"]["attempts"] = {"version": "v0.4.0", "failures": 5, "exhausted": True}
+    w.offer("stable", installed="v0.3.0")
+    assert w.orch.install(SAT) == "v0.4.0"
+    so = w.store.data["server_ota"]
+    assert so["install_requested"] is True and so["attempts"] is None
+    events = [json.loads(line) for line in (tmp_path / "events.ndjson").read_text().splitlines()]
+    assert any(e["device"] == "server" and e["tag"] == "v0.4.0" and e["event"] == "install_requested" for e in events)
+
+
+def test_manual_satellite_install_leaves_an_up_to_date_server_alone(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0")])
+    w.orch.poll()
+    w.orch.install(SAT)
+    assert not w.store.data["server_ota"].get("install_requested")
+
+
+def test_waiting_server_push_once_per_day(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0")])
+    w.server_at("v0.3.0")
+    w.orch.poll()
+    assert w.offer("stable", installed="v0.3.0")["reason"] == "waiting_server"
+    w.now += 59 * 60  # steps add up: 59 min
+    w.offer("stable", installed="v0.3.0")
+    assert w.pushed == []
+    w.now += 61 * 60  # 2 h of waiting
+    w.offer("stable", installed="v0.3.0")
+    assert w.pushed == [f"F.R.I.D.A.Y.: {SAT} está esperando o servidor instalar a v0.4.0 para atualizar "
+                        "(aguardando a janela de instalação)."]
+    w.now += 2 * 3600
+    w.offer("stable", installed="v0.3.0")
+    assert len(w.pushed) == 1
+    w.now += 25 * 3600  # more than a day after the first push
+    w.offer("stable", installed="v0.3.0")
+    assert len(w.pushed) == 2
+
+
+def test_waiting_server_since_clears_on_another_answer(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0")])
+    w.server_at("v0.3.0")
+    w.orch.poll()
+    w.offer("stable", installed="v0.3.0")
+    assert w.store.device(SAT).get("waiting_server_since") == w.now
+    w.server_at("v0.4.0")
+    w.offer("stable", installed="v0.3.0")
+    assert w.store.device(SAT).get("waiting_server_since") is None
+
+
+def test_waiting_push_says_auto_install_is_off(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0")])
+    w.server_at("v0.3.0")
+    w.orch.set_auto(False)
+    w.orch.poll()
+    w.offer("stable", installed="v0.3.0")
+    w.now += 3601
+    w.offer("stable", installed="v0.3.0")
+    assert w.pushed and w.pushed[0].endswith("(atualização automática desligada).")
