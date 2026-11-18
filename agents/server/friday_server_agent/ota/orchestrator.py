@@ -45,7 +45,6 @@ REPORT_IDS_KEPT = 20  # per device: the newest report ids, to drop a resend
 BUILD_RETRY_S = 3600  # a release that failed to package is retried at most once an hour
 PROMOTE_RETRY_S = 3600  # a failed promotion on GitHub is retried at most once an hour
 WAITING_PUSH_AFTER_S = 3600  # a satellite waiting for the server: first push after an hour of waiting
-WAITING_PUSH_EVERY_S = 86400  # then at most one push a day (spec 2026-11-18)
 
 
 def parse_report(data: dict) -> dict:
@@ -560,28 +559,33 @@ class Orchestrator:
         return "aguardando a janela de instalação"
 
     def _waiting_server(self, sat_id: str, tag: str | None, waiting: bool) -> None:
-        """A satellite held by the server-first gate: one push after an hour, then at most one a day (all devices)."""
+        """A satellite held by the server-first gate: remembered with the tag it waits for. The owner is told by
+        Home Assistant (sensor `ota_waiting_server`, house push in civil hours), never by this agent."""
         now = self._clock()
         with self.store.lock:
             d = self.store.device(sat_id)
-            if not waiting:
+            if not waiting or not tag:
                 if d.get("waiting_server_since") is not None:
                     d.pop("waiting_server_since", None)
+                    d.pop("waiting_server_tag", None)
                     self._save_quiet()
                 return
-            since = d.get("waiting_server_since")
-            if since is None:
-                d["waiting_server_since"] = since = now
+            if d.get("waiting_server_since") is None or d.get("waiting_server_tag") != tag:
+                d["waiting_server_since"], d["waiting_server_tag"] = now, tag
                 self._save_quiet()
-            last = float(self.store.data.get("waiting_server_push_at") or 0)  # 0: never pushed
-            due = now - since >= WAITING_PUSH_AFTER_S and (not last or now - last >= WAITING_PUSH_EVERY_S)
-        if not due or not tag:
-            return
-        why = self._waiting_reason()
+
+    def waiting_server(self) -> dict:
+        """{sat_id: {tag, since, why}} for satellites held by the server for at least WAITING_PUSH_AFTER_S."""
+        now = self._clock()
         with self.store.lock:
-            self.store.data["waiting_server_push_at"] = now
-            self.notifier.queue(nt.format_waiting_server(sat_id, tag, why), self.store.data["pushes"])
-            self._save_quiet()
+            held = {s: (d["waiting_server_tag"], d["waiting_server_since"])
+                    for s, d in self.store.data["devices"].items()
+                    if d.get("waiting_server_since") is not None and d.get("waiting_server_tag")
+                    and now - d["waiting_server_since"] >= WAITING_PUSH_AFTER_S}
+        if not held:
+            return {}
+        why = self._waiting_reason()
+        return {s: {"tag": t, "since": since, "why": why} for s, (t, since) in sorted(held.items())}
 
     def _offer(self, sat_id: str, channel: str, installed: str | None, protocol: int,
                lock_sha256: str) -> tuple[dict, str | None]:

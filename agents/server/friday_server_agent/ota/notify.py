@@ -29,10 +29,6 @@ def format_rollback_failed(tag: str, error: str) -> str:
             "O servidor pode estar fora do ar; as tentativas automáticas pararam.")
 
 
-def format_waiting_server(device: str, tag: str, why: str) -> str:
-    return f"F.R.I.D.A.Y.: {device} está esperando o servidor instalar a {tag} para atualizar ({why})."
-
-
 def format_promoted(tag: str) -> str:
     return f"F.R.I.D.A.Y. {tag} passou na prova do alpha e agora é a versão stable."
 

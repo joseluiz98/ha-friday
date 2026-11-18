@@ -71,7 +71,7 @@ The approaches considered, as presented on 18/11:
   - If the server install fails and rolls back, satellites stay where they are. The existing failure notice covers it.
   - **[owner, 18/11] No bypass.** A satellite never goes past the gate, not even on a manual install, because a bypass would bring back a package built by an old server. Instead:
     - a manual satellite install request (`install_requested`) also sets the server's `install_requested` when the server is behind;
-    - a satellite held at `waiting_server` for more than 1 hour sends one push to the owner's phone (notify target from local config) (through the agent's existing notifier). The push names the tag and why the server has not installed it (auto off, image build, retries exhausted, heavy window). It repeats at most once a day.
+    - a satellite held at `waiting_server` for more than 1 hour is listed in the server sensor `ota_waiting_server` (state = count; attributes `satellites` = {id: {tag, since, why}}, `why` = auto off, image build, retries exhausted, heavy window). [owner, 18/11] The warning follows the house infrastructure alerts: a Home Assistant push to the owner in civil hours, outside the repo; the agent sends nothing.
 - **Builder version:**
   - `meta.json` records `built_by`: the server agent's own `FRIDAY_VERSION` tag.
   - The server-side install still needs `archive.tar` for its rollback, so an older agent may build `archive.tar` but not `satellite.tar.gz`.
@@ -135,7 +135,7 @@ The VM runs the v0.3.9 server agent, which has neither gate B nor `built_by`.
 - **Coherence:** the built-in lists equal `release.json`, and the apply `SYSTEM` names are covered.
 - **Orchestrator:**
   - the offer is `waiting_server` while `server_ota.installed_tag` is older;
-  - a manual satellite request sets the server's `install_requested`; one push after 1 h of `waiting_server`, at most one per day;
+  - a manual satellite request sets the server's `install_requested`; the satellite is listed by `waiting_server()` after 1 h of `waiting_server`, never pushed by the agent;
   - `built_by` older than the tag rebuilds the satellite package;
   - an offered package is never rebuilt.
 - **Apply (fake root):**
