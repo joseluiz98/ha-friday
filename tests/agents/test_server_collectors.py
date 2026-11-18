@@ -25,16 +25,28 @@ def test_status_metrics_maps_fields():
          "openclaw_version": "2026.9.9",
          "lucid": {"finished_at": "2026-10-29T03:31:00Z", "date": "2026-10-28", "status": "ok",
                    "cost_usd": 0.012, "facts_added": 2, "user_md_chars": 900},
-         "memory_views": {"mode": "ab"}, "conversation_open": True}
+         "memory_views": {"mode": "ab"}, "conversation_open": True,
+         "memory_watcher": {"degraded": True, "since": "2026-11-17T20:31:32.857Z",
+                            "reason": "memory watcher unavailable; x"}}
     m = c.status_metrics(s)
     assert m == {"brain_ready": True, "brain_last_dream": "2026-10-29T05:00:00Z",
                  "brain_restarted_in_process": False, "brain_version": "2026.9.9",
                  "lucid_last_run": "2026-10-29T03:31:00Z",
                  "lucid_last_run_attributes": {"date": "2026-10-28", "status": "ok", "cost_usd": 0.012,
                                                "facts_added": 2},
+                 "brain_memory_watcher_degraded": True,
+                 "brain_memory_watcher_degraded_attributes": {"since": "2026-11-17T20:31:32.857Z",
+                                                              "reason": "memory watcher unavailable; x"},
                  "memory_views_mode": "ab", "conversation_open": True, "conversation_open_attributes": None}
     assert c.status_metrics({})["lucid_last_run"] is None
     assert c.status_metrics({})["lucid_last_run_attributes"] is None
+
+
+def test_memory_watcher_unknown_without_data():
+    for status in ({}, {"memory_watcher": None}):
+        m = c.status_metrics(status)
+        assert m["brain_memory_watcher_degraded"] is None
+        assert m["brain_memory_watcher_degraded_attributes"] is None
 
 
 def test_conversation_open_logic():
@@ -98,11 +110,6 @@ def test_backup_storage_used_pct():
     assert c.backup_storage_metrics({"data": {"total": 0}})["backup_storage_used_pct"] is None
 
 
-def test_memory_index_last_success_from_stamp_mtime():
-    assert c.memory_index_metrics(1761700000.7) == {"memory_index_last_success": "2025-10-29T01:06:40+00:00"}
-    assert c.memory_index_metrics(None) == {"memory_index_last_success": None}
-
-
 def test_wakeword_pipeline_stamps():
     assert c.wakeword_pipeline_metrics(1761700000.7, None) == {
         "wakeword_sync_last_ok": "2025-10-29T01:06:40+00:00", "wakeword_cache_last_ok": None}
@@ -111,7 +118,7 @@ def test_wakeword_pipeline_stamps():
 def test_capabilities_keys_match_metrics():
     keys = {d["key"] for d in c.capabilities(proxmox=True)}
     produced = set(c.status_metrics({})) | set(c.proxmox_metrics({}, {}, {})) | set(
-        c.vm_metrics(MEMINFO, "0 0 0", (1, 1, 1, 1), "1 1", 1)) | set(c.memory_index_metrics(None)) | set(
+        c.vm_metrics(MEMINFO, "0 0 0", (1, 1, 1, 1), "1 1", 1)) | set(
         c.wakeword_pipeline_metrics(None, None))
     attrs = {k for k in produced if k.endswith("_attributes")}
     assert produced - attrs <= keys
@@ -133,6 +140,10 @@ def test_capabilities_names_units_and_retired_keys():
     assert caps["host_memory_usage_pct"]["name"] == "Proxmox host memory usage"
     assert caps["host_memory_usage_pct"]["unit"] == "%" and caps["host_memory_usage_pct"]["available"] is True
     assert not {"vm_cpu_load_pct", "host_available_mb"} & set(caps)
+    w = caps["brain_memory_watcher_degraded"]
+    assert w["platform"] == "binary_sensor" and w["device_class"] == "problem"
+    assert w["category"] == "diagnostic" and w["name"] == "Brain memory watcher degraded"
+    assert "memory_index_last_success" not in caps
     for k in ("vm_memory_pct", "vm_cpu_usage_pct", "vm_disk_pct", "brain_ready", "brain_last_dream", "lucid_last_run",
               "conversation_open", "host_memory_usage_pct", "nvme_temperature", "last_backup",
               "backup_oldest_guest", "backup_storage_used_pct", "image_latest", "ota_server"):
