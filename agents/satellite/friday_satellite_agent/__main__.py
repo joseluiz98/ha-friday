@@ -19,7 +19,7 @@ from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
 from . import local, ota, pairing, provision, recordings, server_watch
-from . import ring_preview, room_sensors
+from . import ring_preview, room_sensors, usb_watch
 from . import wifi
 from .announce import Keeper, lan_ip as _lan_ip
 from . import power as power_mod
@@ -451,8 +451,12 @@ async def main() -> None:
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     keeper = Keeper(sat_id, PORT, "pairable" if pairable else "paired", zc_box)
     try:
+        k71 = hw.UndervoltageCounter(path=os.path.expanduser("~/.friday-agent/usb71.json"), match="error -71")
         tasks = [poll(), midnight(), hardware_loop(), room_loop(), timers_watch(),
-                 server_watch.ServerWatch(CONFIG, program).run(), keeper.run(), updater.run()]
+                 server_watch.ServerWatch(CONFIG, program).run(), keeper.run(), updater.run(),
+                 # 17/11: USB watchdog of the XVF3800 (does nothing on the Jabra)
+                 usb_watch.run(board, program, core, k71.sample, usb_watch.UsbWatch(),
+                               lambda: power_mod.run_command(power_mod.REBOOT))]
         if pairable:
             tasks.append(speak_code())
         await asyncio.gather(*tasks)

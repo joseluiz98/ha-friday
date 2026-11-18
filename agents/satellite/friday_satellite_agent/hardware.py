@@ -152,13 +152,13 @@ def _run(argv: list[str]) -> str:
     return subprocess.run(argv, capture_output=True, text=True, timeout=5, check=False).stdout
 
 
-def parse_journal(text: str) -> tuple[int, str | None]:
-    """(lines saying `Undervoltage detected`, cursor of the last `-- cursor: <c>` line or None)."""
+def parse_journal(text: str, match: str = "Undervoltage detected") -> tuple[int, str | None]:
+    """(lines containing `match`, cursor of the last `-- cursor: <c>` line or None)."""
     count, cursor = 0, None
     for line in text.splitlines():
         if line.startswith("-- cursor: "):
             cursor = line[len("-- cursor: "):].strip() or None
-        elif "Undervoltage detected" in line:
+        elif match in line:
             count += 1
     return count, cursor
 
@@ -174,8 +174,9 @@ class UndervoltageCounter:
 
     BASE = ["journalctl", "-k", "-b", "-o", "cat", "--no-pager", "--show-cursor"]
 
-    def __init__(self, run=_run, read=_read_file, path: str = UNDERVOLTAGE_STATE) -> None:
-        self._run, self._read, self._path = run, read, path
+    def __init__(self, run=_run, read=_read_file, path: str = UNDERVOLTAGE_STATE,
+                 match: str = "Undervoltage detected") -> None:
+        self._run, self._read, self._path, self._match = run, read, path, match  # 17/11: also `error -71` (USB)
 
     def _load(self, boot_id: str) -> tuple[str | None, int]:
         try:
@@ -202,7 +203,7 @@ class UndervoltageCounter:
             boot_id = self._read(BOOT_ID).strip()
             cursor, count = self._load(boot_id)
             argv = self.BASE + (["--after-cursor", cursor] if cursor else [])
-            found, new_cursor = parse_journal(self._run(argv))
+            found, new_cursor = parse_journal(self._run(argv), self._match)
         except Exception:  # noqa: BLE001 - journalctl missing, timeout, unreadable boot id
             return None
         if new_cursor is None:

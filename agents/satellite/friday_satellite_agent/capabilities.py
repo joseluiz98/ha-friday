@@ -106,6 +106,11 @@ def controls_from_config(cfg: dict, wakewords: list[dict], board: str | None = N
             _d("xvf_sys_delay", "number", "XVF3800 delay", min=0, max=256, step=1, category=c, mode="box",
                icon="mdi:timer-cog-outline"),
             _d("beam_lock", "switch", "Beam lock", category=c, icon="mdi:crosshairs-gps"),
+            # 17/11: USB watchdog (usb_watch.py): reboots of the Pi it made, and one event per reboot or exhausted hour
+            _d("usb_recoveries", "sensor", "USB recoveries", state_class="total_increasing", category="diagnostic",
+               icon="mdi:usb"),
+            _d("usb_recovery", "event", "USB recovery", event_types=["rebooted", "exhausted"], category="diagnostic",
+               icon="mdi:usb"),
         ]
     for w in wakewords:
         n = w["nome"]
