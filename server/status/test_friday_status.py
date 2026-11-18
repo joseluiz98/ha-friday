@@ -221,6 +221,31 @@ class TestMemoryWatcher(unittest.TestCase):
         self.assertFalse(r["degraded"])
         self.assertEqual(novo["started"], T3)
 
+    def test_memory_watcher_trava_com_started_none(self):
+        saved = {"started": None, "since": T2, "reason": "r"}
+        r, _ = fs.memory_watcher([L(T3, "gateway", "outra coisa")], saved)
+        self.assertEqual(r, {"degraded": True, "since": T2, "reason": "r"})
+
+    def test_watcher_lines_from_so_100_e_101_sao_leitura(self):
+        self.assertEqual(fs._watcher_lines_from(100, "a\nb\n"), ["a", "b"])
+        self.assertEqual(fs._watcher_lines_from(101, ""), [])
+        for rc in (0, 1, 2, 3, 125, 126, 127):
+            self.assertIsNone(fs._watcher_lines_from(rc, ""), rc)
+
+    def test_watcher_cmd_classifica_no_container(self):
+        """Roda o comando num shell local com um /tmp/openclaw falso (só o shell e o grep, sem docker)."""
+        import subprocess
+        d = tempfile.mkdtemp()
+        cmd = fs.WATCHER_CMD.replace("/tmp/openclaw", d)
+        rodar = lambda: subprocess.run(["sh", "-c", cmd], stdout=subprocess.PIPE, text=True).returncode
+        self.assertEqual(rodar(), 3)                       # sem arquivo de log
+        with open(os.path.join(d, "openclaw-1.log"), "w") as f:
+            f.write("nada de interesse\n")
+        self.assertEqual(rodar(), 101)                     # leu, nada casou
+        with open(os.path.join(d, "openclaw-1.log"), "a") as f:
+            f.write("memory watcher unavailable\n")
+        self.assertEqual(rodar(), 100)                     # casou
+
     def test_memory_watcher_ignora_lixo(self):
         lixo = ["nao json", '{"0": "No change", "_meta": {"date": "2026-11-18T00:00:00Z"}}', "{}"]
         for saved in (None, {"started": None, "since": None, "reason": None}):

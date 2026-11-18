@@ -155,6 +155,21 @@ WATCHER_PREFIXES = (
 )
 
 
+# Sem arquivo de log: sai 3. grep achou: 100; não achou: 101; erro do grep (2 etc.) sai como veio. Docker fora ou
+# container parado devolvem 1/125/126/127: nenhum desses vira "saudável".
+WATCHER_CMD = ('set -- $(ls -1 /tmp/openclaw/openclaw-*.log 2>/dev/null | tail -2); [ $# -gt 0 ] || exit 3; '
+               'grep -h -F -e "starting..." -e "memory watcher" "$@"; rc=$?; [ $rc -le 1 ] && exit 10$rc; exit $rc')
+
+
+def _watcher_lines_from(rc, stdout):
+    """Só 100 (casou) e 101 (nada casou, arquivo lido) são prova de leitura; o resto é None (nunca "saudável")."""
+    if rc == 100:
+        return (stdout or "").splitlines()
+    if rc == 101:
+        return []
+    return None
+
+
 def _log_entry(linha):
     """(data, subsistema, mensagem) de uma linha do log do gateway, ou None se não for JSON com `_meta.date`."""
     try:
@@ -194,6 +209,7 @@ def memory_watcher(lines, saved):
     else:
         since = reason = None
         for data, sub, msg in entradas:
+            # _meta.date é sempre ISO UTC no mesmo formato: ordem de string = ordem do tempo
             if sub == "memory" and msg.startswith(WATCHER_PREFIXES) and (start is None or data > start):
                 since, reason = data, msg[:160]
                 break
@@ -308,17 +324,14 @@ class RealDeps:
         return memory_views(self.views_ab, self.views_mode)
 
     def _watcher_lines(self):
-        """Linhas de partida e de aviso do log do gateway (os dois arquivos mais novos), ou None se não deu para ler."""
-        cmd = ("ls -1 /tmp/openclaw/openclaw-*.log 2>/dev/null | tail -2 | "
-               "xargs -r grep -h -F -e \"starting...\" -e \"memory watcher\"")
+        """Linhas de partida e de aviso do log do gateway (os dois arquivos mais novos), ou None se não deu para ler.
+        O shell do container classifica o desfecho com códigos próprios (ver _watcher_lines_from)."""
         try:
-            r = subprocess.run(["docker", "exec", "friday", "sh", "-c", cmd], stdout=subprocess.PIPE,
+            r = subprocess.run(["docker", "exec", "friday", "sh", "-c", WATCHER_CMD], stdout=subprocess.PIPE,
                                stderr=subprocess.DEVNULL, timeout=15, text=True, errors="replace")
         except (OSError, subprocess.SubprocessError):
             return None
-        if r.returncode == 0 or (r.returncode == 1 and not r.stdout):
-            return r.stdout.splitlines()
-        return None
+        return _watcher_lines_from(r.returncode, r.stdout)
 
     def memory_watcher(self):
         try:
