@@ -38,8 +38,19 @@ class TestVolumeInicial(unittest.TestCase):
 
     def test_xvf3800_tenta_pcm_em_percentual(self):
         r = Run()
-        self.assertEqual(vi.aplicar(65, XVF, r)["via"], "xvf3800")
-        self.assertEqual(r.chamadas[0][-1], "65%")
+        self.assertEqual(vi.aplicar(65, XVF, r, pct_xvf=80)["via"], "xvf3800")
+        self.assertEqual(r.chamadas[0][-1], "80%")
+
+    def test_xvf3800_de_fabrica_sai_em_100(self):
+        """18/11 (dono): o PCM do XVF só vai até 0 dB; em 65% (-20 dB) o código do pareamento não se ouvia."""
+        r = Run()
+        vi.aplicar(cards_texto=XVF, run=r)
+        self.assertEqual(r.chamadas[0][-1], "100%")
+
+    def test_jabra_de_fabrica_segue_em_65(self):
+        r = Run()
+        vi.aplicar(cards_texto=JABRA, run=r)
+        self.assertEqual(r.chamadas, [["amixer", "-q", "-c", "USB", "sset", "PCM", "7"]])
 
     def test_xvf3800_sem_pcm_cai_no_generico(self):
         r = Run(recusa={("Array", "PCM")}, conteudo={"Array": CONT})

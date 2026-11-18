@@ -87,6 +87,20 @@ class TestVolumeXvf(unittest.TestCase):
         self.assertEqual(ex.chamadas[0], ["amixer", "-c", "Array", "sget", "PCM"])
 
 
+class TestMestreXvf(unittest.TestCase):
+    """18/11: o XVF tem um segundo controle de reprodução (PCM índice 1) que nasce em −20 dB e o ALSA restaura assim a
+    cada boot. Ele fica sempre em 0 dB; o volume da casa segue só no PCM índice 0."""
+    def test_master_goes_to_0db(self):
+        ex = Exec()
+        self.assertTrue(placa.MixerXvf(executar=ex).fixar_mestre())
+        self.assertEqual(ex.chamadas, [["amixer", "-q", "-c", "Array", "cset", "name=PCM Playback Volume,index=1", "60"]])
+
+    def test_master_failure_is_false_not_raised(self):
+        def quebra(*a, **k):
+            raise OSError("sem amixer")
+        self.assertFalse(placa.MixerXvf(executar=quebra).fixar_mestre())
+
+
 class TestMudoXvf(unittest.TestCase):
     def test_mudo_xvf_writes_pin(self):
         link = FakeLink()

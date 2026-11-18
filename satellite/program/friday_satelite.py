@@ -80,6 +80,8 @@ class Satelite:
             if self.xvf is not None else None
         camada = placa.montar(self.placa, link=self.xvf)
         self.mixer = camada["mixer"]
+        if self.placa == "xvf3800" and not self.mixer.fixar_mestre():  # 18/11: PCM índice 1 em 0 dB a cada partida
+            print(json.dumps({"xvf_mestre": "falhou"}), flush=True)
         self._botao_cls = camada["botao"]  # None no XVF: sem botão nem teclas (volume só por voz e pelo HA)
         self.anel = ring.make_ring(lambda: Anel(detector=self.det_botao), posicao_fn=self.mixer.escrever,
                                    xvf_factory=(lambda: self.xvf) if self.xvf is not None else None,
