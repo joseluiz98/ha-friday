@@ -1,4 +1,5 @@
 """Produção (spec 2026-10-18 §4.11): rotas em inglês e endereço da VM. python3 -m unittest -q test_producao_satelite"""
+import shutil
 import os, unittest
 import configuracao as cfgmod
 AQUI = os.path.dirname(os.path.abspath(__file__))
@@ -13,6 +14,7 @@ class TestProducaoSatelite(unittest.TestCase):
         # programa morria em loop ("endereco_friday ausente") em todo satélite novo. Visto no MK1 com a imagem v0.3.4.
         import json, tempfile
         d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
         casa, conf = os.path.join(d, "house.json"), os.path.join(d, "config.json")
         json.dump({"endereco_friday": "https://vm.example:7443"}, open(casa, "w"))
         json.dump({"endereco_friday": None, "senha_porta_local": "x", "comodo": None}, open(conf, "w"))
