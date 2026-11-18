@@ -16,6 +16,35 @@ class TestCaptura(unittest.TestCase):
         self.assertNotIn(0x05, hardware.BITS_DO_ANEL.values())
 
 
+class TestCapturaDupla(unittest.TestCase):
+    """18/11 (dono, opção b): no XVF a conversa vai pelo canal 0 (supressão do eco residual); palavra, VAD e gravações
+    seguem no canal 1."""
+    def test_separa_os_canais(self):
+        import struct
+        quadro = struct.pack("<6h", 1, -1, 2, -2, 3, -3)  # (c0, c1) intercalados
+        c0, c1 = hardware.separar_canais(quadro)
+        self.assertEqual(struct.unpack("<3h", c0), (1, 2, 3))
+        self.assertEqual(struct.unpack("<3h", c1), (-1, -2, -3))
+
+    def test_ler_devolve_o_canal_1_e_guarda_o_0(self):
+        import struct
+        with mock.patch.object(hardware.subprocess, "Popen") as P:
+            P.return_value.stdout.read.return_value = struct.pack("<4h", 10, 20, 11, 21)
+            c = hardware.CapturaDupla(chunk=4)
+            self.assertEqual(c.ler(), struct.pack("<2h", 20, 21))
+            self.assertEqual(c.conversa, struct.pack("<2h", 10, 11))
+            argv = P.call_args[0][0]
+            self.assertIn("xvf_dois", argv)
+            self.assertEqual(argv[argv.index("-c") + 1], "2")
+            P.return_value.stdout.read.assert_called_with(8)  # o dobro: dois canais
+
+    def test_eof_levanta(self):
+        with mock.patch.object(hardware.subprocess, "Popen") as P:
+            P.return_value.stdout.read.return_value = b"\x00" * 6
+            with self.assertRaises(EOFError):
+                hardware.CapturaDupla(chunk=4).ler()
+
+
 class TestAltoFalanteSobDemanda(unittest.TestCase):
     """06/10: com o aplay sempre aberto (tocando silêncio) a nota da palavra "Friday" caiu (A/B: 9/10 com
     notas ~1,0 contra 8/10 com quatro notas na beira). O alto-falante abre só com som e fecha depois."""
