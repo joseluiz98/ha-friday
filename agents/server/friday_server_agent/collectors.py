@@ -91,11 +91,17 @@ def status_metrics(status: dict) -> dict:
     lucid = status.get("lucid") or {}
     views = status.get("memory_views") or {}
     lucid_attrs = {k: lucid[k] for k in LUCID_ATTRS if k in lucid} or None
+    watcher = status.get("memory_watcher")
+    if not isinstance(watcher, dict) or not isinstance(watcher.get("degraded"), bool):
+        watcher = None  # no proof (log unreadable): unknown, never a false "ok"
     return {
         "brain_ready": bool(status.get("ready")) if "ready" in status else None,
         "brain_last_dream": status.get("last_dream"),
         "brain_restarted_in_process": status.get("restarted_in_process"),
         "brain_version": status.get("openclaw_version"),
+        "brain_memory_watcher_degraded": watcher["degraded"] if watcher else None,
+        "brain_memory_watcher_degraded_attributes": (
+            {"since": watcher.get("since"), "reason": watcher.get("reason")} if watcher else None),
         "lucid_last_run": lucid.get("finished_at"),
         "lucid_last_run_attributes": lucid_attrs,
         "memory_views_mode": views.get("mode"),
@@ -187,13 +193,6 @@ def backup_storage_metrics(storage: dict) -> dict:
             if isinstance(avail, (int, float)) else None}
 
 
-def memory_index_metrics(stamp_mtime: float | None) -> dict:
-    """stamp_mtime = mtime of the file the memory-index unit touches after a successful run (ExecStartPost)."""
-    when = (datetime.fromtimestamp(int(stamp_mtime), timezone.utc).isoformat()
-            if stamp_mtime is not None else None)
-    return {"memory_index_last_success": when}
-
-
 def stamp_iso(mtime: float | None) -> str | None:
     return datetime.fromtimestamp(int(mtime), timezone.utc).isoformat() if mtime is not None else None
 
@@ -222,10 +221,11 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("brain_ready", "Brain ready", platform="binary_sensor", device_class="connectivity", **diag),
         s("brain_last_dream", "Brain last dream", device_class="timestamp", **diag),
         s("brain_restarted_in_process", "Brain restarted in process", platform="binary_sensor", **diag),
+        s("brain_memory_watcher_degraded", "Brain memory watcher degraded", platform="binary_sensor",
+          device_class="problem", **diag),
         s("brain_version", "Brain version", **diag),
         s("lucid_last_run", "Lucid Dreaming last run", device_class="timestamp", **diag),
         s("memory_views_mode", "Memory views mode", **diag),
-        s("memory_index_last_success", "Memory index last success", device_class="timestamp", **diag),
         s("wakeword_sync_last_ok", "Wake word recordings sync last OK", device_class="timestamp", **diag),
         s("wakeword_cache_last_ok", "Wake word feature cache last OK", device_class="timestamp", **diag),
         s("conversation_open", "Conversation open", platform="binary_sensor", **diag),

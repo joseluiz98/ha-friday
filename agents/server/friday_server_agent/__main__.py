@@ -48,10 +48,8 @@ OPENCLAW_JSON = os.environ.get("FRIDAY_OPENCLAW_JSON", "/srv/friday/home/.opencl
 ENV_FILE = "/srv/friday/friday.env"
 PVE = os.environ.get("FRIDAY_PVE_API", "")  # e.g. https://<proxmox>:8006/api2/json/nodes/<node>; from /srv/friday/state/local.env
 PVE_BACKUP_STORAGE = os.environ.get("FRIDAY_PVE_BACKUP_STORAGE", "backup")  # the vzdump job's target storage
-# Touched by friday-memory-index.service (ExecStartPost) after each successful reindex.
 # Written by the bot (activity.py): open sessions, brain turns in flight, heartbeat (minor 13 of 19/10).
 ACTIVITY_FILE = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")
-MEMORY_INDEX_STAMP = os.environ.get("FRIDAY_MEMORY_INDEX_STAMP", "/srv/friday/state/memory-index.ok")
 # 09/11/2026: nightly wake-word pipeline. The Pi writes .sync_ok only after a fully OK upload; featcache_nightly.sh
 # touches the cache stamp only after caching every pending day. The office satellite id comes from local.env.
 WAKEWORD_SYNC_STAMP = os.environ.get(
@@ -91,14 +89,9 @@ CPU = CpuUsage()  # one per process: the first sample after a start has no delta
 
 def sample_vm() -> dict:
     v = os.statvfs("/")
-    try:
-        stamp = os.stat(MEMORY_INDEX_STAMP).st_mtime
-    except OSError:
-        stamp = None
     return {**c.vm_metrics(_proc("meminfo"), _proc("loadavg"),
                            (v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail),
                            _proc("uptime"), os.cpu_count() or 1, cpu_pct=CPU.update(_proc("stat"))),
-            **c.memory_index_metrics(stamp),
             **c.wakeword_pipeline_metrics(_mtime(WAKEWORD_SYNC_STAMP), _mtime(WAKEWORD_CACHE_STAMP))}
 
 
