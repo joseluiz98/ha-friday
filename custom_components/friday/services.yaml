@@ -36,3 +36,10 @@ set_setting:
       required: true
       selector:
         object:
+build_image:
+  fields:
+    version:
+      required: false
+      example: "0.3.8"
+      selector:
+        text:

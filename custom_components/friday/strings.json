@@ -227,6 +227,16 @@
           "description": "The new value (number, on/off or text)."
         }
       }
+    },
+    "build_image": {
+      "name": "Build provisioning image",
+      "description": "Builds the satellite provisioning image on the server. Without a version it builds the stable release, like the button; with one (0.3.8 or v0.3.8) it builds that release, alpha included. The build takes about half an hour and its outcome appears in the image sensor.",
+      "fields": {
+        "version": {
+          "name": "Version",
+          "description": "Release to build, with or without the v (for example 0.3.8). Empty = the stable release."
+        }
+      }
     }
   },
   "selector": {

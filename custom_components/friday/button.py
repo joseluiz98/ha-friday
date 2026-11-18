@@ -16,6 +16,7 @@ from .proxmox import log_action, proxmox_configured, reboot_vm
 
 RESTART_FRIDAY = "restart_friday"
 RESTART_PROGRAM = "restart_program"  # hidden satellite button
+IMAGE_BUILD = "image_build"  # server button: calls friday.build_image
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -53,6 +54,15 @@ class FridayButton(FridayEntity, ButtonEntity):
         self._attr_device_class = descriptor.device_class
 
     async def async_press(self) -> None:
+        if self.descriptor.key == IMAGE_BUILD:  # the action is the one path: the button is the action without a version
+            try:
+                await self.hass.services.async_call(DOMAIN, "build_image", {}, blocking=True)
+            except HomeAssistantError as err:
+                log_action(self.hass, self.name or self.descriptor.key,
+                           f"{self.descriptor.name} failed: {err}", self.entity_id)
+                raise
+            log_action(self.hass, self.descriptor.name, f"{self.descriptor.name} pressed", self.entity_id)
+            return
         try:
             res = await self._connection.send("press", key=self.descriptor.key)
         except HomeAssistantError as err:
