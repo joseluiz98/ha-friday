@@ -1,4 +1,5 @@
 """cd /config/tools/satelite/imagem && python3 -m unittest -q tests.test_make_manifest"""
+import shutil
 import hashlib
 import json
 import lzma
@@ -18,6 +19,7 @@ RAW = b"raw disk image bytes " * 5000
 class TestManifest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
         self.xz = os.path.join(self.d, "friday-satellite-20261105.img.xz")
         with lzma.open(self.xz, "wb") as f:
             f.write(RAW)

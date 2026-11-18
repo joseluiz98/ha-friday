@@ -1,4 +1,5 @@
 """Testes do despacho de comandos: cd /homeassistant/tools/satelite/programa && python3 -m unittest test_comandos -v"""
+import shutil
 import unittest
 import comandos
 from timers import Timers
@@ -183,6 +184,7 @@ class TestProvisionamento(unittest.TestCase):
     def setUp(self):
         import os, tempfile
         self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
         os.makedirs(os.path.join(self.d, "onboarding"))
         for k in ("setup_mode", "digit_1"):
             open(os.path.join(self.d, "onboarding", k + ".wav"), "wb").write(b"x")
