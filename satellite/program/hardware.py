@@ -1,6 +1,6 @@
 """Acesso ao Jabra Speak 410 (spec §2.1). Saída SEMPRE pelo default a 48 kHz (/etc/asound.conf); captura
 16 kHz mono. O anel usa o relatório HID 3; o bit 0x05 corta o microfone e é proibido aqui (D4)."""
-import glob, os, queue, re, struct, subprocess, threading, time, wave
+import array, glob, os, queue, re, struct, subprocess, threading, time, wave
 
 # nao_perturbe 0x41 = 3 verdes piscando sem toque (Task 3, 08/10). NUNCA 0x40 sem o 01: toca a campainha.
 # alarme (spec 2026-10-12 §2) = 0x10, o mesmo verde piscando de "ouvindo": é o único padrão visível SEM o bit 0, e o
@@ -23,6 +23,33 @@ class Captura:
         if len(b) < self.chunk:
             raise EOFError("captura do Jabra terminou (desconectado?)")
         return b
+
+    def fechar(self):
+        self._p.terminate()
+
+
+def separar_canais(pcm: bytes) -> tuple:
+    """S16_LE estéreo intercalado -> (canal 0, canal 1), cada um mono."""
+    a = array.array("h")
+    a.frombytes(pcm)
+    return a[0::2].tobytes(), a[1::2].tobytes()
+
+
+class CapturaDupla:
+    """XVF3800 (18/11, dono, opção b): os dois canais do chip a 16 kHz numa leitura só (PCM `xvf_dois` do asound).
+    `ler()` devolve o canal 1 (reconhecimento: linear, o de sempre para palavra, VAD e gravações); `conversa` guarda o
+    canal 0 do mesmo quadro (conferência: AEC + supressão do eco residual + AGC), o que vai ao Gemini na conversa."""
+    def __init__(self, chunk=2560, dispositivo="xvf_dois"):
+        self.chunk, self.conversa = chunk, b""
+        self._p = subprocess.Popen(["arecord", "-q", "-D", dispositivo, "-f", "S16_LE", "-r", "16000", "-c", "2",
+                                    "-t", "raw"], stdout=subprocess.PIPE)
+
+    def ler(self) -> bytes:
+        b = self._p.stdout.read(self.chunk * 2)
+        if len(b) < self.chunk * 2:
+            raise EOFError("captura do XVF3800 terminou (desconectado?)")
+        self.conversa, asr = separar_canais(b)
+        return asr
 
     def fechar(self):
         self._p.terminate()

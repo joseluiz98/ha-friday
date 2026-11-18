@@ -25,6 +25,16 @@ def test_xvf_conf_uses_channel_1_and_speexrate():
     assert text.count("ttable.0.0 0.5") == 1 and text.count("ttable.1.1 0.5") == 1
 
 
+def test_xvf_conf_offers_both_channels_for_the_conversation():
+    """18/11 (owner, option b): the program reads channel 0 (conversation) and channel 1 (wake word) in one capture."""
+    import re
+    text = (AUDIO / "xvf3800.conf").read_text(encoding="utf-8")
+    block = re.search(r"pcm\.xvf_dois \{(.*?)\n\}", text, re.S)
+    assert block, "xvf3800.conf lacks pcm.xvf_dois"
+    body = block.group(1)
+    assert "type plug" in body and 'pcm "xvf_in"' in body and "channels 2" in body and "ttable" not in body
+
+
 def test_xvf_conf_controls_live_on_the_xvf_card():
     text = (AUDIO / "xvf3800.conf").read_text(encoding="utf-8")
     assert "card Array" in text and "card USB" not in text

@@ -1,5 +1,6 @@
-"""Volume de fábrica de um Mark novo: 65%, definido pelo dono no teste do MK2 (06/11); no XVF3800, 100% (dono, 18/11:
-o PCM dele só vai até 0 dB, e em 65% = -20 dB o código do pareamento não se ouvia no kit 2.1). Sem isto, a primeira fala sai no
+"""Volume de fábrica de um Mark novo: 65%, definido pelo dono no teste do MK2 (06/11); no XVF3800, 75% (dono, 18/11: os
+100% foram decididos antes de o segundo controle da placa, o PCM índice 1, passar a ficar em 0 dB; com ele a saída
+ganhou 20 dB e 75% basta para ouvir o código do pareamento). Sem isto, a primeira fala sai no
 nível que o aparelho guardou, e o "oi" dela pode passar sem ser ouvido. Só roda enquanto `volume` da config é None.
 
 Três caminhos, nesta ordem: Jabra (posição 0–11 do PCM, conferido); XVF3800 (tenta PCM; o nome real do controle se
@@ -9,7 +10,7 @@ import re, subprocess
 from volume import posicao_de_percentual
 
 PADRAO_PCT = 65
-PADRAO_XVF_PCT = 100
+PADRAO_XVF_PCT = 75
 PREFERIDOS = ("PCM", "Master", "Speaker", "Headphone")
 
 
