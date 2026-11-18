@@ -15,7 +15,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from friday_agent_core.ota.channels import Release
@@ -96,7 +96,10 @@ class GitHubWatcher:
                 recheck = prev is not None and prev.release.ci == "red" and \
                     self._clock() - prev.release.published_at < RED_RECHECK_S
                 if not full and prev is not None and prev.release.ci in _FINAL and not recheck:
-                    out[tag] = prev
+                    # the CI is final, but the pre-release flag is not: a promotion made on GitHub must be seen
+                    # (17/11: v0.3.8 promoted by hand stayed pre-release here and the image built v0.3.5 again)
+                    out[tag] = replace(prev, release=replace(prev.release, prerelease=bool(r.get("prerelease"))),
+                                       notes=r.get("body") or prev.notes, url=r.get("html_url") or prev.url)
                     continue
                 q = urllib.parse.quote(tag, safe="")
                 sha = self._get(f"commits/{q}", "commit")["sha"]
