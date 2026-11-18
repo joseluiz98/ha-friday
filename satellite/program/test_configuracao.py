@@ -218,7 +218,11 @@ class TestPalavrasExtras(unittest.TestCase):
 
     def test_padroes_palavras(self):
         self.assertEqual(c.PADROES["modo_friday"], "ativa")
-        self.assertEqual(c.PADROES["palavras_extras"], [])
+        # 18/11 (dono): satélite novo nasce com as duas palavras ativas; a Sexta-feira sem verificador (só existe
+        # depois do cadastro de voz) e com a paciência de 2 quadros do MK1
+        self.assertEqual(c.PADROES["palavras_extras"], [{"nome": "sexta_feira", "arquivo": "/home/jose/modelos/sexta_feira.onnx",
+                                                         "limiar": 0.5, "modo": "ativa", "paciencia": 2}])
+        self.assertEqual(c.validar_palavras_extras(c.PADROES["palavras_extras"]), c.PADROES["palavras_extras"])
 
     def test_extras_valida_ok(self):
         r = c.validar_palavras_extras([dict(self.EXTRA, limiar=1 - 0.5)])

@@ -53,7 +53,9 @@ PADROES = {
     "speech_max_s": 15,  # R13: teto de fala contínua (s) antes de a conversa fechar por `fala_longa`
     # spec 2026-10-24 (wakeword-retrain): palavras configuráveis. `modo_friday` e o `modo` de cada extra:
     # ativa (acorda) | sombra (só registra) | desligada (carregada, mas não ouvida). Config antiga = como hoje.
-    "modo_friday": "ativa", "palavras_extras": [],
+    "modo_friday": "ativa", "palavras_extras": [  # 18/11 (dono): as duas palavras ativas de fábrica; sem verificador até o cadastro de voz
+        {"nome": "sexta_feira", "arquivo": "/home/jose/modelos/sexta_feira.onnx", "limiar": 0.5, "modo": "ativa",
+         "paciencia": 2}],
     # 02/11/2026: gravação contínua do ambiente até "AAAA-MM-DDTHH:MM" (hora local, até 24 h à frente); None = desligada
     "gravar_ambiente_ate": None,
     # 09/11/2026: janela diária "HH:MM-HH:MM" (hora local) guardada aqui; grava todo dia sem depender do HA nem da rede
