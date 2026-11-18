@@ -1,3 +1,4 @@
+import shutil
 import copy, json, os, tempfile, unittest
 
 import net_recovery as nr
@@ -107,6 +108,7 @@ class DecideTest(unittest.TestCase):
 class StateTest(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
         self.p = os.path.join(self.d, "sub", "state.json")
 
     def _write(self, text):

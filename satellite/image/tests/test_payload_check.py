@@ -1,4 +1,5 @@
 """cd /config/tools/satelite/imagem && python3 -m unittest -q tests.test_payload_check"""
+import shutil
 import json
 import os
 import sys
@@ -19,6 +20,7 @@ def put(root, rel, data=b"x"):
 class T(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
         self.reg = os.path.join(self.d, "satellites.json")
         json.dump({"sat-1": {"senha": "SUPER-SECRET-VALUE", "ip": "1.2.3.4"}}, open(self.reg, "w"))
         self.p = os.path.join(self.d, "payload")
@@ -71,6 +73,7 @@ if __name__ == "__main__":
 class TestProductionIds(unittest.TestCase):
     def test_reads_satellite_ids_from_private_list(self):
         d = tempfile.mkdtemp(); f = os.path.join(d, "s.txt")
+        self.addCleanup(shutil.rmtree, d, True)
         with open(f, "w") as fh:
             fh.write("# c\nperson_name|Zelda\ndevice_id|sat-0a1b2c\ndevice_id|ABC123\n")
         self.assertEqual(pc.production_ids(f), ("sat-0a1b2c",))

@@ -1,4 +1,5 @@
 """Image payload from the vault (plan 2026-11-09 Task 7): names map to payload paths; any vault error aborts."""
+import shutil
 import json
 import os
 import sys
@@ -25,6 +26,7 @@ class TestPayloadPath(unittest.TestCase):
 class TestFill(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
         self.root, self.man, self.out = (os.path.join(self.d, x) for x in ("vault", "manifest.json", "payload"))
         src = os.path.join(self.d, "src"); os.makedirs(src)
         for name, data in (("top.wav", b"top"), ("old.wav", b"old"), ("snap_top.wav", b"snap")):
@@ -56,6 +58,7 @@ if __name__ == "__main__":
 class TestRequired(unittest.TestCase):
     def test_missing_required_set_aborts_before_writing(self):
         d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
         root, man, out = (os.path.join(d, x) for x in ("vault", "manifest.json", "payload"))
         src = os.path.join(d, "a.wav")
         with open(src, "wb") as f:
