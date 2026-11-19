@@ -1,18 +1,18 @@
-import { causeText, rowsFromHistory, fmt } from "./activations-format.js";
+import { causeText, rowsFromHistory, fmt, activationEntities, satelliteLabel } from "./activations-format.js";
 
 const PERIODS = [[24, "24 h"], [72, "3 d"], [168, "7 d"]];
 const ALL_TYPES = ["conversation", "rejected", "shadow"];
 
 class FridayActivationsCard extends HTMLElement {
-  static getStubConfig(hass) {
-    const e = Object.keys(hass?.states ?? {}).find((k) => /^event\.friday_.*_activation$/.test(k));
-    return { entity: e ?? "event.friday_sat_activation" };
-  }
+  // No entity configured: the card discovers every satellite activation entity itself.
+  static getStubConfig() { return {}; }
 
   setConfig(config) {
-    if (!config.entity) throw new Error("entity is required");
     this._config = config;
-    this._entities = Array.isArray(config.entity) ? config.entity : [config.entity];
+    this._fixed = config.entity ? (Array.isArray(config.entity) ? config.entity : [config.entity]) : null;
+    this._entities = this._fixed ?? (this._hass ? activationEntities(this._hass.states) : []);
+    this._off = new Set();
+    this._sig = undefined;
     this._hours = config.hours ?? 24;
     this._types = new Set(config.types ?? ALL_TYPES);
     this._rows = [];
@@ -20,15 +20,18 @@ class FridayActivationsCard extends HTMLElement {
     this._notes = {};
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._render();
+    if (this._hass) this.hass = this._hass;
   }
 
   getCardSize() { return 6; }
 
   set hass(hass) {
-    const first = !this._hass;
     this._hass = hass;
-    const sig = (this._entities ?? []).map((e) => hass.states[e]?.last_changed).join("|");
-    if (first || sig !== this._sig) {
+    if (!this._config) return;
+    if (!this._fixed) this._entities = activationEntities(hass.states);
+    // The signature covers the entity list too, so a satellite appearing or going away reloads.
+    const sig = this._entities.map((e) => `${e}@${hass.states[e]?.last_changed}`).join("|");
+    if (sig !== this._sig) {
       this._sig = sig;
       this._load();
     }
@@ -37,6 +40,7 @@ class FridayActivationsCard extends HTMLElement {
   async _load() {
     const hass = this._hass;
     if (!hass || !this._entities) return;
+    if (!this._entities.length) { this._rows = []; this._error = ""; return this._render(); }
     const end = new Date();
     const start = new Date(end.getTime() - this._hours * 3600e3);
     try {
@@ -82,6 +86,11 @@ class FridayActivationsCard extends HTMLElement {
     this._render();
   }
 
+  _toggleSat(entityId) {
+    this._off.has(entityId) ? this._off.delete(entityId) : this._off.add(entityId);
+    this._render();
+  }
+
   _toggle(type) {
     this._types.has(type) ? this._types.delete(type) : this._types.add(type);
     this._render();
@@ -91,7 +100,13 @@ class FridayActivationsCard extends HTMLElement {
     if (!this.shadowRoot || !this._config) return;
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
     const cutoff = Date.now() - this._hours * 3600e3;
-    const rows = this._rows.filter((r) => this._types.has(r.type) && r.when.getTime() >= cutoff);
+    const rows = this._rows.filter((r) => this._types.has(r.type) && !this._off.has(r.entityId)
+      && r.when.getTime() >= cutoff);
+    const label = (entityId) => (this._hass ? satelliteLabel(this._hass, entityId) : entityId);
+    const sats = this._entities.length > 1
+      ? `<div class="bar">${this._entities.map((e) =>
+        `<button class="chip ${this._off.has(e) ? "" : "on"}" data-sat="${esc(e)}">${esc(label(e))}</button>`).join("")}</div>`
+      : "";
     const chips = ALL_TYPES.map((t) =>
       `<button class="chip ${this._types.has(t) ? "on" : ""}" data-type="${t}">${t}</button>`).join("");
     const periods = PERIODS.map(([h, l]) =>
@@ -105,6 +120,7 @@ class FridayActivationsCard extends HTMLElement {
       const play = r.recording
         ? `<button class="play" data-key="${esc(key)}" data-entity="${esc(r.entityId)}" data-rec="${esc(r.recording)}">&#9654;</button>` : "";
       return `<div class="row"><span class="t">${r.when.toLocaleTimeString([], { hour12: false })}</span>
+        <span class="s">${esc(label(r.entityId))}</span>
         <span class="w">${esc(r.word ?? "—")}</span><span class="b ${esc(r.type)}">${esc(r.type)}</span>
         <span class="c">${esc(causeText(r.cause))}</span>
         <span class="n">${fmt(r.score)} / ${fmt(r.threshold)}</span>
@@ -120,12 +136,14 @@ class FridayActivationsCard extends HTMLElement {
       .row{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;padding:6px 0;border-top:1px solid var(--divider-color);font-size:.9em}
       .t{font-variant-numeric:tabular-nums}.b{border-radius:4px;padding:0 6px;background:var(--secondary-background-color)}
       .b.rejected{color:var(--error-color)}.b.shadow{color:var(--secondary-text-color)}
+      .s{border-radius:4px;padding:0 6px;border:1px solid var(--divider-color)}
       .c,.x,.note{color:var(--secondary-text-color)}.note{color:var(--error-color)}
       .play{border:none;background:var(--primary-color);color:var(--text-primary-color,#fff);border-radius:50%;width:28px;height:28px;cursor:pointer}
       .empty,.err{padding:12px;color:var(--secondary-text-color)}.err{color:var(--error-color)}
-    </style><div class="card"><div class="bar">${chips}<span style="flex:1"></span>${periods}</div>
+    </style><div class="card">${sats}<div class="bar">${chips}<span style="flex:1"></span>${periods}</div>
       ${this._error ? `<div class="err">${esc(this._error)}</div>` : ""}${body}</div>`;
     this.shadowRoot.querySelectorAll("[data-type]").forEach((b) => b.addEventListener("click", () => this._toggle(b.dataset.type)));
+    this.shadowRoot.querySelectorAll("[data-sat]").forEach((b) => b.addEventListener("click", () => this._toggleSat(b.dataset.sat)));
     this.shadowRoot.querySelectorAll("[data-hours]").forEach((b) => b.addEventListener("click", () => { this._hours = Number(b.dataset.hours); this._load(); }));
     this.shadowRoot.querySelectorAll(".play").forEach((b) => b.addEventListener("click", (e) => this._play(e)));
   }
