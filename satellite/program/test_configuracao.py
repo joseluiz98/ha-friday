@@ -3,6 +3,12 @@ import json, os, re, stat, tempfile, unittest
 import configuracao as c
 
 
+class TestPadroesGravacao(unittest.TestCase):
+    def test_gravacoes_ligadas_de_fabrica(self):  # 18/11: ativações e ambiente (08:00-22:00) por padrão
+        self.assertIs(c.PADROES["gravar_ativacoes"], True)
+        self.assertEqual(c.PADROES["gravar_ambiente_janela"], "08:00-22:00")
+
+
 class TestId(unittest.TestCase):
     def test_gera_uma_vez_e_reaproveita(self):
         with tempfile.TemporaryDirectory() as d:

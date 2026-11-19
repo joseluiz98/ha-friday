@@ -32,7 +32,7 @@ def main(origem, novo, cruas):
             por_sessao[nome] = "prova (nada)"
             continue
         assert not any(i["label"] == "neg" for i in itens), f"{nome} já tem negativos"
-        with wave.open(os.path.join(cruas, nome.split("__", 1)[1])) as w:
+        with wave.open(os.path.join(cruas, dr.strip_sat(nome).split("__", 1)[1])) as w:
             assert w.getframerate() == 16000 and w.getnchannels() == 1 and w.getsampwidth() == 2
             audio, dur = w.readframes(w.getnframes()), w.getnframes() / 16000
         amostras = array.array("h", audio)

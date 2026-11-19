@@ -558,3 +558,104 @@ async def test_device_area_change_updates_the_registry_room(hass, reg, notes):
     await hass.async_block_till_done()
     assert "sat-999999" not in json.loads(reg.read_text())
 
+
+
+# ---- the VM host key for the nightly upload (plan 2026-11-18 Task 3)
+HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostHostHostHostHostHostHostHostHostHost12"
+INFO_HOST = {**INFO, "sync_host": "vm.test", "sync_host_known": False}
+
+
+async def test_pairing_pins_the_vm_host_key_on_the_satellite(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    sat.responses.update({"provision_info": INFO_HOST, "set_sync_host_key": {}})
+    server.responses["register_sync_key"] = {"changed": True, "host_key": HOST_KEY}
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    assert sat.names()[:2] == ["provision_info", "set_sync_host_key"]
+    assert sat.calls[1][1] == {"host": "vm.test", "key": HOST_KEY}
+    assert set((await orch.steps_state()).values()) == {"done"}
+
+
+async def test_pairing_without_a_vm_host_key_still_finishes_the_step(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    sat.responses["provision_info"] = INFO_HOST
+    _, orch, _ = make(hass, sat, server)  # register_sync_key answers {} (a server without the key file)
+    await orch.run()
+    assert "set_sync_host_key" not in sat.names()
+    assert (await orch.steps_state())["sync_key"] == "done"
+
+
+async def test_pairing_an_old_image_tolerates_the_unknown_command(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    sat.responses.update({"provision_info": INFO_HOST, "set_sync_host_key": HomeAssistantError("unknown_command")})
+    server.responses["register_sync_key"] = {"changed": True, "host_key": HOST_KEY}
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    assert sat.names().count("set_sync_host_key") == 1
+    assert (await orch.steps_state())["sync_key"] == "done"
+
+
+async def test_pairing_fails_the_step_when_the_satellite_refuses_the_key(hass, reg, notes):
+    sat, server = good_sat(), good_server()
+    sat.responses.update({"provision_info": INFO_HOST, "set_sync_host_key": HomeAssistantError("invalid_key")})
+    server.responses["register_sync_key"] = {"changed": True, "host_key": HOST_KEY}
+    _, orch, _ = make(hass, sat, server)
+    await orch.run()
+    assert sat.names().count("set_sync_host_key") == pv.ATTEMPTS
+    assert (await orch.steps_state())["sync_key"] == "failed"
+
+
+def _paired(hass, known, provisioned=True):
+    sat, server = good_sat(), good_server()
+    sat.responses.update({"provision_info": {**INFO_HOST, "sync_host_known": bool(known)}, "set_sync_host_key": {}})
+    server.responses["sync_host_key"] = {"host_key": HOST_KEY}
+    sat.state = {} if known is None else {"sync_host_known": known}
+    server.state = {}
+    entry, orch, _ = make(hass, sat, server, provisioned=provisioned)
+    return entry, orch, sat, server
+
+
+async def test_paired_satellite_without_the_host_key_gets_it_without_redoing_steps(hass, notes):
+    from custom_components.friday import _pin_missing_sync_host_key
+    entry, orch, sat, server = _paired(hass, known=False)
+    await orch._save_step("sync_key", "done")
+    _pin_missing_sync_host_key(hass, entry, sat)
+    await hass.async_block_till_done()
+    assert sat.names() == ["provision_info", "set_sync_host_key"]
+    assert sat.calls[1][1] == {"host": "vm.test", "key": HOST_KEY}
+    assert server.names() == ["sync_host_key"]  # read-only: authorized_keys is not rewritten
+    assert said(sat) == [] and (await orch.steps_state()) == {"sync_key": "done"}
+
+
+@pytest.mark.parametrize("known", [True, None])  # pinned already / an agent too old to report it
+async def test_satellite_with_the_host_key_or_too_old_is_left_alone(hass, notes, known):
+    from custom_components.friday import _pin_missing_sync_host_key
+    entry, _, sat, server = _paired(hass, known=known)
+    _pin_missing_sync_host_key(hass, entry, sat)
+    await hass.async_block_till_done()
+    assert sat.names() == [] and server.names() == []
+
+
+async def test_host_key_catch_up_waits_for_the_server(hass, notes):
+    from custom_components.friday import _pin_missing_sync_host_key
+    entry, _, sat, server = _paired(hass, known=False)
+    server.connected = False
+    _pin_missing_sync_host_key(hass, entry, sat)
+    await hass.async_block_till_done()
+    assert sat.names() == [] and server.names() == []
+    server.connected = True  # the server joins: tried again
+    _pin_missing_sync_host_key(hass, entry, sat)
+    await hass.async_block_till_done()
+    assert sat.names() == ["provision_info", "set_sync_host_key"]
+
+
+async def test_host_key_catch_up_failure_is_retried_on_the_next_connect(hass, notes):
+    from custom_components.friday import _pin_missing_sync_host_key
+    entry, _, sat, server = _paired(hass, known=False)
+    server.responses["sync_host_key"] = [HomeAssistantError("timeout"), {"host_key": HOST_KEY}]
+    _pin_missing_sync_host_key(hass, entry, sat)
+    await hass.async_block_till_done()
+    assert "set_sync_host_key" not in sat.names()
+    _pin_missing_sync_host_key(hass, entry, sat)
+    await hass.async_block_till_done()
+    assert sat.names().count("set_sync_host_key") == 1

@@ -369,48 +369,98 @@ def split(items, eps, model, seed, frac=0.2):
     return lado
 
 
-def prev_sides(manifests):
-    """nome do arquivo -> lado dele nos ciclos anteriores (26/10). Arquivo que já foi prova em algum ciclo continua prova."""
+SAT_ID = re.compile(r"sat-[0-9a-f]{6}")
+_SAT_PREFIX = re.compile(r"^(sat-[0-9a-f]{6})__")
+
+
+def clip_sat(name, office=None):
+    """Satellite of a clip (or item id): its `<sat_id>__` prefix (18/11/2026); a legacy name without it is `office`'s."""
+    m = _SAT_PREFIX.match(name)
+    return m.group(1) if m else office
+
+
+def strip_sat(name) -> str:
+    """The name without the `<sat_id>__` prefix (the `<src>__<file>` of the harvest before 18/11/2026)."""
+    return _SAT_PREFIX.sub("", name, count=1)
+
+
+def clip_key(name: str, office: str) -> str:
+    """Identity of a clip (or item id) across cycles (18/11/2026): `<sat>__X` -> `<sat>__X`; a legacy `X` (harvested
+    before satellite ids, always from the office satellite) -> `<office>__X`. Every comparison of clips between cycles
+    goes through here: a legacy holdout clip that comes back with the prefix must stay in the holdout. Without a valid
+    `office`, a legacy name cannot be placed: ValueError (never guess)."""
+    if _SAT_PREFIX.match(name):
+        return name
+    if not isinstance(office, str) or not SAT_ID.fullmatch(office):
+        raise ValueError(f"legacy clip name {name!r} needs the office satellite id (FRIDAY_SAT_OFFICE), got {office!r}")
+    return f"{office}__{name}"
+
+
+def office_id(env=None):
+    """FRIDAY_SAT_OFFICE from the environment, else from the local config file ($FRIDAY_LOCAL_CONFIG, default
+    /srv/friday/state/local.env). None if neither has it."""
+    import os
+    env = os.environ if env is None else env
+    v = (env.get("FRIDAY_SAT_OFFICE") or "").strip()
+    if not v:
+        try:
+            with open(env.get("FRIDAY_LOCAL_CONFIG") or "/srv/friday/state/local.env", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("FRIDAY_SAT_OFFICE="):
+                        v = line.split("=", 1)[1].strip().strip("\"'")
+        except OSError:
+            pass
+    return v or None
+
+
+def prev_sides(manifests, *, office):
+    """clip_key do arquivo -> lado dele nos ciclos anteriores (26/10). Arquivo que já foi prova em algum ciclo continua prova."""
     out = {}
     for m in manifests:
         for it in m:
             if it.get("split") in ("train", "holdout"):
-                out[it["name"]] = "holdout" if "holdout" in (it["split"], out.get(it["name"])) else it["split"]
+                k = clip_key(it["name"], office)
+                out[k] = "holdout" if "holdout" in (it["split"], out.get(k)) else it["split"]
     return out
 
 
-def prev_item_sides(manifests):
-    """id do item -> lado dele nos ciclos anteriores (27/10). Item que já foi prova em algum ciclo continua prova."""
+def prev_item_sides(manifests, *, office):
+    """clip_key do id do item -> lado dele nos ciclos anteriores (27/10). Item que já foi prova em algum ciclo continua prova."""
     out = {}
     for m in manifests:
         for it in m:
             if it.get("id") and it.get("split") in ("train", "holdout"):
-                out[it["id"]] = "holdout" if "holdout" in (it["split"], out.get(it["id"])) else it["split"]
+                k = clip_key(it["id"], office)
+                out[k] = "holdout" if "holdout" in (it["split"], out.get(k)) else it["split"]
     return out
 
 
-def pin_split(lado, items, eps, anteriores, anteriores_itens=None):
+def pin_split(lado, items, eps, anteriores, anteriores_itens=None, *, office):
     """Os ciclos são cumulativos (26/10): o episódio que tem algum arquivo já usado num ciclo anterior herda o lado dele,
     e a prova vence (nada que foi prova vira treino). Só episódios inteiramente novos ficam com o sorteio de `split`.
-    Sem isto, cada material novo reembaralha o sorteio e a prova antiga vaza para o treino."""
+    Sem isto, cada material novo reembaralha o sorteio e a prova antiga vaza para o treino.
+    `anteriores`/`anteriores_itens` vêm de prev_sides/prev_item_sides (chaves por clip_key, 18/11/2026)."""
     ep_lado = {}
     for it in items:
-        s = anteriores.get(it["name"])
+        s = anteriores.get(clip_key(it["name"], office))
         if s:
             e = eps[it["id"]]
             ep_lado[e] = "holdout" if "holdout" in (s, ep_lado.get(e)) else s
     # 27/10: o item (mesmo arquivo, mesma janela) já visto herda o PRÓPRIO lado; o resto do episódio segue a regra acima
     ai = anteriores_itens or {}
-    return {it["id"]: ai.get(it["id"]) or ep_lado.get(eps[it["id"]], lado[it["id"]]) for it in items}
+    return {it["id"]: ai.get(clip_key(it["id"], office)) or ep_lado.get(eps[it["id"]], lado[it["id"]]) for it in items}
 
 
-def apply_exclusions(items, nomes):
+def apply_exclusions(items, nomes, *, office):
     """02/11: arquivos que o dono mandou deixar de fora (rulings.json → "excluidas", nome original do arquivo, sem o
     prefixo `<src>__`), p. ex. testes dele com a palavra em sombra que o Whisper não reconheceu (virariam negativos).
+    18/11/2026: o nome pode vir como `<sat_id>__<arquivo>`; sem prefixo, é do satélite do escritório (clip_key).
     O item fica sem rótulo (não sobe, não conta na prova). Devolve quantos itens foram afetados."""
-    alvo, n = set(nomes), 0
+    alvo, n = {clip_key(x, office) for x in nomes}, 0
     for it in items:
-        if it["name"].split("__", 1)[-1] in alvo and it["label"] is not None:
+        orig = strip_sat(it["name"]).split("__", 1)[-1]
+        sat = clip_sat(it["name"], office)
+        if f"{sat}__{orig}" in alvo and it["label"] is not None:
             it["label"], it["why"] = None, "excluída pelo dono"
             n += 1
     return n

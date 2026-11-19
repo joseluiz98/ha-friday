@@ -5,6 +5,8 @@ start_onboarding and the two-level factory reset. Every path and effect is injec
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import glob
 import hashlib
 import json
@@ -34,6 +36,12 @@ RESET_CONFIRM_S = 10  # the countdown the person sees after the spoken request t
 RESET_PHRASE_S = 9  # length of the phrase `reset_confirm_ha` (8.8 s): the countdown starts when it ends
 WIFI_HELPER = ["sudo", "-n", "/usr/local/sbin/friday-wifi-apply"]
 OWN_WIFI = re.compile(r"friday-wifi-[0-9]+")
+# The VM host key for the nightly upload: the same shape the server accepts for sync keys, and the blob must really be
+# an ed25519 key. Host = a hostname or an IP (no spaces, no leading dash: it lands in an ssh file).
+HOST_PUBKEY = re.compile(r"^(ssh-ed25519) ([A-Za-z0-9+/]{43,}={0,2})(?: \S+)?$")
+_ED25519_BLOB = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20"
+SYNC_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
+KNOWN_HOSTS = "known_hosts_satsync"
 
 
 async def run_capture(argv: list[str]) -> tuple[int, str]:
@@ -75,6 +83,19 @@ def wifi_profiles(listing: str) -> tuple[list[str], str | None]:
         elif original is None:
             original = parts[0]
     return own, original
+
+
+def _host_key(key) -> str | None:
+    m = HOST_PUBKEY.fullmatch(key.strip()) if isinstance(key, str) else None
+    if not m:
+        return None
+    try:
+        blob = base64.b64decode(m.group(2), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(blob) != len(_ED25519_BLOB) + 32 or not blob.startswith(_ED25519_BLOB):
+        return None
+    return f"{m.group(1)} {m.group(2)}"
 
 
 class BundleError(Exception):
@@ -200,7 +221,72 @@ class Provisioner:
             "versions": {"program": program_version(self.program_dir), "agent": cap.VERSION,
                          "release": self._release()},  # the OTA release tag (None on the old layout)
             "ota_credentials": bool(self._ota_credentials()),
+            "sync_host": self.sync_host(),
+            "sync_host_known": self.sync_host_known(),
             "ip": ip}}
+
+    # ---- the VM host key for the nightly upload
+    def sync_host(self) -> str | None:
+        """The host `sync_recordings.sh` connects to: the same source (endereco_friday of config.json, else of the
+        image's house.json)."""
+        for path in (self.config_path, os.path.join(self.etc_dir, "house.json")):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    url = json.load(f).get("endereco_friday")
+            except (OSError, ValueError, AttributeError):
+                url = None
+            if url:
+                try:
+                    host = urlparse(url).hostname
+                except (TypeError, ValueError):
+                    host = None
+                return host if host and SYNC_HOST.fullmatch(host) else None
+        return None
+
+    def sync_host_known(self) -> bool:
+        """True when known_hosts_satsync pins a key for the host the upload uses (an address change means False)."""
+        host = self.sync_host()
+        if not host:
+            return False
+        try:
+            with open(os.path.join(self.ssh_dir, KNOWN_HOSTS), encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            return False
+        for line in lines:
+            parts = line.split()
+            if len(parts) == 3 and parts[0] == host and _host_key(f"{parts[1]} {parts[2]}"):
+                return True
+        return False
+
+    async def set_sync_host_key(self, host, key) -> dict:
+        """Pins the VM host key (delivered by HA over the authenticated connection) for the upload. Anything invalid is
+        refused before the file is touched; the write is atomic, 0600."""
+        pinned = _host_key(key)
+        if pinned is None:
+            return {"ok": False, "error": "invalid_key"}
+        if not isinstance(host, str) or not SYNC_HOST.fullmatch(host):
+            return {"ok": False, "error": "invalid_host"}
+
+        def write() -> None:
+            os.makedirs(self.ssh_dir, mode=0o700, exist_ok=True)
+            path = os.path.join(self.ssh_dir, KNOWN_HOSTS)
+            tmp = f"{path}.tmp-{secrets.token_hex(3)}"
+            try:
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(f"{host} {pinned}\n")
+                os.replace(tmp, path)
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+
+        try:
+            await asyncio.to_thread(write)
+        except OSError as err:
+            LOG.error("set_sync_host_key failed: %s", type(err).__name__)
+            return {"ok": False, "error": "io"}
+        return {"ok": True}
 
     # ---- apply_bundle
     @staticmethod

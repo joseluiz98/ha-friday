@@ -4,7 +4,10 @@
 # Uso: ablation_eval.sh <dir_ablacao> v0 v1 ...
 H=/config/tools/satelite/wakeword-training; VM="$(cat /config/.friday/vm)"; B=${1:?dir}; shift
 C=/srv/wwt-featcache; P=/tmp/wwt-prova-c4
-S=amb20261103,amb20261104,amb20261105,conversa,nat_ambiente,nat_cv27,nat_xtts,nat_xttsneg,nat_xttsvar,sala,sessoes
+# os 3 dias de ambiente são do satélite do escritório: cache amb<AAAAMMDD>_<FRIDAY_SAT_OFFICE> desde 18/11/2026
+SAT=${FRIDAY_SAT_OFFICE:-$(ssh $VM "sudo sed -n 's/^FRIDAY_SAT_OFFICE=//p' /srv/friday/state/local.env" | tail -1 | tr -d "\"' ")}
+: "${SAT:?FRIDAY_SAT_OFFICE not found (env or the VM local.env)}"
+S=amb20261103_$SAT,amb20261104_$SAT,amb20261105_$SAT,conversa,nat_ambiente,nat_cv27,nat_xtts,nat_xttsneg,nat_xttsvar,sala,sessoes
 for v in "$@"; do
   until [ -s "$B/$v/models/ckpts/ckpts.json" ] || grep -q "FALHA" "$B/chain.log" 2>/dev/null; do sleep 120; done
   [ -s "$B/$v/models/ckpts/ckpts.json" ] || { echo "cadeia falhou antes de $v"; exit 1; }

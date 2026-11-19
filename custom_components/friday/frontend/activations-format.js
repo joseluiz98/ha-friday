@@ -10,6 +10,20 @@ export function fmt(x) {
   return x === null || x === undefined || Number.isNaN(Number(x)) ? "—" : Number(x).toFixed(2);
 }
 
+const ACTIVATION_RE = /^event\.friday_.*_activation$/;
+
+// Every satellite activation event entity in a hass.states map, sorted.
+export function activationEntities(states) {
+  return Object.keys(states ?? {}).filter((k) => ACTIVATION_RE.test(k)).sort();
+}
+
+// Human label of the satellite behind an entity: device name_by_user, else name, else the entity id.
+export function satelliteLabel(hass, entityId) {
+  const deviceId = hass?.entities?.[entityId]?.device_id;
+  const dev = deviceId ? hass?.devices?.[deviceId] : null;
+  return dev?.name_by_user || dev?.name || entityId;
+}
+
 const num = (v) => (typeof v === "number" ? v : null);
 
 // resp: compressed history response {entity_id: [{s, a, lu}]}; newest first.

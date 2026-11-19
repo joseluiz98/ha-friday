@@ -26,6 +26,7 @@ def dirs(tmp_path, monkeypatch):
     monkeypatch.setenv("FRIDAY_HAOS_CONFIG", str(cfg))
     monkeypatch.setenv("FRIDAY_BUNDLES_DIR", str(bundles))
     monkeypatch.setenv("FRIDAY_BUNDLE_HOST", "vm.test:8801")
+    monkeypatch.setenv("FRIDAY_SSH_HOST_KEY", str(tmp_path / "no_host_key.pub"))  # never the real /etc/ssh
     return data, cfg, bundles
 
 
@@ -80,6 +81,46 @@ def test_register_invalid_key(dirs, key):
         pv.register_sync_key("sat-abc123", key, chown_user=None)
     assert e.value.code == "invalid_key"
     assert not (data / ".ssh" / "authorized_keys").exists()
+
+
+HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostHostHostHostHostHostHostHostHostHost12"
+
+
+def _host_key_file(tmp_path, monkeypatch, text):
+    path = tmp_path / "ssh_host_ed25519_key.pub"
+    path.write_text(text)
+    monkeypatch.setenv("FRIDAY_SSH_HOST_KEY", str(path))
+
+
+def test_register_returns_the_vm_host_key_without_its_comment(dirs, tmp_path, monkeypatch):
+    _host_key_file(tmp_path, monkeypatch, HOST_KEY + " root@vm\n")
+    r = pv.register_sync_key("sat-abc123", KEY, chown_user=None)
+    assert r == {"ok": True, "changed": True, "host_key": HOST_KEY}
+    assert pv.register_sync_key("sat-abc123", KEY, chown_user=None) == {"ok": True, "changed": False,
+                                                                         "host_key": HOST_KEY}
+
+
+def test_register_without_a_host_key_file_still_succeeds_and_logs(dirs, caplog):
+    data, *_ = dirs
+    r = pv.register_sync_key("sat-abc123", KEY, chown_user=None)
+    assert r == {"ok": True, "changed": True}
+    assert len(_lines(data)) == 1
+    assert any(rec.levelname == "ERROR" and "host key" in rec.getMessage() for rec in caplog.records)
+
+
+def test_a_malformed_host_key_file_is_not_handed_out(dirs, tmp_path, monkeypatch):
+    _host_key_file(tmp_path, monkeypatch, "ssh-rsa AAAAB3NzaC1yc2E root@vm\n")
+    assert "host_key" not in pv.register_sync_key("sat-abc123", KEY, chown_user=None)
+    assert pv.read_host_key() is None
+
+
+async def test_handlers_hand_out_the_host_key(dirs, tmp_path, monkeypatch):
+    h = pv.make_handlers(pv.BundleStore())
+    assert await h["sync_host_key"]({}) == {"ok": False, "error": "no_host_key"}
+    _host_key_file(tmp_path, monkeypatch, HOST_KEY + "\n")
+    r = await h["register_sync_key"]({"sat_id": "sat-abc123", "pubkey": KEY})
+    assert r == {"ok": True, "data": {"changed": True, "host_key": HOST_KEY}}
+    assert await h["sync_host_key"]({}) == {"ok": True, "data": {"host_key": HOST_KEY}}
 
 
 VAULT_PY = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts", "vault.py")

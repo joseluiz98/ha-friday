@@ -4,24 +4,30 @@
 #   2. transcreve na VM com a imagem friday-asr (docker run --rm: só gasta CPU/RAM enquanto roda)
 #   3. repontua os mesmos WAVs na Pi com o modelo base (systemd-run com teto, nice 19)
 #   4. traz falas/eventos da Pi e imprime o relatório (report.py)
-# Uso: run.sh [--since AAAAMMDD] [--model /home/jose/modelos/friday.onnx] [--whisper small] [--out DIR]
+# Uso: run.sh [--since AAAAMMDD] [--sat <sat_id>] [--host <ip>] [--model /home/jose/modelos/friday.onnx] [--whisper small] [--out DIR]
+# --sat/--host (18/11/2026): satélite analisado (padrão FRIDAY_SAT_OFFICE) e a Pi dele (training/sat_target.sh: --host,
+# senão o "ip" em /share/friday/satellites.json, senão /config/.friday/mk1). Os nomes ficam como na Pi: o relatório
+# casa transcrição e repontuação pelo nome dentro da mesma rodada e não vira dataset; o satélite vai em $OUT/sat.
 # --model aceita um .onnx candidato já copiado para a Pi: compara o modelo novo nos mesmos áudios.
 # Saída (transcrições = texto de conversas da casa) fica em --out, por padrão /tmp (efêmero, fora do backup).
 set -euo pipefail
-PI="jose@$(cat /config/.friday/mk1)"; VM="$(cat /config/.friday/vm)"
-SINCE=00000000; MODEL=/home/jose/modelos/friday.onnx; WHISPER=small
+SINCE=00000000; MODEL=/home/jose/modelos/friday.onnx; WHISPER=small; SAT_ARG=; HOST_ARG=
 OUT=/tmp/wakeword-analysis/$(date +%Y%m%d_%H%M%S)
 while [ $# -gt 0 ]; do case "$1" in
   --since) SINCE=$2; shift 2;; --model) MODEL=$2; shift 2;; --whisper) WHISPER=$2; shift 2;;
+  --sat) SAT_ARG=$2; shift 2;; --host) HOST_ARG=$2; shift 2;;
   --out) OUT=$2; shift 2;; *) echo "opção desconhecida: $1" >&2; exit 2;; esac; done
 HERE=$(cd "$(dirname "$0")" && pwd)
-mkdir -p "$OUT"; chmod 700 "$OUT"
+. "$HERE/../training/sat_target.sh"
+sat_target "$SAT_ARG" "$HOST_ARG" || exit 2
+PI="jose@$PI_HOST"
+mkdir -p "$OUT"; chmod 700 "$OUT"; echo "$SAT" > "$OUT/sat"
 TMP=/tmp/wwa-$$
 
 LIST=$(ssh $PI "cd ~/gravacoes/ativacoes && ls contexto_*.wav 2>/dev/null" | awk -v s="$SINCE" 'substr($0,10,8) >= s')
 N=$(printf '%s\n' "$LIST" | grep -c . || true)
 [ "$N" -gt 0 ] || { echo "nenhum contexto_*.wav desde $SINCE"; exit 1; }
-echo "== $N contextos desde $SINCE; modelo $MODEL; whisper $WHISPER; saída $OUT"
+echo "== $SAT: $N contextos desde $SINCE; modelo $MODEL; whisper $WHISPER; saída $OUT"
 
 trap 'ssh $VM "sudo rm -rf $TMP" || true; ssh $PI "rm -rf $TMP" || true' EXIT
 echo "== 1/4 Pi -> VM"

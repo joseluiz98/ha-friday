@@ -260,7 +260,40 @@ class Orchestrator:
         server = self.server_connection()
         if server is None:
             raise StepError("server_offline")
-        await server.send("register_sync_key", timeout=20, sat_id=self.sat_id, pubkey=info.get("sync_pubkey", ""))
+        res = await server.send("register_sync_key", timeout=20, sat_id=self.sat_id, pubkey=info.get("sync_pubkey", ""))
+        await self._deliver_sync_host_key((res or {}).get("host_key"))
+
+    async def _deliver_sync_host_key(self, host_key) -> bool:
+        """The satellite pins the VM's SSH host key for its nightly upload (never accepted blindly on first contact).
+        The host is the one the satellite's upload script uses (`sync_host`, from its own endereco_friday), so the
+        satellite never has to guess. Returns True when pinned."""
+        if not host_key:
+            _LOGGER.error("Satellite %s: the server handed no SSH host key; its nightly upload stays blocked", self.sat_id)
+            return False
+        host = self.info.get("sync_host")
+        if not host:
+            _LOGGER.warning("Satellite %s reports no upload address: VM host key not pinned", self.sat_id)
+            return False
+        c = await self._wait_connected()
+        try:
+            await c.send("set_sync_host_key", timeout=15, host=host, key=host_key)
+        except HomeAssistantError as err:
+            if str(err) == "unknown_command":  # an image older than this: pinned on reconnect after its update
+                _LOGGER.info("Satellite %s cannot pin the VM host key yet (old agent)", self.sat_id)
+                return False
+            raise
+        return True
+
+    async def pin_sync_host_key(self) -> bool:
+        """An already paired satellite whose agent reports `sync_host_known: false`: the VM host key is read (read-only
+        on the server: authorized_keys is not rewritten) and pinned; no other step runs again."""
+        server = self.server_connection()
+        if server is None:
+            raise StepError("server_offline")
+        c = await self._wait_connected()
+        self.info = await c.send("provision_info", timeout=15)
+        res = await server.send("sync_host_key", timeout=20)
+        return await self._deliver_sync_host_key((res or {}).get("host_key"))
 
     async def _bundle(self, kind: str) -> dict:
         server = self.server_connection()

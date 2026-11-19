@@ -155,12 +155,16 @@
             "wakeword_sexta_feira_sensitivity": "Wake word sexta_feira threshold",
             "ducking_restore": "Ducking restore delay",
             "continuous_speech_limit": "Continuous sound cutoff",
-            "ota_channel": "Update channel"
+            "ota_channel": "Update channel",
+            "record_ambient": "Record ambient audio",
+            "record_activations": "Record activations"
           },
           "data_description": {
             "continuous_speech_limit": "0 = off",
             "ducking_restore": "How long until the music volume comes back",
-            "ota_channel": "alpha gets pre-releases first; stable gets them after the alpha soak"
+            "ota_channel": "alpha gets pre-releases first; stable gets them after the alpha soak",
+            "record_ambient": "Records from 08:00 to 22:00 to train the wake words; it goes to the VM overnight",
+            "record_activations": "Keeps about 3.5 s around each activation for analysis"
           }
         }
       },

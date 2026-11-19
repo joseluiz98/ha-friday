@@ -36,9 +36,10 @@ def candidatos(modelo, falsas=()):
                 yield "acervo_f", A + "/" + nome
             else:
                 print(f"ignorado (falsa rotulada inexistente ou inválida): {nome}", file=sys.stderr)
-        rot = json.load(open(H + "/vozes/rotulos.json"))
+        # 18/11/2026: o acervo de 15/10 (rotulos.json) só existe no satélite do escritório
+        rot = json.load(open(H + "/vozes/rotulos.json")) if os.path.exists(H + "/vozes/rotulos.json") else {}
         for chave, src in (("verdadeiras", "acervo_v"), ("falsas", "acervo_f")):
-            for nome in sorted(rot[chave]):
+            for nome in sorted(rot.get(chave, [])):
                 p = H + "/gravacoes/acervo_20261015/" + nome
                 if os.path.exists(p):
                     yield src, p
@@ -74,6 +75,10 @@ def candidatos(modelo, falsas=()):
 
 
 for src, p in candidatos(sys.argv[1] if len(sys.argv) > 1 else "", sys.argv[2:]):
+    # 18/11/2026: num satélite sem a sessão do dono (vozes/<dono>/atual), o arquivo não existe: fica fora
+    if not os.path.exists(p):
+        print(f"ignorado (ausente): {p}", file=sys.stderr)
+        continue
     # 26/10: ativacoes/20261025_180940.wav nasceu com 0 bytes e derrubou as notas e a transcrição; WAV sem áudio fica fora
     if os.path.getsize(p) <= 44:
         print(f"ignorado (vazio): {p}", file=sys.stderr)

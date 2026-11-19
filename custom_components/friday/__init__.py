@@ -90,6 +90,8 @@ RETIRED_KEYS = frozenset({
     "cpu_load", "memory_available", "memory_total", "vm_cpu_load_pct", "host_available_mb",
     # 18/11: the 04:15 reindex was retired (spec 2026-11-18-memory-watcher-health)
     "memory_index_last_success",
+    # 18/11: each satellite reports its own upload (spec 2026-11-18-per-satellite-recordings)
+    "wakeword_sync_last_ok",
 })
 _RETIRED_WAKEWORD = re.compile(r"^.+_wakeword_.+_(mode|sensitivity)$")
 
@@ -166,6 +168,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
         entry.async_on_unload(connection.add_availability_listener(_late_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_server_join_listener(hass, entry, connection)))
         entry.async_on_unload(connection.add_availability_listener(_ota_credentials_listener(hass, entry, connection)))
+        entry.async_on_unload(connection.add_availability_listener(_sync_host_key_listener(hass, entry, connection)))
         for unsub in self_update.watch(hass, connection):
             entry.async_on_unload(unsub)
         entry.async_on_unload(connection.add_log_listener(_log_listener(hass, connection)))
@@ -335,6 +338,52 @@ def _ota_credentials_listener(hass, entry, connection):
                 _issue_missing_ota_credentials(hass, entry, other)
         else:
             _issue_missing_ota_credentials(hass, entry, connection)
+
+    return _on_up
+
+
+def _pin_missing_sync_host_key(hass, entry, sat_conn) -> None:
+    """A satellite whose agent reports `sync_host_known: false` (paired before the key was delivered, or its upload
+    address changed) gets the VM's SSH host key, without redoing any provisioning step (plan 2026-11-18 Task 3). An
+    agent that does not report the key at all is too old to take it. Needs the server; tried again when it joins and
+    on every reconnect until the agent reports the key as known."""
+    hello = sat_conn.hello
+    if (hello is None or hello.device.get("kind") != DEVICE_KIND_SATELLITE or not sat_conn.connected
+            or sat_conn.state.get("sync_host_known") is not False):
+        return
+    sat_id = hello.device.get("id")
+    subentry_id = next((sid for sid, c in entry.runtime_data.items() if c is sat_conn), None)
+    if not sat_id or subentry_id is None:
+        return
+    if not any(c.connected and c.hello is not None and c.hello.device.get("kind") == DEVICE_KIND_SERVER
+               for c in entry.runtime_data.values()):
+        return
+    busy = hass.data.setdefault(DOMAIN, {}).setdefault("sync_host_key_busy", set())
+    if sat_id in busy:
+        return
+    busy.add(sat_id)
+
+    async def _pin() -> None:
+        try:
+            if await orchestrator_for(hass, subentry_id, sat_id).pin_sync_host_key():
+                _LOGGER.info("Satellite %s pinned the VM host key for its nightly upload", sat_id)
+        except (HomeAssistantError, provisioning.StepError) as err:
+            _LOGGER.warning("VM host key not delivered to satellite %s: %s", sat_id, err)
+        finally:
+            busy.discard(sat_id)
+
+    hass.async_create_background_task(_pin(), f"friday sync host key {sat_id}")
+
+
+def _sync_host_key_listener(hass, entry, connection):
+    def _on_up(up: bool) -> None:
+        if not up or connection.hello is None:
+            return
+        if connection.hello.device.get("kind") == DEVICE_KIND_SERVER:
+            for other in list(entry.runtime_data.values()):
+                _pin_missing_sync_host_key(hass, entry, other)
+        else:
+            _pin_missing_sync_host_key(hass, entry, connection)
 
     return _on_up
 

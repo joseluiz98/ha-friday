@@ -22,6 +22,7 @@ FOLLOW_UP_DEFAULT = 5
 INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window", "continuous_speech_limit", "xvf_sys_delay"}
 AUDIO_BOARD_FILE = "/etc/friday-satelite/audio_board"
 XVF_DELAY_DEFAULT = 12  # AUDIO_MGR_SYS_DELAY de fábrica do XVF3800
+AMBIENT_WINDOW = "08:00-22:00"  # the factory ambient recording window; a custom window is kept as it is
 MODELS = {"xvf3800": "Raspberry Pi 3 + XVF3800", "jabra": "Raspberry Pi 3 + Jabra Speak 410", "none": "Raspberry Pi 3"}
 MODES = {"ativa": "active", "sombra": "shadow", "desligada": "off"}
 MODES_BACK = {v: k for k, v in MODES.items()}
@@ -100,6 +101,12 @@ def controls_from_config(cfg: dict, wakewords: list[dict], board: str | None = N
         _d("reset_home", "button", "Forget home", category=c, icon="mdi:home-remove"),
         # 15/11: every ring state in a row (~2.5 min), only while idle
         _d("ring_preview", "button", "LED ring preview", category="diagnostic", icon="mdi:led-strip-variant"),
+        # 18/11: per-satellite recordings; Advanced step only (hidden: no entity). The sync sensor is the proof
+        # the recordings reach the VM (mtime of the local stamp the sync script writes after a whole upload)
+        _d("record_ambient", "switch", "Record ambient audio", category=c, icon="mdi:waveform", hidden=True),
+        _d("record_activations", "switch", "Record activations", category=c, icon="mdi:record-rec", hidden=True),
+        _d("recordings_sync_last_ok", "sensor", "Recordings sync last OK", device_class="timestamp",
+           category="diagnostic"),
     ]
     if board == "xvf3800":  # settings of the XVF3800 only; the Jabra satellites never see them
         out += [
@@ -173,8 +180,10 @@ class Mapper:
         never the last value shown as if it were live)."""
         return {"program_state": "off", **{k: None for k in self.program_keys if k != "program_state"}}
 
-    def state(self, cfg: dict | None, wakewords: list[dict], status: dict | None) -> dict:
-        """Protocol state from the program's config; None cfg = program down."""
+    def state(self, cfg: dict | None, wakewords: list[dict], status: dict | None,
+              sync_ok_mtime: float | None = None) -> dict:
+        """Protocol state from the program's config; None cfg = program down.
+        `sync_ok_mtime`: mtime of the local recordings sync stamp (None = no stamp yet)."""
         if cfg is None:
             return self.down_state()
         duck = cfg.get("music_duck_percent")
@@ -208,6 +217,15 @@ class Mapper:
             "ducking_restore": cfg.get("music_restore_s"),
             "program_state": "idle",
         }
+        ambient = bool(cfg.get("gravar_ambiente_janela"))  # any window counts: a custom one is still "on"
+        activations = cfg.get("gravar_ativacoes") is True
+        st["record_ambient"] = ambient
+        st["record_activations"] = activations
+        st["recordings_sync_last_ok"] = (
+            datetime.fromtimestamp(sync_ok_mtime, timezone.utc).isoformat()
+            if (ambient or activations) and isinstance(sync_ok_mtime, (int, float))
+            and not isinstance(sync_ok_mtime, bool) else None)
+        st["recordings_sync_last_ok_attributes"] = {"record_ambient": ambient, "record_activations": activations}
         if self.board == "xvf3800":
             st["xvf_sys_delay"] = cfg.get("xvf_sys_delay", XVF_DELAY_DEFAULT)
             st["beam_lock"] = cfg.get("beam_lock", True) is not False
@@ -237,6 +255,13 @@ class Mapper:
             if key in INT_KEYS and isinstance(value, float) and value.is_integer():
                 value = int(value)  # HA number entities send 20.0; the program accepts only int here
             return {"config": {simple[key]: value}}
+        if key == "record_activations":
+            return {"config": {"gravar_ativacoes": bool(value)}}
+        if key == "record_ambient":
+            if not value:
+                return {"config": {"gravar_ambiente_janela": None, "gravar_ambiente_ate": None}}
+            # already on (any window): keep it; only a null window gets the factory one
+            return {"config": {} if cfg.get("gravar_ambiente_janela") else {"gravar_ambiente_janela": AMBIENT_WINDOW}}
         if key == "follow_up_mode":
             return {"config": {"continuacao_s": int(self.last_follow_up) if value else 0}}
         if key == "volume":

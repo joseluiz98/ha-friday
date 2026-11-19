@@ -45,6 +45,7 @@ PROGRAM_DIR = os.environ.get("FRIDAY_SAT_PROGRAM_DIR") or next(
 BUNDLES = os.path.expanduser("~/.friday-agent/bundles")
 APPLY_AGENT = ["sudo", "-n", "/usr/local/sbin/friday-agent-apply"]
 ID_FILE = os.environ.get("FRIDAY_SAT_ID_FILE", "/etc/friday-satelite/id")
+SYNC_STAMP = os.environ.get("FRIDAY_SAT_SYNC_STAMP", "/home/jose/.friday_sync_ok")  # written by the sync script
 RECORDINGS = os.environ.get("FRIDAY_SAT_RECORDINGS", "/home/jose/gravacoes/ativacoes")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8701"))
 COUNTERS = os.path.expanduser("~/.friday-agent/counters.json")  # today's counts survive an agent restart
@@ -108,6 +109,14 @@ class VoiceSwitch:
         return res if not res.get("ok") else {"ok": True}
 
 
+def sync_stamp_mtime(path: str | None = None) -> float | None:
+    """mtime of the last whole recordings upload (one os.stat); None = no stamp."""
+    try:
+        return os.stat(path or SYNC_STAMP).st_mtime
+    except OSError:
+        return None
+
+
 async def read_program(program, mapper, memo: dict) -> dict | None:
     """What the voice program says now, as state changes; None = it answered but could not be read (keep the last).
     A program that does not answer gives `program_state: off` and None for every key that came from it."""
@@ -120,7 +129,7 @@ async def read_program(program, mapper, memo: dict) -> dict | None:
         memo["ww"] = await program.wakewords()
     except (ProgramError, OSError):
         return None
-    return mapper.state(memo["cfg"], memo["ww"], status)
+    return mapper.state(memo["cfg"], memo["ww"], status, sync_stamp_mtime())
 
 
 async def main() -> None:
@@ -178,6 +187,7 @@ async def main() -> None:
         program=program, restart_program=power.restart_program, apply_agent=apply_agent,
         exit_fn=lambda code: _exit(code), ip_fn=lambda: _lan_ip(), ota_credentials=updater.has_credentials,
         release=lambda: ota.installed()[0], versioned=lambda: os.path.islink(ota.CURRENT))
+    memo["state"]["sync_host_known"] = prov.sync_host_known()  # False: HA delivers the VM host key on connect
 
     def _args(cmd: dict) -> dict:
         return cmd["args"] if isinstance(cmd.get("args"), dict) else cmd
@@ -194,6 +204,15 @@ async def main() -> None:
 
     async def do_factory_reset(cmd: dict) -> dict:
         return await prov.factory_reset(_args(cmd).get("level"))
+
+    async def do_set_sync_host_key(cmd: dict) -> dict:
+        a = _args(cmd)
+        res = await prov.set_sync_host_key(a.get("host"), a.get("key"))
+        known = prov.sync_host_known()
+        if memo["state"].get("sync_host_known") != known:
+            memo["state"]["sync_host_known"] = known
+            await core.push_state({"sync_host_known": known}, "agent")
+        return res
 
     async def do_ota_install(cmd: dict) -> dict:
         return updater.request_install()
@@ -276,8 +295,9 @@ async def main() -> None:
             return {"ok": False, "error": "unknown_key"}
         try:
             if "config" in plan:
-                tracker.mark_ha(plan["config"])
-                await program.put_config(plan["config"])
+                if plan["config"]:  # empty = nothing to change (record_ambient on with a custom window)
+                    tracker.mark_ha(plan["config"])
+                    await program.put_config(plan["config"])
             else:
                 name, mode = plan["wakeword"]
                 tracker.mark_ha(["modo_friday", "palavras_extras"])
@@ -346,6 +366,7 @@ async def main() -> None:
     core = AgentCore(ha_token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi,
                       "provision_info": do_provision_info, "apply_bundle": do_apply_bundle,
                       "start_onboarding": do_start_onboarding, "say": do_say, "factory_reset": do_factory_reset,
+                      "set_sync_host_key": do_set_sync_host_key,
                       "diagnostics": diagmod.make_handler(CONFIG, lambda: dict(memo["state"])),
                       "ota_install": do_ota_install, "ota_set_credentials": do_ota_set_credentials})
 

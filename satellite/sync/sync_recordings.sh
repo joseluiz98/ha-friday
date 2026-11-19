@@ -8,6 +8,11 @@
 # 09/11: na madrugada de 09/11 o rsync travou num fluxo TCP morto (6,6 de 9,6 MB de um WAV) e ficou 2 h parado até o
 # TimeoutStartSec matar; sem marca, a VM não rodou nada (o contrato funcionou). Agora: keepalive no ssh, --timeout de
 # I/O no rsync e até 3 tentativas por pasta; o --partial retoma o arquivo de onde parou.
+# 18/11: a chave de host da VM fica fixada em ~/.ssh/known_hosts_satsync (entregue pelo HA no pareamento ou na
+# reconexão, nunca aceita às cegas) e o ssh roda com StrictHostKeyChecking=yes. O ~/.ssh/known_hosts de antes (o
+# satélite que já confiava na VM à mão) segue valendo como segunda fonte verificada, para a atualização não custar uma
+# noite de envio até o HA fixar a chave; sem nenhum dos dois, nem tenta (rc 3).
+# Com o envio inteiro OK, toca ~/.friday_sync_ok (fora de gravacoes/, que o rsync levaria): o agente do satélite lê.
 set -uo pipefail
 # 09/11: o endereço da VM vem do endereco_friday do config.json (ou do house.json da imagem), nunca do código
 HOST=$(python3 -c 'import json,urllib.parse
@@ -21,7 +26,11 @@ for p in ("/etc/friday-satelite/config.json", "/etc/friday-satelite/house.json")
 VM=${SATSYNC_VM:-satsync@$HOST}
 [ -n "${SATSYNC_VM:-}$HOST" ] || { echo "sem endereço da VM (endereco_friday)" >&2; exit 1; }
 KEY=$HOME/.ssh/id_satsync
+KNOWN=$HOME/.ssh/known_hosts_satsync
+LEGACY=$HOME/.ssh/known_hosts
+[ -s "$KNOWN" ] || [ -s "$LEGACY" ] || { echo "sem a chave de host da VM ($KNOWN): o HA a entrega quando o satélite conecta" >&2; exit 3; }
 SSH="ssh -i $KEY -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+SSH="$SSH -o UserKnownHostsFile=$KNOWN -o GlobalKnownHostsFile=$LEGACY -o StrictHostKeyChecking=yes"
 ok=0
 for src in gravacoes vozes; do
   for tentativa in 1 2 3; do
@@ -41,5 +50,6 @@ if [ "$ok" = 0 ]; then
   rsync -rt -e "$SSH" "$m/" "$VM:./" || ok=$?
   rm -rf "$m"
 fi
+[ "$ok" = 0 ] && touch "$HOME/.friday_sync_ok"
 echo "sync_recordings rc=$ok $(date -Is)"
 exit $ok
