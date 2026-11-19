@@ -427,7 +427,7 @@ class Maestro:
         if nome == "abrir_apresentacao":  # a Pi abre a conversa de apresentação (spec 2026-11-05 §6.4)
             if e != PARADA or self._alarme is not None or self.mudo is not False:
                 return []
-            return self._abrir_propria(agora, "apresentacao", {"presentation": valor})
+            return self._fechar_mic_do_recado(self._abrir_propria(agora, "apresentacao", {"presentation": valor}))
         if e == TESTE_PALAVRA:
             if nome == "botao":
                 return self._sair_teste("wake_word_failed", "botao_vermelho") if valor == "vermelho" else []
@@ -539,6 +539,8 @@ class Maestro:
             reabrir = []
             self._recado_fim = None  # voltou a falar dentro da pausa: o recado continua
             if e == AGUARDANDO:  # a resposta pendente chegou dentro da janela: é um recado também
+                self._recado = True
+            elif e in ABERTO and self._da_conversa("apresentacao"):  # 19/11: na apresentação toda fala dela é recado
                 self._recado = True
             if self._recado:
                 self._mic_fechado = False

@@ -744,8 +744,39 @@ class TestApresentacao(Base):
 
     def test_abre_conversa_propria_sem_som_de_lembrete(self):
         a = self.m.evento("abrir_apresentacao", 0.0, {"areas": []})
-        self.assertEqual(a, [("luz", "ouvindo"), ("conectar", {"presentation": {"areas": []}})])
+        self.assertEqual(a, [("luz", "falando"), ("conectar", {"presentation": {"areas": []}}),
+                             ("microfone", False)])  # 19/11: toda fala dela é recado
         self.assertEqual(self.m.estado, "conectando")
+
+    def abrir(self):
+        self.m.evento("abrir_apresentacao", 0.0, {"areas": []})
+        self.m.evento("conectou", 0.5)
+
+    def test_every_speech_of_hers_closes_the_mic(self):  # 19/11
+        self.abrir()
+        self.assertIn(("microfone", False), self.m.evento("ela_comecou", 1.0))
+        self.m.evento("ela_parou", 3.0)
+        self.assertIn(("microfone", True), self.m.evento("tique", 4.6))
+        self.m.evento("fala_comecou", 5.0); self.m.evento("fala_parou", 6.0)  # a pessoa responde
+        self.assertIn(("microfone", False), self.m.evento("ela_comecou", 7.0))  # a próxima pergunta: fecha de novo
+
+    def test_room_speech_does_not_cut_the_presentation(self):
+        self.abrir(); self.m.evento("ela_comecou", 1.0)
+        a = self.m.evento("fala_comecou", 1.5) + self.m.evento("fala_parou", 2.0)
+        self.assertNotIn(("parar_fala", None), a)
+
+    def test_active_word_cuts_the_presentation(self):
+        self.abrir(); self.m.evento("ela_comecou", 1.0)
+        self.assertIn(("parar_fala", None), self.m.evento("palavra", 1.5, {"wake_word": "friday"}))
+
+    def test_pause_inside_one_reply_keeps_the_mic_closed(self):  # Review Focus 4
+        self.abrir(); self.m.evento("ela_comecou", 1.0); self.m.evento("ela_parou", 2.0)
+        self.m.evento("ela_comecou", 2.5)
+        self.assertNotIn(("microfone", True), self.m.evento("tique", 4.4))
+
+    def test_word_while_she_waits_behaves_as_today(self):  # Review Focus 5
+        self.abrir(); self.m.evento("ela_comecou", 1.0); self.m.evento("ela_parou", 2.0); self.m.evento("tique", 3.6)
+        self.assertEqual(self.m.evento("palavra", 4.0, {"wake_word": "friday"}), [])
 
     def test_fora_de_parada_ou_mudo_nao_abre(self):
         self.m.evento("palavra", 0.0)
