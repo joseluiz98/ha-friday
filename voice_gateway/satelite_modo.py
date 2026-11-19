@@ -410,7 +410,9 @@ class PortaoDeFala:
 
     JANELA_S = 5.0       # quanto tempo o portão espera o turno começar
     ESPERA_MAX_S = 2.0   # quanto tempo segura áudio sem texto que decida
-    MARCADOR = "<no speech>"
+    # 19/11: prefixo, não o marcador inteiro. Em uma semana o Gemini também falou "<no speech detected>" e, cortado,
+    # "<no speech"; casando só "<no speech>" exato, o portão soltou os dois no alto-falante (3 turnos).
+    MARCADOR = "<no speech"
 
     def __init__(self, agora=time.monotonic, sempre=False):
         # sempre=True (12/11): armado em todo turno, sem prazo. Numa conversa comum o Gemini também "fica calado"

@@ -150,6 +150,25 @@ class TestVolumeETimers(unittest.TestCase):
         self.assertEqual(g.tratar("fim"), "passar")
         self.assertEqual(g.tratar("audio"), "segurar")                  # rearmado para o próximo turno
 
+    def test_portao_descarta_as_variantes_do_marcador(self):
+        # 12–19/11 (registro de conversas): o Gemini também fala "<no speech detected>" e, cortado, só "<no speech";
+        # o portão casava "<no speech>" exato e soltou as duas no alto-falante (3 turnos em uma semana).
+        for pedacos in (["<no speech detected>"], ["<no", " speech", " detected>"], ["<no speech"],
+                        ["<NO SPEECH>{pause}"], ["  <no speech>"]):
+            self.t = [100.0]
+            g = sm.PortaoDeFala(agora=lambda: self.t[0], sempre=True)
+            self.assertEqual(g.tratar("audio"), "segurar")
+            acoes = [g.tratar("texto", p) for p in pedacos]
+            self.assertEqual(acoes[-1], "descartar", pedacos)
+            self.assertNotIn("soltar", acoes, pedacos)
+            self.assertEqual(g.tratar("fim"), "descartar", pedacos)
+
+    def test_portao_solta_fala_que_so_comeca_parecida_com_o_marcador(self):
+        self.t = [100.0]
+        g = sm.PortaoDeFala(agora=lambda: self.t[0], sempre=True)
+        self.assertEqual(g.tratar("texto", "<no"), "segurar")
+        self.assertEqual(g.tratar("texto", "ta>"), "soltar")             # "<nota>" não é o marcador
+
     def test_portao_sempre_armado_mede_quanto_segurou(self):
         self.t = [100.0]
         g = sm.PortaoDeFala(agora=lambda: self.t[0], sempre=True)
