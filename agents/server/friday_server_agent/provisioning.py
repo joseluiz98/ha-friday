@@ -93,6 +93,27 @@ def _vault():
 VAULT_FOR_BUNDLE = {"satellite/program/vendor/": "program/vendor/", "satellite/sounds/onboarding/": "program/sons/onboarding/"}
 
 
+def host_key_path() -> str:
+    """The VM's public SSH host key: the agent runs as root on the VM host, where sshd keeps it."""
+    return os.environ.get("FRIDAY_SSH_HOST_KEY", "/etc/ssh/ssh_host_ed25519_key.pub")
+
+
+def read_host_key() -> str | None:
+    """`ssh-ed25519 <base64>` (no comment) for the satellite's known_hosts_satsync, or None (logged) when unreadable."""
+    path = host_key_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read().strip()
+    except OSError as err:
+        LOG.error("ssh host key not readable (%s): %s", path, type(err).__name__)
+        return None
+    m = PUBKEY.match(text)
+    if not m:
+        LOG.error("ssh host key malformed: %s", path)
+        return None
+    return f"{m.group(1)} {m.group(2)}"
+
+
 def bundle_host() -> str:
     return os.environ.get("FRIDAY_BUNDLE_HOST") or f"{os.environ.get('FRIDAY_VM_IP', '127.0.0.1')}:8801"
 
@@ -108,7 +129,17 @@ def _rrsync_line(data: str, sat_id: str, key: str) -> str:
 
 
 def register_sync_key(sat_id, pubkey, data: str | None = None, chown_user: str | None = "satsync") -> dict:
-    """Idempotent: one line per satellite; a changed key replaces the line. Returns {"ok": True, "changed": bool}."""
+    """Idempotent: one line per satellite; a changed key replaces the line. Returns {"ok": True, "changed": bool} plus
+    `host_key` (the VM's SSH host key the satellite pins for the upload) when it is readable; without it the
+    registration still succeeds (logged)."""
+    res = _register_sync_key(sat_id, pubkey, data, chown_user)
+    host_key = read_host_key()
+    if host_key:
+        res["host_key"] = host_key
+    return res
+
+
+def _register_sync_key(sat_id, pubkey, data: str | None, chown_user: str | None) -> dict:
     data = data or data_dir()
     if not isinstance(sat_id, str) or not SAT_ID.match(sat_id):
         raise ProvisioningError("invalid_sat_id")
@@ -309,12 +340,18 @@ def make_handlers(store: BundleStore):
     async def register(cmd: dict) -> dict:
         a = args(cmd)
         try:
-            return register_sync_key(a.get("sat_id"), a.get("pubkey"))
+            res = register_sync_key(a.get("sat_id"), a.get("pubkey"))
         except ProvisioningError as err:
             return {"ok": False, "error": err.code}
         except OSError as err:
             LOG.error("register_sync_key failed: %s", type(err).__name__)
             return {"ok": False, "error": "io"}
+        return {"ok": True, "data": {k: v for k, v in res.items() if k != "ok"}}
+
+    async def host_key(cmd: dict) -> dict:
+        """Read-only: an already paired satellite that lacks the host key gets it without touching authorized_keys."""
+        key = read_host_key()
+        return {"ok": True, "data": {"host_key": key}} if key else {"ok": False, "error": "no_host_key"}
 
     async def prepare(cmd: dict) -> dict:
         import asyncio
@@ -328,7 +365,7 @@ def make_handlers(store: BundleStore):
             return {"ok": False, "error": "io"}
         return {"ok": True, "data": data}
 
-    return {"register_sync_key": register, "prepare_bundle": prepare}
+    return {"register_sync_key": register, "sync_host_key": host_key, "prepare_bundle": prepare}
 
 
 def add_routes(app: web.Application, store: BundleStore) -> None:

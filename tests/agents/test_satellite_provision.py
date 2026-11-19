@@ -504,3 +504,89 @@ async def test_update_on_the_versioned_layout_says_nothing(env):
     p.say = say
     await p.apply_bundle("update", "http://vm/b", sha(blob))
     assert said == []
+
+
+# ---- the VM host key for the nightly upload (plan 2026-11-18 Task 3)
+def _ed25519(fill: bytes) -> str:
+    import base64
+    blob = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + (fill * 32)[:32]
+    return "ssh-ed25519 " + base64.b64encode(blob).decode()
+
+
+VM_KEY, VM_KEY2 = _ed25519(b"k"), _ed25519(b"z")
+
+
+def _with_address(env, url="http://vm.test:8780", house=None):
+    cfg = json.loads((env / "etc" / "config.json").read_text())
+    if url is None:
+        cfg.pop("endereco_friday", None)
+    else:
+        cfg["endereco_friday"] = url
+    (env / "etc" / "config.json").write_text(json.dumps(cfg))
+    if house is not None:
+        (env / "etc" / "house.json").write_text(json.dumps({"endereco_friday": house}))
+
+
+async def test_set_sync_host_key_pins_the_vm_key_for_the_upload_host(env):
+    _with_address(env)
+    p, *_ = make(env)
+    assert p.sync_host_known() is False
+    info = (await p.info())["data"]
+    assert info["sync_host_known"] is False and info["sync_host"] == "vm.test"
+    r = await p.set_sync_host_key("vm.test", VM_KEY + " root@vm")
+    assert r == {"ok": True}
+    kh = env / "ssh" / "known_hosts_satsync"
+    assert kh.read_text() == f"vm.test {VM_KEY}\n"
+    assert kh.stat().st_mode & 0o777 == 0o600
+    assert p.sync_host_known() is True and (await p.info())["data"]["sync_host_known"] is True
+    assert await p.set_sync_host_key("192.0.2.9", VM_KEY2) == {"ok": True}  # explicit host, replaces the line
+    assert kh.read_text() == f"192.0.2.9 {VM_KEY2}\n"
+    assert p.sync_host_known() is False  # pinned for a host the upload does not use
+
+
+async def test_the_upload_host_falls_back_to_the_image_house_file(env):
+    _with_address(env, url=None, house="http://vm.house:8780/")
+    p, *_ = make(env)
+    assert (await p.info())["data"]["sync_host"] == "vm.house"
+    assert await p.set_sync_host_key("vm.house", VM_KEY) == {"ok": True}
+    assert (env / "ssh" / "known_hosts_satsync").read_text() == f"vm.house {VM_KEY}\n"
+    assert p.sync_host_known() is True
+
+
+@pytest.mark.parametrize("host,key,error", [
+    ("vm.test", "ssh-ed25519 short", "invalid_key"),
+    ("vm.test", "ssh-rsa " + "A" * 60, "invalid_key"),
+    ("vm.test", VM_KEY + '"\nevil', "invalid_key"),
+    ("vm.test", "ssh-ed25519 " + "A" * 68, "invalid_key"),  # base64 but not an ed25519 key blob
+    ("vm.test", None, "invalid_key"),
+    ("", VM_KEY, "invalid_host"),
+    ("vm test", VM_KEY, "invalid_host"),
+    ("vm.test\nevil", VM_KEY, "invalid_host"),
+    ("-oProxyCommand=x", VM_KEY, "invalid_host"),
+    (None, VM_KEY, "invalid_host"),
+])
+async def test_set_sync_host_key_refuses_and_keeps_the_previous_file(env, host, key, error):
+    _with_address(env)
+    p, *_ = make(env)
+    kh = env / "ssh" / "known_hosts_satsync"
+    kh.write_text(f"vm.test {VM_KEY2}\n")
+    assert await p.set_sync_host_key(host, key) == {"ok": False, "error": error}
+    assert kh.read_text() == f"vm.test {VM_KEY2}\n"
+    assert not list((env / "ssh").glob("*.tmp*"))
+
+
+async def test_without_an_address_the_host_is_never_known(env):
+    _with_address(env, url=None)
+    p, *_ = make(env)
+    (env / "ssh" / "known_hosts_satsync").write_text(f"vm.test {VM_KEY}\n")
+    info = (await p.info())["data"]
+    assert info["sync_host"] is None and info["sync_host_known"] is False
+
+
+async def test_set_sync_host_key_creates_the_ssh_folder(env):
+    import shutil as _sh
+    _sh.rmtree(env / "ssh")
+    _with_address(env)
+    p, *_ = make(env)
+    assert await p.set_sync_host_key("vm.test", VM_KEY) == {"ok": True}
+    assert (env / "ssh").stat().st_mode & 0o777 == 0o700

@@ -187,6 +187,7 @@ async def main() -> None:
         program=program, restart_program=power.restart_program, apply_agent=apply_agent,
         exit_fn=lambda code: _exit(code), ip_fn=lambda: _lan_ip(), ota_credentials=updater.has_credentials,
         release=lambda: ota.installed()[0], versioned=lambda: os.path.islink(ota.CURRENT))
+    memo["state"]["sync_host_known"] = prov.sync_host_known()  # False: HA delivers the VM host key on connect
 
     def _args(cmd: dict) -> dict:
         return cmd["args"] if isinstance(cmd.get("args"), dict) else cmd
@@ -203,6 +204,15 @@ async def main() -> None:
 
     async def do_factory_reset(cmd: dict) -> dict:
         return await prov.factory_reset(_args(cmd).get("level"))
+
+    async def do_set_sync_host_key(cmd: dict) -> dict:
+        a = _args(cmd)
+        res = await prov.set_sync_host_key(a.get("host"), a.get("key"))
+        known = prov.sync_host_known()
+        if memo["state"].get("sync_host_known") != known:
+            memo["state"]["sync_host_known"] = known
+            await core.push_state({"sync_host_known": known}, "agent")
+        return res
 
     async def do_ota_install(cmd: dict) -> dict:
         return updater.request_install()
@@ -356,6 +366,7 @@ async def main() -> None:
     core = AgentCore(ha_token, device, capabilities, lambda: dict(memo["state"]), {"set": do_set, "press": do_press, "wifi_set": do_wifi,
                       "provision_info": do_provision_info, "apply_bundle": do_apply_bundle,
                       "start_onboarding": do_start_onboarding, "say": do_say, "factory_reset": do_factory_reset,
+                      "set_sync_host_key": do_set_sync_host_key,
                       "diagnostics": diagmod.make_handler(CONFIG, lambda: dict(memo["state"])),
                       "ota_install": do_ota_install, "ota_set_credentials": do_ota_set_credentials})
 
