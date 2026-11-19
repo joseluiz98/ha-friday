@@ -800,8 +800,8 @@ class TestFecharMicrofoneEsperandoResposta(unittest.TestCase):
     def test_reabre_quando_ela_comeca_a_falar(self):
         self.abrir(True)
         self.m.evento("fala_parou", 3.0)
-        self.assertEqual(tipos(self.m.evento("ela_comecou", 4.0)), ["microfone:True", "luz:ouvindo"])
-        self.assertEqual(tipos(self.m.evento("ela_parou", 6.0)), [])  # continuação normal depois da fala dela
+        self.assertEqual(tipos(self.m.evento("ela_comecou", 4.0)), ["microfone:True", "luz:respondendo"])
+        self.assertEqual(tipos(self.m.evento("ela_parou", 6.0)), ["luz:ouvindo"])  # continuação normal depois da fala dela
 
     def test_fala_com_o_microfone_fechado_nao_estica_a_espera(self):
         self.abrir(True)
@@ -843,14 +843,14 @@ class TestContinuacaoEstiloAlexa(unittest.TestCase):
     def test_sem_musica_abre_a_janela(self):
         self.abrir()
         self.m.evento("musica", 4.2, False)
-        self.assertEqual(self.m.evento("ela_parou", 6.0), [])
+        self.assertEqual(self.m.evento("ela_parou", 6.0), [("luz", "ouvindo")])
         self.assertEqual(self.m.evento("tique", 10.9), [])
         self.assertEqual(registro(self.m.evento("tique", 11.1))["como_fechou"], "silencio")
 
     def test_musica_com_switch_desligado_mantem_a_janela(self):
         self.abrir(no_follow_up_while_music=False)
         self.m.evento("musica", 4.2, True)
-        self.assertEqual(self.m.evento("ela_parou", 6.0), [])
+        self.assertEqual(self.m.evento("ela_parou", 6.0), [("luz", "ouvindo")])
 
     def test_musica_nao_vaza_para_a_conversa_seguinte(self):
         self.abrir()
@@ -861,7 +861,7 @@ class TestContinuacaoEstiloAlexa(unittest.TestCase):
         self.m.evento("fala_comecou", 21.5)
         self.m.evento("fala_parou", 23.0)
         self.m.evento("ela_comecou", 24.0)
-        self.assertEqual(self.m.evento("ela_parou", 26.0), [])
+        self.assertEqual(self.m.evento("ela_parou", 26.0), [("luz", "ouvindo")])
         self.assertEqual(self.m.estado, "ouvindo")
 
     def test_comando_casa_fecha(self):
@@ -891,7 +891,7 @@ class TestContinuacaoEstiloAlexa(unittest.TestCase):
         self.m.evento("fala_comecou", 1.5)
         self.m.evento("fala_parou", 3.0)
         self.m.evento("ela_comecou", 4.0)
-        self.assertEqual(self.m.evento("ela_parou", 6.0), [])
+        self.assertEqual(self.m.evento("ela_parou", 6.0), [("luz", "ouvindo")])
         self.assertEqual(registro(self.m.evento("tique", 6.05))["como_fechou"], "silencio")
 
 
@@ -1045,3 +1045,29 @@ class TestLuzComMudoPorSoftware(Base):  # I3
         self.m.mudo = True
         self.m.mudo_software = False
         self.assertNotIn("luz", [a[0] for a in self.m.evento("nao_perturbe_inicial", 0.0, True)])
+
+
+class TestLuzRespondendo(Base):
+    """Echo-like light while she speaks (18/11): the ring changes when her answer starts and goes back to listening
+    when it ends; recado, cadastro and closing keep their own lights."""
+
+    def test_her_speech_shows_responding_and_back_to_listening(self):
+        self.abrir_e_conectar()
+        self.m.evento("fala_comecou", 1.2); self.m.evento("fala_parou", 2.5)
+        self.assertIn("luz:respondendo", tipos(self.m.evento("ela_comecou", 3.0)))
+        self.assertEqual(self.m._luz_do_estado(), "respondendo")
+        self.assertIn("luz:ouvindo", tipos(self.m.evento("ela_parou", 5.0)))
+        self.assertEqual(self.m._luz_do_estado(), "ouvindo")
+
+    def test_closed_mic_reopens_as_responding(self):
+        self.m = Maestro(Ajustes(close_mic_awaiting_reply=True))
+        self.abrir_e_conectar()
+        self.m.evento("fala_comecou", 1.2); self.m.evento("fala_parou", 2.5)
+        acoes = tipos(self.m.evento("ela_comecou", 3.0))
+        self.assertIn("luz:respondendo", acoes)
+        self.assertNotIn("luz:ouvindo", acoes)
+
+    def test_cut_conversation_keeps_its_light(self):
+        self.abrir_e_conectar()
+        self.m.evento("botao", 2.0)
+        self.assertNotIn("luz:respondendo", tipos(self.m.evento("ela_comecou", 3.0)))

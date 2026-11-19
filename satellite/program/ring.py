@@ -1,6 +1,7 @@
 """Anel de LEDs: uma camada "estado -> aparência" e dois drivers (spec 2026-11-05 §11–§12).
 
-Estados (contrato): off, listen (conversa; com `direction` mostra a direção), think (cérebro), speak, dnd, alarm,
+Estados (contrato): off, listen (conversa; com `direction` mostra a direção), respond (ela respondendo na conversa),
+think (cérebro), speak, dnd, alarm,
 setup, updating, error, muted, net_error (erro persistente de rede), update_pending (update achado e não instalado).
 Composição (spec 2026-11-16-ring-state-priority): o anel guarda CAMADAS (a luz do maestro, os comandos de fora, o erro
 momentâneo, o update pendente) e desenha a de maior prioridade (`PRIORIDADE`); o MUDO é um indicador à parte, por cima
@@ -9,23 +10,24 @@ O programa nunca cai por causa do anel: falha de driver vira NullRing/registro.
 Módulo puro: usb/vendor só são importados dentro de `default_xvf_transport` / `default_usb_find`."""
 import contextlib, io, math, os, sys, threading
 
-ESTADOS = ("off", "listen", "think", "speak", "dnd", "alarm", "setup", "updating", "error", "muted", "net_error",
+ESTADOS = ("off", "listen", "respond", "think", "speak", "dnd", "alarm", "setup", "updating", "error", "muted", "net_error",
            "update_pending")
 
 # o que os comandos de fora (agente: OTA, setup) põem na camada externa; o resto só como prévia (M7)
 ESTADOS_DE_FORA = ("off", "setup", "updating", "error")
 
 # a base de maior prioridade primeiro (spec 2026-11-16); o mudo não entra: é indicador por cima
-PRIORIDADE = ("alarm", "updating", "error", "setup", "speak", "listen", "think", "net_error", "dnd", "update_pending",
+PRIORIDADE = ("alarm", "updating", "error", "setup", "speak", "respond", "listen", "think", "net_error", "dnd", "update_pending",
               "off")
 
 # nomes do maestro (hardware.BITS_DO_ANEL) -> estado
-ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "falando": "speak", "cerebro": "think", "nao_perturbe": "dnd", "alarme": "alarm",
+ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "respondendo": "respond", "falando": "speak", "cerebro": "think", "nao_perturbe": "dnd", "alarme": "alarm",
                      "rede_esgotada": "net_error"}
 
 # calibrar na chegada (18–27/11): valores de partida, não medidos
 SPEED_FAST = 3
 SPEED_SLOW = 1
+SPEED_RESPOND = 2  # 18/11: pulso da resposta, como a Echo de 5ª geração (calibrar no MK2)
 BRIGHTNESS = 255
 LED_OFFSET = 5     # 17/11 (bancada): índice do LED 0 em relação a 0° do DOA (LED 0 às 7h, USB às 12h)
 LED_SENTIDO = 1    # 17/11 (bancada): sentido horário
@@ -201,7 +203,7 @@ class Contagem:
 
 # Jabra: estado -> nome do relatório HID de hoje (hardware.BITS_DO_ANEL)
 # speak = recado do cérebro com o microfone fechado (M4): a luz do cérebro, não a de ouvindo
-_JABRA = {"off": "parada", "listen": "ouvindo", "speak": "cerebro", "think": "cerebro", "dnd": "nao_perturbe",
+_JABRA = {"off": "parada", "listen": "ouvindo", "respond": "ouvindo", "speak": "cerebro", "think": "cerebro", "dnd": "nao_perturbe",
           "alarm": "alarme", "setup": "cerebro", "updating": "cerebro", "error": "alarme", "muted": "parada",
           "net_error": "alarme", "update_pending": "cerebro"}  # o Jabra não tem amarelo: update_pending = luz do setup
 
@@ -238,7 +240,7 @@ class JabraRing(_Composto):
 
 
 # estado -> (efeito, cor, velocidade). velocidade None = sem respiração (cor fixa)
-_XVF = {"speak": (3, 0x0000FF, None), "think": (1, 0x0000FF, SPEED_FAST), "dnd": (1, 0x8000FF, SPEED_SLOW),
+_XVF = {"speak": (3, 0x0000FF, None), "respond": (1, 0x00C8FF, SPEED_RESPOND), "think": (1, 0x0000FF, SPEED_FAST), "dnd": (1, 0x8000FF, SPEED_SLOW),
         "alarm": (1, 0xFF8000, SPEED_FAST), "setup": (1, 0xFF8000, SPEED_SLOW), "updating": (1, 0xFFFFFF, SPEED_SLOW),
         "error": (1, 0xFF0000, SPEED_SLOW), "muted": (3, 0xFF0000, None),
         "net_error": (1, 0xFF0000, SPEED_SLOW), "update_pending": (1, 0xFFC800, SPEED_SLOW)}  # amarelo, como a notificação das Echos

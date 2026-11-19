@@ -242,6 +242,16 @@ class TestJabra(unittest.TestCase):
         ring.JabraRing(j).show_maestro(ring.ESTADO_DO_MAESTRO["falando"])
         self.assertEqual(j.nomes, ["cerebro"])
 
+    def test_responding_is_cyan_breathing_on_xvf_and_listening_on_jabra(self):  # 18/11: luz da Echo enquanto ela fala
+        self.assertEqual(ring.ESTADO_DO_MAESTRO["respondendo"], "respond")
+        t = Falso()
+        ring.Xvf3800Ring(t).show_maestro("respond")
+        self.assertEqual(t.chamadas, [W("LED_COLOR", 0x00C8FF), W("LED_SPEED", ring.SPEED_RESPOND),
+                                      W("LED_BRIGHTNESS", ring.BRIGHTNESS), W("LED_EFFECT", 1)])
+        j = Jabra()
+        ring.JabraRing(j).show_maestro("respond")
+        self.assertEqual(j.nomes, ["ouvindo"])
+
     def test_update_pending_is_a_known_state(self):
         self.assertEqual(ring.ESTADOS[-1], "update_pending")
         self.assertFalse(ring.NullRing().pendente)
@@ -387,7 +397,7 @@ BASES = [s for s in ring.PRIORIDADE if s != "off"]
 
 class TestRingState(unittest.TestCase):
     def test_prioridade(self):
-        self.assertEqual(ring.PRIORIDADE, ("alarm", "updating", "error", "setup", "speak", "listen", "think",
+        self.assertEqual(ring.PRIORIDADE, ("alarm", "updating", "error", "setup", "speak", "respond", "listen", "think",
                                            "net_error", "dnd", "update_pending", "off"))
 
     def test_priority_table(self):

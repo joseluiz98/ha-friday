@@ -12,7 +12,7 @@ from typing import Awaitable, Callable
 
 LOG = logging.getLogger("friday_satellite_agent.ring_preview")
 
-SEQUENCE = ("off", "update_pending", "listen", "think", "speak", "dnd", "muted", "alarm", "setup", "updating",
+SEQUENCE = ("off", "update_pending", "listen", "respond", "think", "speak", "dnd", "muted", "alarm", "setup", "updating",
             "error", "net_error")
 STEP_S = 10
 COUNTDOWN_S = 10
