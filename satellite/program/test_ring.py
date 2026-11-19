@@ -63,9 +63,23 @@ class TestXvf(unittest.TestCase):
     def test_speak(self):
         self.assertEqual(self.mostrar("speak"), [W("LED_COLOR", 0x0000FF), W("LED_EFFECT", 3)])
 
-    def test_think(self):
-        self.assertEqual(self.mostrar("think"), [W("LED_COLOR", 0x0000FF), W("LED_SPEED", ring.SPEED_FAST),
-                                                  W("LED_BRIGHTNESS", ring.BRIGHTNESS), W("LED_EFFECT", 1)])
+    def test_think_spins_like_the_echo(self):  # 18/11 (dono, visto no MK2): anel passando, 3/4 de volta por segundo
+        base, cab = 0x0000B2, 0x008CB2
+        meio, cauda = ring.escalar(0x00C8FF, 0.4), ring.escalar(0x00C8FF, 0.15)
+        q0 = [cab] + [base] * 9 + [cauda, meio]
+        self.assertEqual(self.mostrar("think"), [W("LED_RING_COLOR", *q0), W("LED_EFFECT", 5)])
+        passo = self.timers[-1]
+        self.assertAlmostEqual(passo.atraso, 1 / 9)
+        self.t.chamadas.clear()
+        passo.fn()
+        self.assertEqual(self.t.chamadas, [W("LED_RING_COLOR", meio, cab, *[base] * 9, cauda)])  # só o quadro, sem efeito
+        self.assertAlmostEqual(self.timers[-1].atraso, 1 / 9)
+        proximo = self.timers[-1]
+        self.mostrar("listen")
+        self.assertTrue(proximo.cancelado)
+        self.t.chamadas.clear()
+        proximo.fn()  # um passo velho depois do cancelamento não desenha nada
+        self.assertEqual(self.t.chamadas, [])
 
     def test_respirando(self):
         casos = {"alarm": (0xFF8000, ring.SPEED_FAST),
@@ -495,7 +509,7 @@ class TestComposicaoXvf(unittest.TestCase):
         quadro = self.t.chamadas[0]
         self.assertEqual(quadro[0], "LED_RING_COLOR")
         self.assertEqual(quadro[1][0], 0xFF0000)
-        self.assertEqual(set(quadro[1][1:]), {0x0000FF})
+        self.assertEqual(set(quadro[1][1:]), {0x0000B2})  # 18/11: a base do anel do pensando, parada
         self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 5))
 
     def test_xvf_mute_over_dnd_keeps_dnd_low(self):  # M9: mudo + não perturbe não fica mais forte que o DND sozinho
