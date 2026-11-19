@@ -2,6 +2,9 @@
 import unittest
 import dataset_rules as r
 
+OFFICE = "sat-0a1b2c"  # fake office satellite (legacy names without a prefix are its clips)
+OTHER = "sat-1d2e3f"
+
 
 def W(w, i, f):
     return {"w": " " + w, "i": i, "f": f, "p": 0.9}
@@ -302,15 +305,15 @@ class TestPinSplit(unittest.TestCase):
         its = self._its()
         eps = {"a@1": "e1", "b@1": "e2", "c@1": "e3", "n@1": "e4"}
         sorteio = {"a@1": "holdout", "b@1": "train", "c@1": "train", "n@1": "holdout"}
-        ant = r.prev_sides([[{"name": "a.wav", "split": "train"}, {"name": "b.wav", "split": "holdout"}]])
-        lado = r.pin_split(sorteio, its, eps, ant)
+        ant = r.prev_sides([[{"name": "a.wav", "split": "train"}, {"name": "b.wav", "split": "holdout"}]], office=OFFICE)
+        lado = r.pin_split(sorteio, its, eps, ant, office=OFFICE)
         self.assertEqual(lado, {"a@1": "train", "b@1": "holdout", "c@1": "train", "n@1": "holdout"})
 
     def test_episodio_com_arquivo_de_prova_vira_prova_inteiro(self):
         its = self._its()
         eps = {i["id"]: "mesmo" for i in its}
-        ant = r.prev_sides([[{"name": "a.wav", "split": "train"}, {"name": "c.wav", "split": "holdout"}]])
-        lado = r.pin_split({i["id"]: "train" for i in its}, its, eps, ant)
+        ant = r.prev_sides([[{"name": "a.wav", "split": "train"}, {"name": "c.wav", "split": "holdout"}]], office=OFFICE)
+        lado = r.pin_split({i["id"]: "train" for i in its}, its, eps, ant, office=OFFICE)
         self.assertEqual(set(lado.values()), {"holdout"})
 
     def test_item_ja_visto_herda_o_proprio_lado(self):
@@ -319,16 +322,17 @@ class TestPinSplit(unittest.TestCase):
         its = [{"id": "s@1", "name": "s.wav"}, {"id": "s@2", "name": "s.wav"}, {"id": "s@3", "name": "s.wav"}]
         eps = {i["id"]: "sessao" for i in its}
         m = [[{"id": "s@1", "name": "s.wav", "split": "train"}, {"id": "s@2", "name": "s.wav", "split": "holdout"}]]
-        lado = r.pin_split({i["id"]: "train" for i in its}, its, eps, r.prev_sides(m), r.prev_item_sides(m))
+        lado = r.pin_split({i["id"]: "train" for i in its}, its, eps, r.prev_sides(m, office=OFFICE),
+                           r.prev_item_sides(m, office=OFFICE), office=OFFICE)
         self.assertEqual(lado, {"s@1": "train", "s@2": "holdout", "s@3": "holdout"})
 
     def test_item_que_foi_prova_em_qualquer_ciclo_continua_prova(self):
         m = [[{"id": "s@1", "split": "holdout"}], [{"id": "s@1", "split": "train"}]]
-        self.assertEqual(r.prev_item_sides(m), {"s@1": "holdout"})
+        self.assertEqual(r.prev_item_sides(m, office=OFFICE), {OFFICE + "__s@1": "holdout"})
 
     def test_prova_em_qualquer_ciclo_vence(self):
-        ant = r.prev_sides([[{"name": "a.wav", "split": "holdout"}], [{"name": "a.wav", "split": "train"}]])
-        self.assertEqual(ant, {"a.wav": "holdout"})
+        ant = r.prev_sides([[{"name": "a.wav", "split": "holdout"}], [{"name": "a.wav", "split": "train"}]], office=OFFICE)
+        self.assertEqual(ant, {OFFICE + "__a.wav": "holdout"})
 
 
 class TestFalaAncorada(unittest.TestCase):
@@ -442,6 +446,80 @@ class TestProtegeChamadas(unittest.TestCase):
         self.assertEqual([i["label"] for i in its], ["pos", None])
 
 
+class TestClipKey(unittest.TestCase):
+    """18/11/2026: harvested clips carry `<sat_id>__`; a legacy name without it is the office satellite's."""
+    def test_prefixed_name_is_its_own_key(self):
+        self.assertEqual(r.clip_key(OTHER + "__ativou__20261015_180746.wav", OFFICE), OTHER + "__ativou__20261015_180746.wav")
+
+    def test_legacy_name_belongs_to_the_office(self):
+        self.assertEqual(r.clip_key("ativou__20261015_180746.wav", OFFICE), OFFICE + "__ativou__20261015_180746.wav")
+        self.assertEqual(r.clip_key("20261015_180746.wav", OFFICE), OFFICE + "__20261015_180746.wav")
+
+    def test_item_ids_follow_the_same_rule(self):
+        self.assertEqual(r.clip_key("ativou__x.wav@1.20", OFFICE), OFFICE + "__ativou__x.wav@1.20")
+
+    def test_legacy_name_without_office_refuses(self):
+        for bad in (None, "", "mk1", "sat-XYZ"):
+            with self.assertRaises(ValueError, msg=bad):
+                r.clip_key("ativou__x.wav", bad)
+
+    def test_prefixed_name_needs_no_office(self):
+        self.assertEqual(r.clip_key(OTHER + "__ativou__x.wav", None), OTHER + "__ativou__x.wav")
+
+    def test_clip_sat_and_strip(self):
+        self.assertEqual(r.clip_sat(OTHER + "__ativou__x.wav", OFFICE), OTHER)
+        self.assertEqual(r.clip_sat("ativou__x.wav", OFFICE), OFFICE)
+        self.assertEqual(r.strip_sat(OTHER + "__ativou__x.wav"), "ativou__x.wav")
+        self.assertEqual(r.strip_sat("ativou__x.wav"), "ativou__x.wav")
+
+
+class TestPinAcrossSatelliteNames(unittest.TestCase):
+    """Review Focus 4: a legacy MK1 clip already in the holdout reappears with the prefix and stays in the holdout;
+    a clip of another satellite with the same base name is a different clip."""
+    def test_legacy_holdout_stays_holdout_when_prefixed(self):
+        old = [[{"id": "20261015_180746.wav@1.00", "name": "20261015_180746.wav", "split": "holdout"}]]
+        its = [{"id": OFFICE + "__20261015_180746.wav@1.00", "name": OFFICE + "__20261015_180746.wav"},
+               {"id": OFFICE + "__20261015_180746.wav@3.00", "name": OFFICE + "__20261015_180746.wav"}]
+        eps = {its[0]["id"]: "e1", its[1]["id"]: "e1"}
+        lado = r.pin_split({i["id"]: "train" for i in its}, its, eps, r.prev_sides(old, office=OFFICE),
+                           r.prev_item_sides(old, office=OFFICE), office=OFFICE)
+        self.assertEqual(set(lado.values()), {"holdout"})
+
+    def test_other_satellite_same_base_name_is_another_clip(self):
+        old = [[{"id": "20261015_180746.wav@1.00", "name": "20261015_180746.wav", "split": "holdout"}]]
+        its = [{"id": OTHER + "__20261015_180746.wav@1.00", "name": OTHER + "__20261015_180746.wav"}]
+        lado = r.pin_split({its[0]["id"]: "train"}, its, {its[0]["id"]: "e9"}, r.prev_sides(old, office=OFFICE),
+                           r.prev_item_sides(old, office=OFFICE), office=OFFICE)
+        self.assertEqual(lado, {its[0]["id"]: "train"})
+
+    def test_prefixed_holdout_matches_a_legacy_name_in_the_new_cycle(self):
+        old = [[{"id": OFFICE + "__a.wav@1.00", "name": OFFICE + "__a.wav", "split": "holdout"}]]
+        its = [{"id": "a.wav@1.00", "name": "a.wav"}]
+        lado = r.pin_split({"a.wav@1.00": "train"}, its, {"a.wav@1.00": "e"}, r.prev_sides(old, office=OFFICE),
+                           r.prev_item_sides(old, office=OFFICE), office=OFFICE)
+        self.assertEqual(lado, {"a.wav@1.00": "holdout"})
+
+    def test_legacy_manifest_without_office_refuses(self):
+        with self.assertRaises(ValueError):
+            r.prev_sides([[{"name": "a.wav", "split": "holdout"}]], office=None)
+
+
+class TestExclusionsPerSatellite(unittest.TestCase):
+    def _its(self):
+        return [{"id": n + "@0.00", "name": n, "label": "neg", "why": "sem palavra"}
+                for n in (OFFICE + "__ativou__20261015_180746.wav", OTHER + "__ativou__20261015_180746.wav")]
+
+    def test_plain_exclusion_is_the_office_clip(self):
+        its = self._its()
+        self.assertEqual(r.apply_exclusions(its, ["20261015_180746.wav"], office=OFFICE), 1)
+        self.assertEqual([i["label"] for i in its], [None, "neg"])
+
+    def test_prefixed_exclusion_is_that_satellite_clip(self):
+        its = self._its()
+        self.assertEqual(r.apply_exclusions(its, [OTHER + "__20261015_180746.wav"], office=OFFICE), 1)
+        self.assertEqual([i["label"] for i in its], ["neg", None])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -494,7 +572,7 @@ class TestExcluidas(unittest.TestCase):
                 "label": "neg", "why": "sem palavra"},
                {"id": "sombra__sombra_sexta_feira_20261029_101010.wav@0.00", "name": "sombra__sombra_sexta_feira_20261029_101010.wav",
                 "label": "neg", "why": "sem palavra"}]
-        n = r.apply_exclusions(its, ["sombra_sexta_feira_20261028_085818.wav"])
+        n = r.apply_exclusions(its, ["sombra_sexta_feira_20261028_085818.wav"], office=OFFICE)
         self.assertEqual(n, 1)
         self.assertEqual((its[0]["label"], its[0]["why"]), (None, "excluída pelo dono"))
         self.assertEqual(its[1]["label"], "neg")

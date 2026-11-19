@@ -47,8 +47,11 @@ def main():
             k0, k1 = max(int((it["ini"] - 0.2) / FRAME), 0), int((it["fim"] + 1.2) / FRAME) + 1
             clipes.append({"grupo": "s:" + sess, "rotulo": 1, "nome": it["id"],
                            **{k: e[k][k0:k1] for k in ("base", "vad", "feats")}})
-    for p in sorted(glob.glob(os.path.join(a.harvest, "sombra__*.wav"))):
-        orig = os.path.basename(p).split("__", 1)[1]
+    for p in sorted(glob.glob(os.path.join(a.harvest, "*sombra__*.wav"))):
+        m = re.fullmatch(r"(?:sat-[0-9a-f]{6}__)?sombra__(.+)", os.path.basename(p))  # 18/11/2026: prefixo do satélite
+        if not m:
+            continue
+        orig = m.group(1)
         rot = 1 if orig in jose else 0
         clipes.append({"grupo": ("s:testes_jose" if rot else "d:" + dia(orig)), "rotulo": rot, "nome": orig, **ext(p)})
     for d in a.negs:

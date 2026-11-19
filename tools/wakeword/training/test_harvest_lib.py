@@ -66,5 +66,32 @@ class TestRulingsExtras(unittest.TestCase):  # 06/11: a Sexta em ativa tamb√©m √
             h.verdadeiras_rotuladas({"verdadeiras_ativacoes": ["quase_20261105_135728.wav"]})
 
 
+OFFICE, OTHER = "sat-0a1b2c", "sat-1d2e3f"
+
+
+class TestSatellitePrefix(unittest.TestCase):  # 18/11/2026: the satellite id goes with every harvested clip
+    def test_nome_unico_with_sat(self):
+        self.assertEqual(h.nome_unico("ativou", "/a/20261012_160041.wav", OTHER),
+                         OTHER + "__ativou__20261012_160041.wav")
+
+    def test_deduplicar_tags_sat(self):
+        fontes, _ = h.deduplicar([("ativou", "/a/20261012_160041.wav", "A")], sat=OTHER)
+        self.assertEqual(fontes[0]["sat"], OTHER)
+        self.assertEqual(fontes[0]["name"], OTHER + "__ativou__20261012_160041.wav")
+        self.assertEqual(fontes[0]["ts"], "2026-10-12T16:00:41")
+
+    def test_deduplicar_rejects_bad_sat(self):
+        with self.assertRaises(ValueError):
+            h.deduplicar([("ativou", "/a/1.wav", "A")], sat="../x")
+
+    def test_rulings_plain_names_are_the_office(self):
+        r = {"falsas_ativacoes": ["20261030_143729.wav", OTHER + "__20261031_090000.wav"],
+             "verdadeiras_ativacoes": [OFFICE + "__20261101_101010.wav"]}
+        self.assertEqual(h.falsas_rotuladas(r, OFFICE, OFFICE), ["20261030_143729.wav"])
+        self.assertEqual(h.falsas_rotuladas(r, OTHER, OFFICE), ["20261031_090000.wav"])
+        self.assertEqual(h.verdadeiras_rotuladas(r, OFFICE, OFFICE), ["v:20261101_101010.wav"])
+        self.assertEqual(h.verdadeiras_rotuladas(r, OTHER, OFFICE), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,12 @@
 """Monta o dataset de uma volta (spec/plano 2026-10-24, Task 4). Roda na VM, na imagem friday-asr:1 (numpy + wave).
 Uso: build_dataset.py <modelo> <work> <out> --seed N [--duplicates N] [--params-dir DIR] [--rulings ARQ] [--ambient PASTA]...
+                       [--pin-from MANIFEST]... [--office SAT_ID]
 Lê <work>/{sources,transcricoes,scores}.ndjson, marcas.json e <work>/wav/<name>; escreve em <out>:
   manifest.ndjson, upload/{positive,negative}/*.wav, upload/params.json, holdout/<name>, counts.json.
-Para o Kaggle sobe SÓ upload/ (recortes de treino); manifest, holdout e counts nunca saem de casa."""
+Para o Kaggle sobe SÓ upload/ (recortes de treino); manifest, holdout e counts nunca saem de casa.
+18/11/2026: cada item do manifest leva "sat" (o satélite do clipe). Nomes legados (sem `<sat_id>__`) são do satélite do
+escritório: --office, senão FRIDAY_SAT_OFFICE (ambiente ou $FRIDAY_LOCAL_CONFIG); --pin-from e --rulings comparam por
+dataset_rules.clip_key. Nome legado sem o id do escritório: sai 2."""
 import argparse, hashlib, json, os, re, shutil, sys, wave
 
 import numpy as np
@@ -59,9 +63,19 @@ def main(argv=None):
     ap.add_argument("--rulings", help="rulings.json do modelo: \"excluidas\" = arquivos que ficam fora (02/11)")
     ap.add_argument("--ambient", action="append", default=[],
                     help="raw/<data>_ambient_calls (repetível): chamadas reais que entram por add_ambient_positives.py")
+    ap.add_argument("--office", help="sat_id do satélite do escritório (dono dos nomes legados); padrão FRIDAY_SAT_OFFICE")
     ap.add_argument("--params-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "params"))
     a = ap.parse_args(argv)
+    try:
+        return _main(a)
+    except ValueError as e:
+        print(f"ERRO: {e}", file=sys.stderr)
+        return 2
+
+
+def _main(a):
     W, O = a.work, a.out
+    office = a.office or dr.office_id()
     fontes = {s["name"]: s for s in read_ndjson(f"{W}/sources.ndjson")}
     trans = {t["arq"]: t["palavras"] for t in read_ndjson(f"{W}/transcricoes.ndjson")}
     notas = {s["name"]: s for s in read_ndjson(f"{W}/scores.ndjson")}
@@ -76,7 +90,7 @@ def main(argv=None):
     if sem_dados:
         print(f"AVISO: {len(sem_dados)} arquivos sem transcrição/nota (ignorados): {sem_dados[:5]}", file=sys.stderr)
     if a.rulings and os.path.exists(a.rulings):
-        n = dr.apply_exclusions(itens, json.load(open(a.rulings)).get("excluidas", []))
+        n = dr.apply_exclusions(itens, json.load(open(a.rulings)).get("excluidas", []), office=office)
         print(f"excluídos pelo rulings: {n} itens", file=sys.stderr)
     info = {n: {"ts": fontes[n]["ts"], "dur": notas[n]["dur"], "src": fontes[n]["src"]} for n in notas if n in fontes}
     chamadas = []
@@ -90,12 +104,13 @@ def main(argv=None):
     lado = dr.split(itens, eps, a.model, a.seed)
     if a.pin_from:
         ms = [read_ndjson(p) for p in a.pin_from]
-        anteriores = dr.prev_sides(ms)
-        lado = dr.pin_split(lado, itens, eps, anteriores, dr.prev_item_sides(ms))
-        fixados = sum(1 for it in itens if it["name"] in anteriores)
+        anteriores = dr.prev_sides(ms, office=office)
+        lado = dr.pin_split(lado, itens, eps, anteriores, dr.prev_item_sides(ms, office=office), office=office)
+        fixados = sum(1 for it in itens if dr.clip_key(it["name"], office) in anteriores)
         print(f"lados fixados pelos ciclos anteriores: {fixados} itens de {len(anteriores)} arquivos", file=sys.stderr)
     for it in itens:
         it["episode"], it["split"] = eps[it["id"]], lado[it["id"]]
+        it["sat"] = fontes[it["name"]].get("sat") or dr.clip_sat(it["name"], office)
     subir = dr.upload_ids(itens)
 
     shutil.rmtree(O, ignore_errors=True)

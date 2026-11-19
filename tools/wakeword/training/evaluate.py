@@ -2,7 +2,7 @@
 reserva de prova, com áudio contínuo (como na captura) e o detector de hoje.
 Uso: evaluate.py <manifest.ndjson> <holdout_dir> <limiar> <atual.onnx> <candidato.onnx> <saida.json> [notas.json]
 Os dois modelos têm nomes de arquivo DIFERENTES e rodam no mesmo Model (extrator compartilhado)."""
-import json, os, sys, wave
+import json, os, re, sys, wave
 
 import numpy as np
 from openwakeword.model import Model
@@ -50,7 +50,8 @@ def main(manifest, holdout_dir, limiar, atual, cand, saida, notas_saida=None):
             r = el.avaliar_arquivo(notas[n], pos_por_arquivo.get(nome, []), limiar)
             res[n]["det"].update(r["detectados"]); res[n]["falsos"] += r["falsos"]
             if r["falsos"]:  # diagnóstico: de que fonte vêm os disparos "falsos" (ativou/quase sem rótulo contam como falsos)
-                f_ = nome.split("__")[0]; res[n]["fonte"][f_] = res[n]["fonte"].get(f_, 0) + r["falsos"]
+                f_ = re.sub(r"^sat-[0-9a-f]{6}__", "", nome).split("__")[0]  # 18/11/2026: sem o satélite
+                res[n]["fonte"][f_] = res[n]["fonte"].get(f_, 0) + r["falsos"]
         print(f"{j + 1}/{len(arquivos)} {nome}", flush=True)
     ids_pos = sorted(i["id"] for i in itens if i["label"] == "pos" and i["split"] == "holdout"
                      and i["name"] in set(arquivos))
