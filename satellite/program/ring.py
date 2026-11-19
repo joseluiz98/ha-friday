@@ -28,6 +28,7 @@ ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "respondendo": "respo
 SPEED_FAST = 3
 SPEED_SLOW = 1
 SPEED_RESPOND = 2  # 18/11: pulso da resposta, como a Echo de 5ª geração (calibrar no MK2)
+COR_RESPOSTA_FATOR = 0.7  # 18/11 (dono, visto no MK2): 30% mais fraca; o LED_BRIGHTNESS no efeito 1 mexe na velocidade
 BRIGHTNESS = 255
 LED_OFFSET = 5     # 17/11 (bancada): índice do LED 0 em relação a 0° do DOA (LED 0 às 7h, USB às 12h)
 LED_SENTIDO = 1    # 17/11 (bancada): sentido horário
@@ -240,7 +241,7 @@ class JabraRing(_Composto):
 
 
 # estado -> (efeito, cor, velocidade). velocidade None = sem respiração (cor fixa)
-_XVF = {"speak": (3, 0x0000FF, None), "respond": (1, 0x00C8FF, SPEED_RESPOND), "think": (1, 0x0000FF, SPEED_FAST), "dnd": (1, 0x8000FF, SPEED_SLOW),
+_XVF = {"speak": (3, 0x0000FF, None), "respond": (1, escalar(0x00C8FF, COR_RESPOSTA_FATOR), SPEED_RESPOND), "think": (1, 0x0000FF, SPEED_FAST), "dnd": (1, 0x8000FF, SPEED_SLOW),
         "alarm": (1, 0xFF8000, SPEED_FAST), "setup": (1, 0xFF8000, SPEED_SLOW), "updating": (1, 0xFFFFFF, SPEED_SLOW),
         "error": (1, 0xFF0000, SPEED_SLOW), "muted": (3, 0xFF0000, None),
         "net_error": (1, 0xFF0000, SPEED_SLOW), "update_pending": (1, 0xFFC800, SPEED_SLOW)}  # amarelo, como a notificação das Echos

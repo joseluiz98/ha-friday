@@ -29,3 +29,20 @@ class TestSonsNovos(unittest.TestCase):
         atuais = {tuple(n) for v in ("inicio", "fim", "erro") for n in sons.VARIANTES[v].values()}
         for v in ("volume", "alarme", "lembrete"):
             self.assertNotIn(tuple(sons.VARIANTES[v]["a"]), atuais)
+
+
+class TestGarantir(unittest.TestCase):
+    """18/11 (MK2): the image's sound snapshot lacked volume_a.wav, so the volume command failed and played the error
+    tone. The program fills in only the generated sounds that are missing, never overwriting a file."""
+
+    def test_fills_missing_and_keeps_existing(self):
+        with tempfile.TemporaryDirectory() as d:
+            erro = os.path.join(d, "erro_b.wav")
+            with open(erro, "wb") as f:
+                f.write(b"keep")
+            feitos = sons.garantir(d)
+            self.assertIn("volume_a", feitos)
+            self.assertTrue(os.path.exists(os.path.join(d, "volume_a.wav")))
+            with open(erro, "rb") as f:
+                self.assertEqual(f.read(), b"keep")
+            self.assertEqual(sons.garantir(d), {})

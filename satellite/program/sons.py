@@ -41,3 +41,20 @@ def gerar(pasta: str) -> dict:
             p = os.path.join(pasta, f"{nome}_{letra}.wav"); _grava(p, _notas(notas)); feitos[f"{nome}_{letra}"] = p
     p = os.path.join(pasta, "bipe.wav"); _grava(p, _notas([(1200, 0.12)])); feitos["bipe"] = p
     return feitos
+
+
+def garantir(pasta: str) -> dict:
+    """18/11: gera só os sons sintéticos que faltam na pasta (a imagem pode trazer um retrato antigo sem eles);
+    nunca sobrescreve. Devolve {nome: caminho} do que criou."""
+    os.makedirs(pasta, exist_ok=True)
+    feitos = {}
+    pedidos = {f"{nome}_{letra}": notas for nome, vs in VARIANTES.items() for letra, notas in vs.items()}
+    pedidos["bipe"] = [(1200, 0.12)]
+    for nome, notas in pedidos.items():
+        p = os.path.join(pasta, f"{nome}.wav")
+        if not os.path.exists(p):
+            tmp = p + ".tmp"
+            _grava(tmp, _notas(notas))
+            os.replace(tmp, p)
+            feitos[nome] = p
+    return feitos

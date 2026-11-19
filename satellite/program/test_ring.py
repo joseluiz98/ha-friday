@@ -246,7 +246,7 @@ class TestJabra(unittest.TestCase):
         self.assertEqual(ring.ESTADO_DO_MAESTRO["respondendo"], "respond")
         t = Falso()
         ring.Xvf3800Ring(t).show_maestro("respond")
-        self.assertEqual(t.chamadas, [W("LED_COLOR", 0x00C8FF), W("LED_SPEED", ring.SPEED_RESPOND),
+        self.assertEqual(t.chamadas, [W("LED_COLOR", 0x008CB2), W("LED_SPEED", ring.SPEED_RESPOND),
                                       W("LED_BRIGHTNESS", ring.BRIGHTNESS), W("LED_EFFECT", 1)])
         j = Jabra()
         ring.JabraRing(j).show_maestro("respond")

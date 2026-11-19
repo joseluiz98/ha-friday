@@ -109,7 +109,7 @@ def check(sys_usb: str = "/sys/bus/usb/devices", root: str = "", run=subprocess.
 
 
 def main(argv) -> int:
-    root = os.environ.get("FRIDAY_OTA_ROOT", "")
+    root = os.environ.get("FRIDAY_OTA_ROOT") or "/"  # absolute: the program unit runs from its own folder
     if "--check" in argv:
         return check(root=root)
     if "--check-board" in argv:

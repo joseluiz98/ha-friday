@@ -20,6 +20,7 @@ from maestro import Ajustes, Maestro
 from taxa_captura import TaxaCaptura
 import palavra_modelo
 import placa
+import sons
 import xvf_link
 import doa
 from ativacao_detalhes import payload as payload_ativacao
@@ -60,6 +61,12 @@ class Satelite:
         self.sendspin_timeout_s = 2.0  # consulta de música (04/11); injetável nos testes
         self.sid = cfgmod.ler_ou_criar_id(ID)
         self.cfg = cfgmod.carregar(CFG)
+        try:  # 18/11: a imagem pode vir sem os sons sintéticos (volume_a.wav); sem eles o comando falhava com som de erro
+            criados = sons.garantir(SONS)
+            if criados:
+                print(json.dumps({"sons_gerados": sorted(criados)}), flush=True)
+        except OSError as e:
+            print(json.dumps({"sons_gerados_falha": str(e)}), flush=True)
         self.medidor_eco = MedidorEco()  # spec 2026-11-04: nível do microfone enquanto ela fala (journal em ela_parou)
         self.emissor = Emissor(self.cfg.get("agente_url"), self.cfg.get("senha_porta_local", ""))  # spec 2026-10-29
         self.maestro = Maestro(self._ajustes(), mudo_inicial=None)  # revisão C1: mudo desconhecido até a captura decidir
