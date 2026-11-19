@@ -18,7 +18,7 @@ FAKES = {
 }
 
 
-def env_for(tmp_path, rc=0, known_hosts=True):
+def env_for(tmp_path, rc=0, known_hosts=True, legacy_known_hosts=False):
     home, bins, tmp = tmp_path / "home", tmp_path / "bin", tmp_path / "tmp"
     for d in (home / ".ssh", home / "gravacoes", home / "vozes", bins, tmp):
         d.mkdir(parents=True, exist_ok=True)
@@ -28,6 +28,8 @@ def env_for(tmp_path, rc=0, known_hosts=True):
         p.chmod(p.stat().st_mode | stat.S_IXUSR)
     if known_hosts:
         (home / ".ssh" / "known_hosts_satsync").write_text("vm.test ssh-ed25519 AAAA\n")
+    if legacy_known_hosts:
+        (home / ".ssh" / "known_hosts").write_text("vm.test ssh-ed25519 BBBB\n")
     return home, {"HOME": str(home), "TMPDIR": str(tmp), "PATH": f"{bins}:/usr/bin:/bin",
                   "SATSYNC_VM": "@".join(("satsync", "vm.test")), "FAKE_LOG": str(tmp_path / "calls.log"), "FAKE_RC": str(rc)}
 
@@ -73,3 +75,17 @@ def test_a_failed_upload_leaves_no_stamp(tmp_path):
     assert r.returncode == 23
     assert stamp.stat().st_mtime == 1_000_000
     assert not list((tmp_path / "tmp").iterdir())  # the marker folder was not even created
+
+
+def test_a_satellite_that_already_trusts_the_vm_keeps_uploading_before_the_key_is_pinned(tmp_path):
+    """The office satellite trusted the VM by hand (~/.ssh/known_hosts): until HA pins the key, that file is still a
+    verified source (StrictHostKeyChecking=yes), so the update does not cost a night of uploads."""
+    home, env = env_for(tmp_path, known_hosts=False, legacy_known_hosts=True)
+    r = run(env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    got = calls(tmp_path)
+    assert len(got) == 3
+    for line in got:
+        assert f"GlobalKnownHostsFile={home}/.ssh/known_hosts" in line
+        assert "StrictHostKeyChecking=yes" in line
+        assert "accept-new" not in line
