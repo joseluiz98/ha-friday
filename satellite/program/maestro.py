@@ -514,6 +514,8 @@ class Maestro:
             # conversa do timer que falhou: o alarme volta sozinho, sem o som de erro por cima
             return self._fechar(agora, "falha", som=None if self._da_conversa("timer") else "erro")
         if nome == "fala_comecou":
+            if self._recado and e in ABERTO:  # 19/11 (revisão I2): fala da sala no recado não chega a ela nem conta prazo
+                return []
             self._alguem_falando = True
             self._fala_desde = agora
             if self._prazo and self._prazo[0] in ("espera_inicial", "continuacao"):
@@ -522,6 +524,8 @@ class Maestro:
         if nome == "fala_parou":
             self._alguem_falando = False
             self._fala_desde = None
+            if self._recado and e in ABERTO:  # 19/11 (revisão I2): idem; nem mede espera nem fecha o microfone
+                return []
             if self._mic_fechado:  # 04/11: fala da sala com o microfone fechado: não muda nada
                 return []
             self._t_fala_parou = agora
@@ -544,7 +548,7 @@ class Maestro:
                 self._recado = True
             if self._recado:
                 self._mic_fechado = False
-                reabrir = [("microfone", False)]
+                reabrir = [("microfone", False), ("luz", "falando")]  # 19/11 (revisão I1): a luz acompanha o mic
             elif self._mic_fechado:  # 04/11: ela vai responder: o microfone volta (interrupção e continuação)
                 self._mic_fechado = False
                 reabrir = [("microfone", True), ("luz", "respondendo")]

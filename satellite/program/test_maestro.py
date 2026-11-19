@@ -778,6 +778,20 @@ class TestApresentacao(Base):
         self.abrir(); self.m.evento("ela_comecou", 1.0); self.m.evento("ela_parou", 2.0); self.m.evento("tique", 3.6)
         self.assertEqual(self.m.evento("palavra", 4.0, {"wake_word": "friday"}), [])
 
+    def test_regated_speech_shows_speaking_light(self):  # 19/11 revisão I1
+        self.abrir(); self.m.evento("ela_comecou", 1.0); self.m.evento("ela_parou", 2.0); self.m.evento("tique", 3.6)
+        self.m.evento("fala_comecou", 4.0); self.m.evento("fala_parou", 5.0)
+        self.assertIn(("luz", "falando"), self.m.evento("ela_comecou", 6.0))
+
+    def test_tv_talking_through_her_speech_does_not_close_it(self):  # 19/11 revisão I2
+        self.abrir()
+        self.m.evento("fala_comecou", 0.6)  # TV falando sem parar
+        self.m.evento("ela_comecou", 1.0); self.m.evento("ela_parou", 10.0)
+        self.m.evento("ela_comecou", 10.5); self.m.evento("ela_parou", 20.0)
+        acoes = self.m.evento("tique", 20.5)
+        self.assertNotIn("desconectar", [a[0] for a in acoes])
+        self.assertNotEqual(self.m.estado, "parada")
+
     def test_fora_de_parada_ou_mudo_nao_abre(self):
         self.m.evento("palavra", 0.0)
         self.assertEqual(self.m.evento("abrir_apresentacao", 1.0, {}), [])

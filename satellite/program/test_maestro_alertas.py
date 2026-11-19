@@ -247,6 +247,13 @@ class TestTimerSoAPalavraInterrompe(Base):
         acoes = self.m.evento("encerrar", 7.0)
         self.assertNotIn("alarme:parar", nomes(acoes)); self.assertEqual(self.m.estado, "alarme")
 
+    def test_tv_talking_through_the_timer_speech_does_not_end_it(self):  # 19/11 revisão I2
+        self.conversa_do_timer()
+        self.m.evento("fala_comecou", 2.8)  # TV falando sem parar
+        self.m.evento("ela_comecou", 3.0); self.m.evento("ela_parou", 19.0)
+        acoes = self.m.evento("tique", 19.5)
+        self.assertNotIn("desconectar", nomes(acoes)); self.assertNotEqual(self.m.estado, "alarme")
+
     def test_mic_opens_after_the_timer_speech(self):
         self.conversa_do_timer(); self.m.evento("ela_comecou", 3.0); self.m.evento("ela_parou", 5.0)
         self.assertIn("microfone:True", nomes(self.m.evento("tique", 6.6)))
