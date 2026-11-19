@@ -318,6 +318,8 @@ class Maestro:
     def _luz_do_estado(self):
         if self._recado and self.estado in ABERTO:
             return "falando"
+        if self._ela_falando and self.estado == OUVINDO:
+            return "respondendo"
         return {CONECTANDO: "ouvindo", OUVINDO: "ouvindo", AGUARDANDO: "cerebro", ALARME: "alarme",
                 CADASTRO: "ouvindo", TESTE_PALAVRA: "ouvindo"}.get(
             self.estado, self._repouso())
@@ -539,7 +541,9 @@ class Maestro:
                 reabrir = [("microfone", False)]
             elif self._mic_fechado:  # 04/11: ela vai responder: o microfone volta (interrupção e continuação)
                 self._mic_fechado = False
-                reabrir = [("microfone", True), ("luz", "ouvindo")]
+                reabrir = [("microfone", True), ("luz", "respondendo")]
+            elif e == OUVINDO:  # 18/11: luz de resposta, como a Echo, enquanto ela fala
+                reabrir = [("luz", "respondendo")]
             self._resposta_ate = None
             medida = []
             if self._t_fala_parou is not None and self._abertura is not None:  # D4
@@ -567,7 +571,7 @@ class Maestro:
                 return self._fechar(agora, "musica", som="fim")
             if e == OUVINDO:
                 self._prazo = ("continuacao", agora + self.a.continuacao_s)
-                return []
+                return [("luz", "ouvindo")]
             if e == CORTADA:
                 return self._apos_resposta_cortada(agora)
             return []

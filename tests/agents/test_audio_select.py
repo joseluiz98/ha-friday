@@ -147,3 +147,15 @@ def test_units_use_the_check():
     assert "/dev/zero" in sil and "-D voice" in sil and "User=jose" in sil
     rules = (ROOT / "satellite/audio/90-friday-audio.rules").read_text()
     assert "2886/1a/" in rules and "b0e/410/" in rules and "friday-satelite.service" in rules
+
+
+def test_main_uses_absolute_paths_whatever_the_cwd(tmp_path, monkeypatch):
+    """18/11 (MK2): the program unit runs from /opt/friday/current/program; with no FRIDAY_OTA_ROOT the paths were
+    relative ("etc/asound.conf"), so every ExecCondition failed the symlink and never read the voice switch."""
+    mod = load()
+    seen = {}
+    monkeypatch.delenv("FRIDAY_OTA_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(mod, "check", lambda root, **kw: seen.setdefault("root", root) and 0)
+    mod.main(["--check"])
+    assert seen["root"] == "/"

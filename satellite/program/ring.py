@@ -1,6 +1,7 @@
 """Anel de LEDs: uma camada "estado -> aparência" e dois drivers (spec 2026-11-05 §11–§12).
 
-Estados (contrato): off, listen (conversa; com `direction` mostra a direção), think (cérebro), speak, dnd, alarm,
+Estados (contrato): off, listen (conversa; com `direction` mostra a direção), respond (ela respondendo na conversa),
+think (cérebro), speak, dnd, alarm,
 setup, updating, error, muted, net_error (erro persistente de rede), update_pending (update achado e não instalado).
 Composição (spec 2026-11-16-ring-state-priority): o anel guarda CAMADAS (a luz do maestro, os comandos de fora, o erro
 momentâneo, o update pendente) e desenha a de maior prioridade (`PRIORIDADE`); o MUDO é um indicador à parte, por cima
@@ -9,23 +10,25 @@ O programa nunca cai por causa do anel: falha de driver vira NullRing/registro.
 Módulo puro: usb/vendor só são importados dentro de `default_xvf_transport` / `default_usb_find`."""
 import contextlib, io, math, os, sys, threading
 
-ESTADOS = ("off", "listen", "think", "speak", "dnd", "alarm", "setup", "updating", "error", "muted", "net_error",
+ESTADOS = ("off", "listen", "respond", "think", "speak", "dnd", "alarm", "setup", "updating", "error", "muted", "net_error",
            "update_pending")
 
 # o que os comandos de fora (agente: OTA, setup) põem na camada externa; o resto só como prévia (M7)
 ESTADOS_DE_FORA = ("off", "setup", "updating", "error")
 
 # a base de maior prioridade primeiro (spec 2026-11-16); o mudo não entra: é indicador por cima
-PRIORIDADE = ("alarm", "updating", "error", "setup", "speak", "listen", "think", "net_error", "dnd", "update_pending",
+PRIORIDADE = ("alarm", "updating", "error", "setup", "speak", "respond", "listen", "think", "net_error", "dnd", "update_pending",
               "off")
 
 # nomes do maestro (hardware.BITS_DO_ANEL) -> estado
-ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "falando": "speak", "cerebro": "think", "nao_perturbe": "dnd", "alarme": "alarm",
+ESTADO_DO_MAESTRO = {"parada": "off", "ouvindo": "listen", "respondendo": "respond", "falando": "speak", "cerebro": "think", "nao_perturbe": "dnd", "alarme": "alarm",
                      "rede_esgotada": "net_error"}
 
 # calibrar na chegada (18–27/11): valores de partida, não medidos
 SPEED_FAST = 3
 SPEED_SLOW = 1
+SPEED_RESPOND = 2  # 18/11: pulso da resposta, como a Echo de 5ª geração (calibrar no MK2)
+COR_RESPOSTA_FATOR = 0.7  # 18/11 (dono, visto no MK2): 30% mais fraca; o LED_BRIGHTNESS no efeito 1 mexe na velocidade
 BRIGHTNESS = 255
 LED_OFFSET = 5     # 17/11 (bancada): índice do LED 0 em relação a 0° do DOA (LED 0 às 7h, USB às 12h)
 LED_SENTIDO = 1    # 17/11 (bancada): sentido horário
@@ -47,6 +50,20 @@ VID_SEEED, PID_XVF3800 = 0x2886, 0x001A
 def escalar(cor: int, f: float) -> int:
     r, g, b = (cor >> 16) & 0xFF, (cor >> 8) & 0xFF, cor & 0xFF
     return (round(r * f) << 16) | (round(g * f) << 8) | round(b * f)
+
+
+# 18/11 (dono, visto no MK2): o pensando do XVF é um anel passando, como a Echo: base azul e um trecho ciano com rastro,
+# 3/4 de volta por segundo (12 LEDs, 9 passos/s), as duas cores no brilho da luz de resposta
+GIRO_PASSO_S = 1 / 9
+COR_GIRO_BASE = escalar(0x0000FF, COR_RESPOSTA_FATOR)
+COR_GIRO = (escalar(0x00C8FF, COR_RESPOSTA_FATOR), escalar(0x00C8FF, 0.4), escalar(0x00C8FF, 0.15))  # cabeça, meio, cauda
+
+
+def quadro_giro(i: int) -> list:
+    q = [COR_GIRO_BASE] * 12
+    for k, cor in enumerate(COR_GIRO):
+        q[(i - k) % 12] = cor
+    return q
 
 
 class RingState:
@@ -201,7 +218,7 @@ class Contagem:
 
 # Jabra: estado -> nome do relatório HID de hoje (hardware.BITS_DO_ANEL)
 # speak = recado do cérebro com o microfone fechado (M4): a luz do cérebro, não a de ouvindo
-_JABRA = {"off": "parada", "listen": "ouvindo", "speak": "cerebro", "think": "cerebro", "dnd": "nao_perturbe",
+_JABRA = {"off": "parada", "listen": "ouvindo", "respond": "ouvindo", "speak": "cerebro", "think": "cerebro", "dnd": "nao_perturbe",
           "alarm": "alarme", "setup": "cerebro", "updating": "cerebro", "error": "alarme", "muted": "parada",
           "net_error": "alarme", "update_pending": "cerebro"}  # o Jabra não tem amarelo: update_pending = luz do setup
 
@@ -238,7 +255,7 @@ class JabraRing(_Composto):
 
 
 # estado -> (efeito, cor, velocidade). velocidade None = sem respiração (cor fixa)
-_XVF = {"speak": (3, 0x0000FF, None), "think": (1, 0x0000FF, SPEED_FAST), "dnd": (1, 0x8000FF, SPEED_SLOW),
+_XVF = {"speak": (3, 0x0000FF, None), "respond": (1, escalar(0x00C8FF, COR_RESPOSTA_FATOR), SPEED_RESPOND), "think": (5, COR_GIRO_BASE, None), "dnd": (1, 0x8000FF, SPEED_SLOW),
         "alarm": (1, 0xFF8000, SPEED_FAST), "setup": (1, 0xFF8000, SPEED_SLOW), "updating": (1, 0xFFFFFF, SPEED_SLOW),
         "error": (1, 0xFF0000, SPEED_SLOW), "muted": (3, 0xFF0000, None),
         "net_error": (1, 0xFF0000, SPEED_SLOW), "update_pending": (1, 0xFFC800, SPEED_SLOW)}  # amarelo, como a notificação das Echos
@@ -257,6 +274,8 @@ class Xvf3800Ring(_Composto):
         self._timer = None      # volta do erro
         self._volta = None      # pedido de fora anterior ao erro
         self._timer_dnd = None  # pulso do não perturbe
+        self._timer_giro = None  # passo do anel do pensando
+        self._giro_i = 0
         self._trava = threading.RLock()
         self._log = log or (lambda *a: print(*a, file=sys.stderr, flush=True))
         self._ultimo = None     # chave do quadro já aplicado com sucesso
@@ -309,10 +328,27 @@ class Xvf3800Ring(_Composto):
                 self._redesenhar()
 
     # ---- não perturbe discreto
-    def _parar_dnd(self):
+    def _parar_animacoes(self):
         if self._timer_dnd is not None:
             self._timer_dnd.cancel()
             self._timer_dnd = None
+        if self._timer_giro is not None:
+            self._timer_giro.cancel()
+            self._timer_giro = None
+
+    def _giro_vale(self):
+        return self._cru == "think" or (self._cru is None and self._estado.resolve() == ("think", False))
+
+    def _passo_giro(self, meu=None):
+        with self._trava:
+            if meu is not None and meu is not self._timer_giro:
+                return
+            self._timer_giro = None
+            if not self._giro_vale():
+                return
+            self._giro_i += 1
+            self._aplicar(("think", "giro"), [("LED_RING_COLOR", quadro_giro(self._giro_i))])
+            self._timer_giro = self._agendar_proprio(GIRO_PASSO_S, self._passo_giro, "_timer_giro")
 
     def _dnd_vale(self):
         return self._cru is None and self._estado.resolve() == ("dnd", False)
@@ -373,7 +409,7 @@ class Xvf3800Ring(_Composto):
 
     def _draw(self, base, mudo, direction):
         if mudo:
-            self._parar_dnd()
+            self._parar_animacoes()
             q = [self._cor_da_base(base)] * 12
             for i in MUTE_LEDS:
                 q[i % 12] = COR_MUDO
@@ -382,12 +418,19 @@ class Xvf3800Ring(_Composto):
         if base == "dnd" and self._cru is None:
             if self._ultimo in (("dnd", "baixo"), ("dnd", "pulso")) and self._timer_dnd is not None:
                 return  # já no ciclo do não perturbe
-            self._parar_dnd()
+            self._parar_animacoes()
             self._ultimo = None if self._ultimo == ("dnd", "pulso") else self._ultimo
             self._aplicar(("dnd", "baixo"), [("LED_COLOR", [escalar(_XVF["dnd"][1], DND_LOW)]), ("LED_EFFECT", [3])])
             self._timer_dnd = self._agendar_proprio(DND_PULSE_EVERY_S, self._pulso, "_timer_dnd")
             return
-        self._parar_dnd()
+        if base == "think" and self._ultimo == ("think", "giro") and self._timer_giro is not None:
+            return  # já girando
+        self._parar_animacoes()
+        if base == "think":
+            self._giro_i = 0
+            self._aplicar(("think", "giro"), [("LED_RING_COLOR", quadro_giro(0)), ("LED_EFFECT", [5])])
+            self._timer_giro = self._agendar_proprio(GIRO_PASSO_S, self._passo_giro, "_timer_giro")
+            return
         chave = (base, None if base != "listen" or direction is None else tuple(self._quadro(direction)))
         if chave == self._ultimo:
             return
@@ -407,7 +450,7 @@ class Xvf3800Ring(_Composto):
         with self._trava:
             chave = ("countdown", n)
             if chave != self._ultimo:
-                self._parar_dnd()
+                self._parar_animacoes()
                 self._aplicar(chave, [("LED_RING_COLOR", [COR_CONTAGEM] * n + [0] * (12 - n)), ("LED_EFFECT", [5])])
 
     def reapply(self):
@@ -416,13 +459,13 @@ class Xvf3800Ring(_Composto):
             if not self._iniciado:
                 return
             self._ultimo = None
-            self._parar_dnd()
+            self._parar_animacoes()
             self._redesenhar()
 
     def close(self):
         with self._trava:
             self._fim_do_erro()
-            self._parar_dnd()
+            self._parar_animacoes()
             self._init_composto()
             self._ultimo = None
         try:

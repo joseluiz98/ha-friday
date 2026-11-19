@@ -63,9 +63,23 @@ class TestXvf(unittest.TestCase):
     def test_speak(self):
         self.assertEqual(self.mostrar("speak"), [W("LED_COLOR", 0x0000FF), W("LED_EFFECT", 3)])
 
-    def test_think(self):
-        self.assertEqual(self.mostrar("think"), [W("LED_COLOR", 0x0000FF), W("LED_SPEED", ring.SPEED_FAST),
-                                                  W("LED_BRIGHTNESS", ring.BRIGHTNESS), W("LED_EFFECT", 1)])
+    def test_think_spins_like_the_echo(self):  # 18/11 (dono, visto no MK2): anel passando, 3/4 de volta por segundo
+        base, cab = 0x0000B2, 0x008CB2
+        meio, cauda = ring.escalar(0x00C8FF, 0.4), ring.escalar(0x00C8FF, 0.15)
+        q0 = [cab] + [base] * 9 + [cauda, meio]
+        self.assertEqual(self.mostrar("think"), [W("LED_RING_COLOR", *q0), W("LED_EFFECT", 5)])
+        passo = self.timers[-1]
+        self.assertAlmostEqual(passo.atraso, 1 / 9)
+        self.t.chamadas.clear()
+        passo.fn()
+        self.assertEqual(self.t.chamadas, [W("LED_RING_COLOR", meio, cab, *[base] * 9, cauda)])  # só o quadro, sem efeito
+        self.assertAlmostEqual(self.timers[-1].atraso, 1 / 9)
+        proximo = self.timers[-1]
+        self.mostrar("listen")
+        self.assertTrue(proximo.cancelado)
+        self.t.chamadas.clear()
+        proximo.fn()  # um passo velho depois do cancelamento não desenha nada
+        self.assertEqual(self.t.chamadas, [])
 
     def test_respirando(self):
         casos = {"alarm": (0xFF8000, ring.SPEED_FAST),
@@ -242,6 +256,16 @@ class TestJabra(unittest.TestCase):
         ring.JabraRing(j).show_maestro(ring.ESTADO_DO_MAESTRO["falando"])
         self.assertEqual(j.nomes, ["cerebro"])
 
+    def test_responding_is_cyan_breathing_on_xvf_and_listening_on_jabra(self):  # 18/11: luz da Echo enquanto ela fala
+        self.assertEqual(ring.ESTADO_DO_MAESTRO["respondendo"], "respond")
+        t = Falso()
+        ring.Xvf3800Ring(t).show_maestro("respond")
+        self.assertEqual(t.chamadas, [W("LED_COLOR", 0x008CB2), W("LED_SPEED", ring.SPEED_RESPOND),
+                                      W("LED_BRIGHTNESS", ring.BRIGHTNESS), W("LED_EFFECT", 1)])
+        j = Jabra()
+        ring.JabraRing(j).show_maestro("respond")
+        self.assertEqual(j.nomes, ["ouvindo"])
+
     def test_update_pending_is_a_known_state(self):
         self.assertEqual(ring.ESTADOS[-1], "update_pending")
         self.assertFalse(ring.NullRing().pendente)
@@ -387,7 +411,7 @@ BASES = [s for s in ring.PRIORIDADE if s != "off"]
 
 class TestRingState(unittest.TestCase):
     def test_prioridade(self):
-        self.assertEqual(ring.PRIORIDADE, ("alarm", "updating", "error", "setup", "speak", "listen", "think",
+        self.assertEqual(ring.PRIORIDADE, ("alarm", "updating", "error", "setup", "speak", "respond", "listen", "think",
                                            "net_error", "dnd", "update_pending", "off"))
 
     def test_priority_table(self):
@@ -485,7 +509,7 @@ class TestComposicaoXvf(unittest.TestCase):
         quadro = self.t.chamadas[0]
         self.assertEqual(quadro[0], "LED_RING_COLOR")
         self.assertEqual(quadro[1][0], 0xFF0000)
-        self.assertEqual(set(quadro[1][1:]), {0x0000FF})
+        self.assertEqual(set(quadro[1][1:]), {0x0000B2})  # 18/11: a base do anel do pensando, parada
         self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 5))
 
     def test_xvf_mute_over_dnd_keeps_dnd_low(self):  # M9: mudo + não perturbe não fica mais forte que o DND sozinho
