@@ -90,6 +90,8 @@ RETIRED_KEYS = frozenset({
     "cpu_load", "memory_available", "memory_total", "vm_cpu_load_pct", "host_available_mb",
     # 18/11: the 04:15 reindex was retired (spec 2026-11-18-memory-watcher-health)
     "memory_index_last_success",
+    # 18/11: each satellite reports its own upload (spec 2026-11-18-per-satellite-recordings)
+    "wakeword_sync_last_ok",
 })
 _RETIRED_WAKEWORD = re.compile(r"^.+_wakeword_.+_(mode|sensitivity)$")
 

@@ -1,0 +1,9 @@
+[Unit]
+Description=F.R.I.D.A.Y. wake-word feature cache, daily catch-up (satellites paired after the last install)
+
+[Timer]
+OnCalendar=*-*-* 07:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

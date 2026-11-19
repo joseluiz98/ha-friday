@@ -197,10 +197,14 @@ def stamp_iso(mtime: float | None) -> str | None:
     return datetime.fromtimestamp(int(mtime), timezone.utc).isoformat() if mtime is not None else None
 
 
-def wakeword_pipeline_metrics(sync_mtime: float | None, cache_mtime: float | None) -> dict:
-    """09/11/2026: nightly wake-word pipeline. sync = mark the Pi writes only after a fully OK upload
-    (incoming/<sat>/.sync_ok); cache = stamp featcache_nightly.sh touches only after caching every pending day."""
-    return {"wakeword_sync_last_ok": stamp_iso(sync_mtime), "wakeword_cache_last_ok": stamp_iso(cache_mtime)}
+def wakeword_pipeline_metrics(cache_mtime: float | None, satellites) -> dict:
+    """Nightly wake-word cache (09/11/2026; every satellite since 18/11). cache = stamp featcache_nightly.sh touches
+    only after caching every pending day of every satellite; satellites = its registry wwt-featcache.json
+    {"<sat_id>": "<ISO of that satellite's last OK pass>"}, anything else -> {}. Each satellite reports its own upload
+    (recordings_sync_last_ok), so the office-only upload stamp left the server."""
+    ok = isinstance(satellites, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in satellites.items())
+    return {"wakeword_cache_last_ok": stamp_iso(cache_mtime),
+            "wakeword_cache_last_ok_attributes": {"satellites": dict(satellites) if ok else {}}}
 
 
 VOICE_DESCRIPTOR = DESCRIPTOR
@@ -226,7 +230,6 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("brain_version", "Brain version", **diag),
         s("lucid_last_run", "Lucid Dreaming last run", device_class="timestamp", **diag),
         s("memory_views_mode", "Memory views mode", **diag),
-        s("wakeword_sync_last_ok", "Wake word recordings sync last OK", device_class="timestamp", **diag),
         s("wakeword_cache_last_ok", "Wake word feature cache last OK", device_class="timestamp", **diag),
         s("conversation_open", "Conversation open", platform="binary_sensor", **diag),
         s("host_memory_usage_pct", "Proxmox host memory usage", unit="%", icon="mdi:memory",

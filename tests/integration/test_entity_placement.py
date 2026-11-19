@@ -98,3 +98,8 @@ def test_no_live_key_ends_with_a_retired_key(monkeypatch):
 
 def test_memory_index_sensor_is_retired():
     assert "memory_index_last_success" in RETIRED_KEYS
+
+
+def test_wakeword_sync_sensor_is_retired():
+    """18/11: the server's office-only upload stamp left; each satellite reports its own upload."""
+    assert "wakeword_sync_last_ok" in RETIRED_KEYS

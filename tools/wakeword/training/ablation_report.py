@@ -19,7 +19,20 @@ CHAMADAS = f"{BASE}/raw/20261105_ambient_calls/manifesto.json"
 NAT = ("cv27", "xtts", "xttsvar", "ambiente", "xttsneg")
 
 
+AMB = re.compile(r"^amb\d{8}(_.+)?$")  # legacy amb<YYYYMMDD> (office satellite) or amb<YYYYMMDD>_<sat_id>
+
+
+def ambient_sets(sc):
+    return sorted(k for k in sc if AMB.match(k))
+
+
+def ambient_blocks(sc):
+    """Every ambient block keyed by (set, file): two satellites record files with the same name."""
+    return {(c, f): r for c in ambient_sets(sc) for f, r in sc[c].items()}
+
+
 def ts(f):
+    f = f[1] if isinstance(f, tuple) else f
     m = re.match(r"ambiente_(\d{8})_(\d{6})", f)
     return D.datetime.strptime(m[1] + m[2], "%Y%m%d%H%M%S")
 
@@ -62,9 +75,7 @@ def medir(sc, nome, pos_por_arquivo, n_pos_reserva, cham):
     for g in ("sala", "conversa"):
         c = sc.get(g, {})
         r[g] = sum(v[nome] >= 0.5 for v in c.values())
-    blocos = {}
-    for c in sorted(k for k in sc if k.startswith("amb")):
-        blocos.update(sc[c])
+    blocos = ambient_blocks(sc)
     if blocos:
         for lim in (0.5, 0.4):
             tot, prova, fora = replay(blocos, nome, cham, lim)

@@ -1,0 +1,9 @@
+[Unit]
+Description=F.R.I.D.A.Y. nightly wake-word ambient feature cache (every satellite)
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/friday/wwt/featcache_nightly.sh
+Nice=19

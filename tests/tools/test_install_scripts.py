@@ -103,10 +103,20 @@ def test_skills_install_refuses_missing_key(tmp_path):
     assert not (tmp_path / "ws" / "skills" / "falar-em-casa").exists()
 
 
+def _wwt_env(tmp_path, office="sat-0a1b2c"):
+    for d in ("cache", "incoming", "systemd"):
+        (tmp_path / d).mkdir(exist_ok=True)
+    env_file = tmp_path / "local.env"
+    env_file.write_text(f"FRIDAY_TELEGRAM_CHAT=1\nFRIDAY_SAT_OFFICE={office}\n" if office else "FRIDAY_TELEGRAM_CHAT=1\n")
+    return {"FRIDAY_WWT_DIR": str(tmp_path / "wwt"), "FRIDAY_VERSION_LINE": LINE,
+            "FRIDAY_WWT_CACHE": str(tmp_path / "cache"), "FRIDAY_WAKEWORD_INCOMING": str(tmp_path / "incoming"),
+            "FRIDAY_SYSTEMD_DIR": str(tmp_path / "systemd"), "FRIDAY_LOCAL_CONFIG": str(env_file)}
+
+
 def test_wwt_install_puts_training_code_and_nightly_script(tmp_path):
     """The VM nightly featcache runs the repo's training code from /opt/friday/wwt/training, not the HAOS mount."""
     dest = tmp_path / "wwt"
-    r = _run("tools/wakeword/wwt/install.sh", {"FRIDAY_WWT_DIR": str(dest), "FRIDAY_VERSION_LINE": LINE})
+    r = _run("tools/wakeword/wwt/install.sh", _wwt_env(tmp_path))
     assert r.returncode == 0, r.stderr
     assert (dest / "featcache_nightly.sh").exists() and os.access(dest / "featcache_nightly.sh", os.X_OK)
     assert (dest / "training" / "featcache.py").exists() and not (dest / "training" / "test_gate.py").exists()
@@ -114,3 +124,61 @@ def test_wwt_install_puts_training_code_and_nightly_script(tmp_path):
     nightly = (dest / "featcache_nightly.sh").read_text()
     assert "/mnt/haos" not in nightly and "/opt/friday/wwt/training" in nightly
     assert not list(dest.glob(".*.new")) and not (dest / ".training.new").exists()
+
+
+def test_wwt_install_renames_legacy_office_cache_once(tmp_path):
+    """Legacy caches amb<YYYYMMDD>.* are the office satellite's: renamed to amb<YYYYMMDD>_<sat>.*, idempotently."""
+    env = _wwt_env(tmp_path)
+    c = tmp_path / "cache"
+    for ext in ("emb.npy", "json", "log", "vad.npy"):
+        (c / f"amb20261103.{ext}").write_text(ext)
+    (c / "amb20261104_sat-1d2e3f.json").write_text("other")
+    (c / "score_v1.json").write_text("{}"); (c / "sessoes.json").write_text("{}")
+    for _ in range(2):
+        r = _run("tools/wakeword/wwt/install.sh", env)
+        assert r.returncode == 0, r.stderr
+        assert sorted(p.name for p in c.iterdir()) == sorted(
+            [f"amb20261103_sat-0a1b2c.{e}" for e in ("emb.npy", "json", "log", "vad.npy")]
+            + ["amb20261104_sat-1d2e3f.json", "score_v1.json", "sessoes.json"])
+    assert (c / "amb20261103_sat-0a1b2c.json").read_text() == "json"
+
+
+def test_wwt_install_refuses_legacy_cache_without_office(tmp_path):
+    env = _wwt_env(tmp_path, office=None)
+    (tmp_path / "cache" / "amb20261103.json").write_text("{}")
+    r = _run("tools/wakeword/wwt/install.sh", env)
+    assert r.returncode != 0 and "FRIDAY_SAT_OFFICE" in r.stderr
+    assert (tmp_path / "cache" / "amb20261103.json").exists() and not (tmp_path / "wwt" / "training").exists()
+
+
+def test_wwt_install_writes_units_with_one_path_per_satellite(tmp_path):
+    env = _wwt_env(tmp_path)
+    for sat in ("sat-0a1b2c", "sat-1d2e3f"):
+        (tmp_path / "incoming" / sat).mkdir()
+    (tmp_path / "incoming" / "stray-file").write_text("")  # not a directory: no path
+    r = _run("tools/wakeword/wwt/install.sh", env)
+    assert r.returncode == 0, r.stderr
+    sd = tmp_path / "systemd"
+    path = (sd / "friday-wwt-featcache.path").read_text()
+    lines = [ln for ln in path.splitlines() if ln.startswith("PathChanged=")]
+    assert lines == [f"PathChanged={tmp_path}/incoming/sat-0a1b2c/.sync_ok",
+                     f"PathChanged={tmp_path}/incoming/sat-1d2e3f/.sync_ok"]
+    assert "WantedBy=paths.target" in path
+    timer = (sd / "friday-wwt-featcache.timer").read_text()
+    assert "OnCalendar=*-*-* 07:00" in timer and "Persistent=true" in timer and "WantedBy=timers.target" in timer
+    svc = (sd / "friday-wwt-featcache.service").read_text()
+    assert "Type=oneshot" in svc and "ExecStart=/opt/friday/wwt/featcache_nightly.sh" in svc and "Nice=19" in svc
+    assert "Requires=docker.service" in svc
+    # a satellite paired later shows up on the next install
+    (tmp_path / "incoming" / "sat-2a3b4c").mkdir()
+    assert _run("tools/wakeword/wwt/install.sh", env).returncode == 0
+    assert "sat-2a3b4c/.sync_ok" in (sd / "friday-wwt-featcache.path").read_text()
+
+
+def test_wwt_install_without_satellites_writes_no_path_unit(tmp_path):
+    env = _wwt_env(tmp_path)
+    sd = tmp_path / "systemd"
+    (sd / "friday-wwt-featcache.path").write_text("stale")
+    r = _run("tools/wakeword/wwt/install.sh", env)
+    assert r.returncode == 0, r.stderr
+    assert not (sd / "friday-wwt-featcache.path").exists() and (sd / "friday-wwt-featcache.timer").exists()

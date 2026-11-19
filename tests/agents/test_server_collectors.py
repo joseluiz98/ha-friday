@@ -111,8 +111,19 @@ def test_backup_storage_used_pct():
 
 
 def test_wakeword_pipeline_stamps():
-    assert c.wakeword_pipeline_metrics(1761700000.7, None) == {
-        "wakeword_sync_last_ok": "2025-10-29T01:06:40+00:00", "wakeword_cache_last_ok": None}
+    sats = {"sat-0a1b2c": "2025-10-29T07:00:00+00:00", "sat-1d2e3f": "2025-10-28T07:00:00+00:00"}
+    assert c.wakeword_pipeline_metrics(1761700000.7, sats) == {
+        "wakeword_cache_last_ok": "2025-10-29T01:06:40+00:00",
+        "wakeword_cache_last_ok_attributes": {"satellites": sats}}
+    for bad in (None, [], "x", {"sat-0a1b2c": 3}, {"sat-0a1b2c": None}):
+        m = c.wakeword_pipeline_metrics(None, bad)
+        assert m == {"wakeword_cache_last_ok": None, "wakeword_cache_last_ok_attributes": {"satellites": {}}}, bad
+
+
+def test_wakeword_sync_sensor_is_gone():
+    """18/11: each satellite reports its own upload; the office-only sync stamp left the server."""
+    assert "wakeword_sync_last_ok" not in {d["key"] for d in c.capabilities(proxmox=True)}
+    assert "wakeword_sync_last_ok" not in c.wakeword_pipeline_metrics(None, None)
 
 
 def test_capabilities_keys_match_metrics():

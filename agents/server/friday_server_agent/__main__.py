@@ -50,11 +50,10 @@ PVE = os.environ.get("FRIDAY_PVE_API", "")  # e.g. https://<proxmox>:8006/api2/j
 PVE_BACKUP_STORAGE = os.environ.get("FRIDAY_PVE_BACKUP_STORAGE", "backup")  # the vzdump job's target storage
 # Written by the bot (activity.py): open sessions, brain turns in flight, heartbeat (minor 13 of 19/10).
 ACTIVITY_FILE = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")
-# 09/11/2026: nightly wake-word pipeline. The Pi writes .sync_ok only after a fully OK upload; featcache_nightly.sh
-# touches the cache stamp only after caching every pending day. The office satellite id comes from local.env.
-WAKEWORD_SYNC_STAMP = os.environ.get(
-    "FRIDAY_WAKEWORD_SYNC_STAMP", f"/srv/wakeword-data/incoming/{os.environ.get('FRIDAY_SAT_OFFICE', '')}/.sync_ok")
+# 09/11/2026: nightly wake-word cache. featcache_nightly.sh touches the stamp only after caching every pending day of
+# every satellite, and keeps {"<sat_id>": "<ISO>"} of each satellite's last OK pass in the registry (18/11).
 WAKEWORD_CACHE_STAMP = os.environ.get("FRIDAY_WAKEWORD_CACHE_STAMP", "/srv/friday/state/wwt-featcache.ok")
+WAKEWORD_CACHE_REGISTRY = os.environ.get("FRIDAY_WAKEWORD_CACHE_REGISTRY", "/srv/friday/state/wwt-featcache.json")
 
 
 def _mtime(path: str):
@@ -70,6 +69,14 @@ def _read(path: str) -> str:
             return f.read().strip()
     except OSError:
         return ""
+
+
+def _read_json(path: str):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 
 
 def _get(url: str, header: str, insecure: bool = False) -> dict:
@@ -92,7 +99,7 @@ def sample_vm() -> dict:
     return {**c.vm_metrics(_proc("meminfo"), _proc("loadavg"),
                            (v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail),
                            _proc("uptime"), os.cpu_count() or 1, cpu_pct=CPU.update(_proc("stat"))),
-            **c.wakeword_pipeline_metrics(_mtime(WAKEWORD_SYNC_STAMP), _mtime(WAKEWORD_CACHE_STAMP))}
+            **c.wakeword_pipeline_metrics(_mtime(WAKEWORD_CACHE_STAMP), _read_json(WAKEWORD_CACHE_REGISTRY))}
 
 
 def _log_tail() -> str:
