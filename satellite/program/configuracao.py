@@ -21,7 +21,8 @@ PADROES = {
     "endereco_friday": None, "pre_gravacao_s": 0.4,
     "porta_local": 8700,
     "comodo": None,  # cômodo onde o satélite fica (vai para a Friday em cada conversa); None = não informado
-    "gravar_ativacoes": False,  # guarda ~3,5 s em volta de cada "Friday" detectada (análise de falsos)
+    # guarda ~3,5 s em volta de cada "Friday" detectada (análise de falsos); 18/11 (dono): ligado de fábrica (migração 0007)
+    "gravar_ativacoes": True,
     "verificador": None,  # spec 2026-10-15 D13: caminho do verificador pessoal; None = detector de hoje
     "limiar_verificador": 0.3,  # nota base a partir da qual o verificador decide
     # spec 2026-10-20: razão 2-6 kHz / 100-600 Hz (dB) a partir da qual a palavra é sussurro; None desliga.
@@ -62,7 +63,8 @@ PADROES = {
     # 02/11/2026: gravação contínua do ambiente até "AAAA-MM-DDTHH:MM" (hora local, até 24 h à frente); None = desligada
     "gravar_ambiente_ate": None,
     # 09/11/2026: janela diária "HH:MM-HH:MM" (hora local) guardada aqui; grava todo dia sem depender do HA nem da rede
-    "gravar_ambiente_janela": None,
+    # 18/11 (dono): de fábrica "08:00-22:00" (migração 0007 liga nos já instalados que não adotaram nenhuma das duas)
+    "gravar_ambiente_janela": "08:00-22:00",
 }
 MODOS_PALAVRA = ("ativa", "sombra", "desligada")
 PRE_GRAVACAO_MAX_S = 2  # o programa dimensiona o buffer `recentes` por este máximo

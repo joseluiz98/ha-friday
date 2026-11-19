@@ -53,7 +53,7 @@ class TestJanela(unittest.TestCase):
         novo = c.validar_mudancas(dict(c.PADROES), {"gravar_ambiente_janela": "08:00-22:00"})
         self.assertEqual(novo["gravar_ambiente_janela"], "08:00-22:00")
         self.assertIsNone(c.validar_mudancas(novo, {"gravar_ambiente_janela": None})["gravar_ambiente_janela"])
-        self.assertIsNone(c.PADROES["gravar_ambiente_janela"])
+        self.assertEqual(c.PADROES["gravar_ambiente_janela"], "08:00-22:00")  # 18/11: de fábrica
         with self.assertRaises(ValueError):
             c.validar_mudancas(dict(c.PADROES), {"gravar_ambiente_janela": "08:00"})
 
