@@ -37,7 +37,7 @@ class TestAlarme(Base):
 
     def test_depois_da_1a_volta_pausa_e_abre_conversa_sem_som_de_inicio(self):
         acoes = self.conversa_do_timer()
-        self.assertEqual(nomes(acoes), ["alarme:pausar", "luz:ouvindo", "conectar"])
+        self.assertEqual(nomes(acoes), ["alarme:pausar", "luz:falando", "conectar", "microfone:False"])
         self.assertEqual(achar(acoes, "conectar"), {"timer": T})
 
     def test_com_mudo_nao_abre_conversa_e_segue_tocando(self):
@@ -63,9 +63,10 @@ class TestAlarme(Base):
         self.conversa_do_timer()
         self.m.evento("ela_comecou", 3.0)
         self.m.evento("ela_parou", 5.0)
-        self.m.evento("fala_comecou", 6.0)
-        self.m.evento("fala_parou", 7.0)
-        acoes = self.m.evento("tique", 7.0 + 20.0)
+        self.m.evento("tique", 6.6)  # 19/11: a resposta conta depois que o microfone abre
+        self.m.evento("fala_comecou", 7.0)
+        self.m.evento("fala_parou", 8.0)
+        acoes = self.m.evento("tique", 8.0 + 20.0)
         self.assertIn("alarme:parar", nomes(acoes))
         self.assertNotIn("aviso_nao_atendido", nomes(acoes))
         self.assertEqual(achar(acoes, "registrar_timer")["como_parou"], "atendido")
@@ -101,9 +102,10 @@ class TestAlarme(Base):
 
     def test_quem_fala_e_depois_manda_parar_para_o_alarme(self):
         self.conversa_do_timer()
-        self.m.evento("fala_comecou", 4.0)
-        self.m.evento("fala_parou", 5.0)
-        acoes = self.m.evento("encerrar", 5.5)
+        self.m.evento("ela_comecou", 3.0); self.m.evento("ela_parou", 3.5); self.m.evento("tique", 5.1)  # 19/11
+        self.m.evento("fala_comecou", 5.5)
+        self.m.evento("fala_parou", 6.0)
+        acoes = self.m.evento("encerrar", 6.5)
         self.assertIn("alarme:parar", nomes(acoes))
         self.assertEqual(self.m.estado, "parada")
         self.assertEqual(achar(acoes, "registrar_timer")["como_parou"], "atendido")
@@ -214,6 +216,42 @@ class TestEntrega(Base):
 TM = {"id": "t9", "nome": "acordar", "duracao_s": 60, "termino": 0.0, "music": "Legião Urbana"}
 
 
+class TestTimerSoAPalavraInterrompe(Base):
+    """19/11 (spec 2026-11-19-timer-presentation-wake-word-only): a fala do timer sai com o microfone fechado; só a
+    palavra ativa corta; fala da sala enquanto ela fala não atende o timer."""
+    def setUp(self):
+        super().setUp()
+        self.m.mudo = False
+
+    def test_timer_opens_speaking_with_mic_closed(self):
+        acoes = self.conversa_do_timer()
+        self.assertEqual(nomes(acoes), ["alarme:pausar", "luz:falando", "conectar", "microfone:False"])
+
+    def test_room_speech_does_not_cut_the_timer(self):
+        self.conversa_do_timer(); self.m.evento("ela_comecou", 3.0)
+        a = self.m.evento("fala_comecou", 3.5) + self.m.evento("fala_parou", 4.0)
+        self.assertNotIn("parar_fala", nomes(a)); self.assertNotIn("microfone:True", nomes(a))
+
+    def test_active_word_cuts_the_timer_and_counts_as_answered(self):  # Review Focus 3
+        self.conversa_do_timer(); self.m.evento("ela_comecou", 3.0)
+        self.assertIn("parar_fala", nomes(self.m.evento("palavra", 3.5, {"wake_word": "friday"})))
+        acoes = self.m.evento("encerrar", 6.0)
+        self.assertEqual(achar(acoes, "registrar_timer")["como_parou"], "atendido")
+
+    def test_room_speech_while_she_speaks_is_not_an_answer(self):  # Review Focus 2
+        self.conversa_do_timer()
+        self.m.evento("fala_comecou", 2.8); self.m.evento("fala_parou", 2.9)  # antes da 1ª palavra dela
+        self.m.evento("ela_comecou", 3.0)
+        self.m.evento("fala_comecou", 3.5); self.m.evento("fala_parou", 4.0)  # enquanto ela fala
+        self.m.evento("ela_parou", 5.0); self.m.evento("tique", 6.6)  # o microfone abre
+        acoes = self.m.evento("encerrar", 7.0)
+        self.assertNotIn("alarme:parar", nomes(acoes)); self.assertEqual(self.m.estado, "alarme")
+
+    def test_mic_opens_after_the_timer_speech(self):
+        self.conversa_do_timer(); self.m.evento("ela_comecou", 3.0); self.m.evento("ela_parou", 5.0)
+        self.assertIn("microfone:True", nomes(self.m.evento("tique", 6.6)))
+
+
 class TestAlarmeMusical(Base):
     """Spec 2026-10-21 R11: o alarme com música toca a campainha, pede a música à VM e, se ela não começar em 10 s,
     segue como um alarme normal. O alarme nunca falha por causa da música."""
@@ -244,14 +282,14 @@ class TestAlarmeMusical(Base):
     def test_music_timeout_falls_back(self):
         self.alarme(0.0, TM)
         acoes = self.m.evento("tique", 10.1)
-        self.assertEqual(nomes(acoes), ["alarme:pausar", "luz:ouvindo", "conectar"])  # o caminho normal do timer
+        self.assertEqual(nomes(acoes), ["alarme:pausar", "luz:falando", "conectar", "microfone:False"])  # o caminho normal do timer
         self.assertEqual(self.m.estado, "conectando")
 
     def test_music_failed_falls_back(self):
         self.alarme(0.0, TM)
         self.assertEqual(self.m.evento("music_failed", 3.0, "t9"), [])
         acoes = self.m.evento("tique", 3.1)
-        self.assertEqual(nomes(acoes), ["alarme:pausar", "luz:ouvindo", "conectar"])
+        self.assertEqual(nomes(acoes), ["alarme:pausar", "luz:falando", "conectar", "microfone:False"])
 
     def test_music_started_after_fallback_is_ignored(self):
         self.alarme(0.0, TM)
@@ -262,7 +300,7 @@ class TestAlarmeMusical(Base):
         acoes = self.alarme(0.0, T)
         self.assertEqual(nomes(acoes), ["volume_alerta:True", "alarme:tocar", "luz:alarme"])
         self.assertTrue(all(a[0] != "request_music" for a in acoes))
-        self.assertEqual(nomes(self.m.evento("tique", 1.5)), ["alarme:pausar", "luz:ouvindo", "conectar"])
+        self.assertEqual(nomes(self.m.evento("tique", 1.5)), ["alarme:pausar", "luz:falando", "conectar", "microfone:False"])
 
     def test_musical_alarm_with_mute_still_asks_for_music(self):
         self.m.evento("mudo", 0.0, True)

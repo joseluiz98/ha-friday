@@ -273,8 +273,9 @@ class Maestro:
         self._prazo = ("espera_inicial", agora + self.a.resposta_max_s)
         return [("luz", "ouvindo"), ("conectar", extras)]
 
-    def _abrir_timer(self, agora):
-        return [("alarme", "pausar")] + self._abrir_propria(agora, "timer", {"timer": self._alarme["timer"]})
+    def _abrir_timer(self, agora):  # 19/11: a fala do timer é recado (mic fechado, só a palavra ativa corta)
+        return [("alarme", "pausar")] + self._fechar_mic_do_recado(
+            self._abrir_propria(agora, "timer", {"timer": self._alarme["timer"]}))
 
     def _abrir_entrega(self, agora, entrega_id):
         return self._fechar_mic_do_recado([("volume_alerta", True), ("som", "lembrete")] + self._abrir_propria(
@@ -455,9 +456,12 @@ class Maestro:
                 return self._encerrar_alarme(agora, "palavra") + self._abrir(agora, "palavra", self._sussurro(valor),
                                                                            self._palavra(valor))
             return []
-        if self._alarme and self._da_conversa("timer") and nome in ("fala_comecou", "botao"):
+        if self._alarme and self._da_conversa("timer") and (nome == "botao" or (nome == "fala_comecou" and not self._recado)
+                                                            or (nome == "palavra" and self._recado and e in ABERTO
+                                                                and self.mudo is False)):
             # alguém respondeu ao timer: o alarme não volta. O `encerrar` NÃO entra aqui: sozinho ele é o modelo
             # decidindo (14/10: encerrou em 1,2 s sem falar); quem manda parar já falou antes (fala_comecou).
+            # 19/11: fala da sala com o microfone fechado (recado) não atende; a palavra que corta o recado atende.
             self._alarme["atendido"] = True
         if nome == "botao" and valor == "vermelho":
             # Spec 2026-11-04: o vermelho corta tudo e fecha, em qualquer estado de conversa aberta. Parado, só o
