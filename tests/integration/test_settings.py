@@ -81,3 +81,18 @@ def test_general_plan():
     assert st.general_plan(general, state, keys) == {"follow_up_window": 7, "end_of_speech_pause": 1.2}
     assert st.general_plan(general, dict(state, follow_up_window=0), keys) == {"end_of_speech_pause": 1.2}
     assert st.general_plan(general, state, {"reply_wait"}) == {}
+
+
+def test_recording_switches_are_advanced_settings():
+    """18/11: record_ambient and record_activations live in the satellite's Advanced step."""
+    d = Descriptor
+    caps = _caps() + [d("record_ambient", "switch", "Record ambient audio", hidden=True),
+                      d("record_activations", "switch", "Record activations", hidden=True)]
+    keys = st.advanced_keys(caps)
+    assert "record_ambient" in keys and "record_activations" in keys
+    assert st.validate_advanced(caps, "record_ambient", True) is True
+    assert st.validate_advanced(caps, "record_activations", False) is False
+    assert code(st.validate_advanced, caps, "record_ambient", "on") == "bad_type"
+    assert code(st.validate_advanced, caps, "record_activations", 1) == "bad_type"
+    # an old agent that does not announce them: unknown
+    assert code(st.validate_advanced, _caps(), "record_ambient", True) == "unknown_key"

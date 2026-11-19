@@ -45,6 +45,7 @@ PROGRAM_DIR = os.environ.get("FRIDAY_SAT_PROGRAM_DIR") or next(
 BUNDLES = os.path.expanduser("~/.friday-agent/bundles")
 APPLY_AGENT = ["sudo", "-n", "/usr/local/sbin/friday-agent-apply"]
 ID_FILE = os.environ.get("FRIDAY_SAT_ID_FILE", "/etc/friday-satelite/id")
+SYNC_STAMP = os.environ.get("FRIDAY_SAT_SYNC_STAMP", "/home/jose/.friday_sync_ok")  # written by the sync script
 RECORDINGS = os.environ.get("FRIDAY_SAT_RECORDINGS", "/home/jose/gravacoes/ativacoes")
 PORT = int(os.environ.get("FRIDAY_AGENT_PORT", "8701"))
 COUNTERS = os.path.expanduser("~/.friday-agent/counters.json")  # today's counts survive an agent restart
@@ -108,6 +109,14 @@ class VoiceSwitch:
         return res if not res.get("ok") else {"ok": True}
 
 
+def sync_stamp_mtime(path: str | None = None) -> float | None:
+    """mtime of the last whole recordings upload (one os.stat); None = no stamp."""
+    try:
+        return os.stat(path or SYNC_STAMP).st_mtime
+    except OSError:
+        return None
+
+
 async def read_program(program, mapper, memo: dict) -> dict | None:
     """What the voice program says now, as state changes; None = it answered but could not be read (keep the last).
     A program that does not answer gives `program_state: off` and None for every key that came from it."""
@@ -120,7 +129,7 @@ async def read_program(program, mapper, memo: dict) -> dict | None:
         memo["ww"] = await program.wakewords()
     except (ProgramError, OSError):
         return None
-    return mapper.state(memo["cfg"], memo["ww"], status)
+    return mapper.state(memo["cfg"], memo["ww"], status, sync_stamp_mtime())
 
 
 async def main() -> None:
@@ -276,8 +285,9 @@ async def main() -> None:
             return {"ok": False, "error": "unknown_key"}
         try:
             if "config" in plan:
-                tracker.mark_ha(plan["config"])
-                await program.put_config(plan["config"])
+                if plan["config"]:  # empty = nothing to change (record_ambient on with a custom window)
+                    tracker.mark_ha(plan["config"])
+                    await program.put_config(plan["config"])
             else:
                 name, mode = plan["wakeword"]
                 tracker.mark_ha(["modo_friday", "palavras_extras"])

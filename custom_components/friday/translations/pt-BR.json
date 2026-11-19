@@ -155,12 +155,16 @@
             "wakeword_sexta_feira_sensitivity": "Wake word sexta_feira threshold",
             "ducking_restore": "Ducking restore delay",
             "continuous_speech_limit": "Continuous sound cutoff",
-            "ota_channel": "Canal de atualização"
+            "ota_channel": "Canal de atualização",
+            "record_ambient": "Gravar áudio do ambiente",
+            "record_activations": "Gravar ativações"
           },
           "data_description": {
             "continuous_speech_limit": "0 = desligado",
             "ducking_restore": "Quanto tempo até o volume da música voltar",
-            "ota_channel": "alpha recebe as pre-releases primeiro; stable recebe depois da prova do alpha"
+            "ota_channel": "alpha recebe as pre-releases primeiro; stable recebe depois da prova do alpha",
+            "record_ambient": "Grava das 08:00 às 22:00 para treinar as palavras; vai para a VM de madrugada",
+            "record_activations": "Guarda ~3,5 s em volta de cada ativação para análise"
           }
         }
       },

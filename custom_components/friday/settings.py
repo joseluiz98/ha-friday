@@ -27,7 +27,8 @@ GENERAL_SPECS: dict[str, dict[str, Any]] = {
 }
 
 ADVANCED_FIXED: tuple[str, ...] = ("ducking_restore", "continuous_speech_limit",  # ducking + level: device page
-                                   "ota_channel")  # 14/11: the update channel left the device page
+                                   "ota_channel",  # 14/11: the update channel left the device page
+                                   "record_ambient", "record_activations")  # 18/11: per-satellite recordings
 _WAKEWORD_KEYS = ("_mode", "_sensitivity")
 _EPS = 1e-6
 

@@ -422,3 +422,69 @@ def test_follow_up_mode_mapping():
     m.state(dict(CFG, continuacao_s=9), WW, None)
     assert m.to_program(CFG, "follow_up_mode", True) == {"config": {"continuacao_s": 9}}
     assert cap.Mapper().to_program(CFG, "follow_up_mode", True) == {"config": {"continuacao_s": 5}}
+
+
+# 18/11: per-satellite recordings (spec 2026-11-18-per-satellite-recordings)
+def test_recording_controls_are_hidden_config_switches():
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    for key, name, icon in (("record_ambient", "Record ambient audio", "mdi:waveform"),
+                            ("record_activations", "Record activations", "mdi:record-rec")):
+        d = keys[key]
+        assert (d["platform"], d["name"], d["icon"]) == ("switch", name, icon)
+        assert d["hidden"] is True and d["category"] == "config"
+    s = keys["recordings_sync_last_ok"]
+    assert s["platform"] == "sensor" and s["name"] == "Recordings sync last OK"
+    assert s["device_class"] == "timestamp" and s["category"] == "diagnostic"
+
+
+def test_record_ambient_state_follows_the_window():
+    m = cap.Mapper()
+    assert m.state({**CFG, "gravar_ambiente_janela": "08:00-22:00"}, WW, None)["record_ambient"] is True
+    assert m.state({**CFG, "gravar_ambiente_janela": "09:00-18:00"}, WW, None)["record_ambient"] is True
+    assert m.state({**CFG, "gravar_ambiente_janela": None}, WW, None)["record_ambient"] is False
+    assert m.state(CFG, WW, None)["record_ambient"] is False  # an old program without the key
+
+
+def test_record_activations_state():
+    m = cap.Mapper()
+    assert m.state({**CFG, "gravar_ativacoes": True}, WW, None)["record_activations"] is True
+    assert m.state({**CFG, "gravar_ativacoes": False}, WW, None)["record_activations"] is False
+    assert m.state(CFG, WW, None)["record_activations"] is False
+
+
+def test_record_ambient_to_program():
+    m = cap.Mapper()
+    assert m.to_program({**CFG, "gravar_ambiente_janela": None}, "record_ambient", True) == {
+        "config": {"gravar_ambiente_janela": "08:00-22:00"}}
+    # a custom window is kept: turning the switch on again must not overwrite it
+    assert m.to_program({**CFG, "gravar_ambiente_janela": "09:00-18:00"}, "record_ambient", True) == {"config": {}}
+    assert m.to_program(CFG, "record_ambient", False) == {
+        "config": {"gravar_ambiente_janela": None, "gravar_ambiente_ate": None}}
+    assert m.to_program(CFG, "record_activations", True) == {"config": {"gravar_ativacoes": True}}
+    assert m.to_program(CFG, "record_activations", False) == {"config": {"gravar_ativacoes": False}}
+
+
+def test_sync_sensor_with_a_key_on_and_a_stamp():
+    st = cap.Mapper().state({**CFG, "gravar_ativacoes": True}, WW, None, sync_ok_mtime=1763500000)
+    assert st["recordings_sync_last_ok"] == "2025-11-18T21:06:40+00:00"
+    assert st["recordings_sync_last_ok_attributes"] == {"record_ambient": False, "record_activations": True}
+
+
+def test_sync_sensor_none_when_both_keys_are_off():
+    st = cap.Mapper().state(CFG, WW, None, sync_ok_mtime=1763500000)
+    assert st["recordings_sync_last_ok"] is None
+    assert st["recordings_sync_last_ok_attributes"] == {"record_ambient": False, "record_activations": False}
+
+
+def test_sync_sensor_none_without_a_stamp():
+    st = cap.Mapper().state({**CFG, "gravar_ambiente_janela": "08:00-22:00"}, WW, None)
+    assert st["recordings_sync_last_ok"] is None
+    assert st["recordings_sync_last_ok_attributes"] == {"record_ambient": True, "record_activations": False}
+
+
+def test_down_state_clears_the_recording_keys():
+    m = cap.Mapper()
+    m.state({**CFG, "gravar_ativacoes": True}, WW, None, sync_ok_mtime=1763500000)
+    down = m.down_state()
+    assert down["record_ambient"] is None and down["record_activations"] is None
+    assert down["recordings_sync_last_ok"] is None

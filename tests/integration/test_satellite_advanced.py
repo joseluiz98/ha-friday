@@ -24,12 +24,16 @@ CAPS = [
      "step": 0.01, "hidden": True},
     {"key": "ota_channel", "platform": "select", "name": "Update channel", "options": ["stable", "alpha"],
      "category": "config", "hidden": True},
+    {"key": "record_ambient", "platform": "switch", "name": "Record ambient audio", "category": "config",
+     "hidden": True},
+    {"key": "record_activations", "platform": "switch", "name": "Record activations", "category": "config",
+     "hidden": True},
     {"key": "vol", "platform": "number", "name": "Volume", "min": 0, "max": 10, "step": 1},
 ]
 STATE = {"ducking_restore": 1.0, "continuous_speech_limit": 0,
          "wakeword_friday_mode": "off", "wakeword_friday_sensitivity": 0.5,
          "wakeword_sexta_feira_mode": "active", "wakeword_sexta_feira_sensitivity": 0.35,
-         "ota_channel": "stable"}
+         "ota_channel": "stable", "record_ambient": True, "record_activations": False}
 
 
 def make_sat(got, state=None, answer=None):
@@ -201,5 +205,20 @@ async def test_advanced_has_the_update_channel(hass):
     assert fields["wakeword_friday_mode"].config["translation_key"] == "wakeword_mode"
     r = await hass.config_entries.subentries.async_configure(r["flow_id"], form_values(ota_channel="alpha"))
     assert r["type"] == FlowResultType.ABORT and got == [("ota_channel", "alpha")]
+    await hass.config_entries.async_unload(entry.entry_id)
+    await sat.stop()
+
+
+async def test_advanced_recording_switches_are_sent_when_changed(hass):
+    """18/11: the recording switches are booleans in the Advanced step; unchanged ones send nothing."""
+    got = []
+    sat = make_sat(got)
+    entry = await setup(hass, sat)
+    r = await open_advanced(hass, entry)
+    fields = {str(k): v for k, v in r["data_schema"].schema.items()}
+    assert "record_ambient" in fields and "record_activations" in fields
+    r = await hass.config_entries.subentries.async_configure(r["flow_id"], form_values(record_activations=True))
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "advanced_saved"
+    assert got == [("record_activations", True)]
     await hass.config_entries.async_unload(entry.entry_id)
     await sat.stop()
