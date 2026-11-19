@@ -608,7 +608,12 @@ class Maestro:
         está falando, não ouvindo (M4): fala no cômodo não é ouvida até o fim do recado."""
         self._recado = True
         troca = (((("microfone", True)), ("microfone", False)), (("luz", "ouvindo"), ("luz", "falando")))
-        return [next((novo for velho, novo in troca if a == velho), a) for a in acoes]
+        acoes = [next((novo for velho, novo in troca if a == velho), a) for a in acoes]
+        if not any(a[0] == "microfone" for a in acoes):  # 19/11: conectar abre o microfone; o recado já começa fechado
+            i = next((n for n, a in enumerate(acoes) if a[0] == "conectar"), None)
+            if i is not None:
+                acoes.insert(i + 1, ("microfone", False))
+        return acoes
 
     def _falando_segura(self, motivo):
         """Com o cérebro pendente (ou a resposta ainda não falada), quem está falando segura o microfone aberto; o

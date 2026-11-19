@@ -960,6 +960,19 @@ class TestRecadoSoAPalavraInterrompe(TestCerebro):
         self.assertIn(("luz", "falando"), acoes)
         self.assertNotIn(("luz", "ouvindo"), acoes)
 
+    def test_pi_delivery_mic_closed_from_connect(self):  # 19/11
+        self.m.mudo = False
+        _, acoes = self.m.campainha("e1abcdef", 0.0)
+        i = [a[0] for a in acoes].index("conectar")
+        self.assertEqual(acoes[i + 1], ("microfone", False))
+
+    def test_delivery_without_her_speech_still_closes_by_deadline(self):  # 19/11, Review Focus 1
+        self.m.mudo = False
+        self.m.campainha("e1abcdef", 0.0)
+        self.m.evento("conectou", 0.5)
+        acoes = self.m.evento("tique", 0.5 + self.m.a.resposta_max_s + 0.1)
+        self.assertIn("desconectar", [a[0] for a in acoes])
+
     def test_answer_arriving_in_the_window_also_closes_the_mic(self):
         self.aguardando()
         acoes = self.m.evento("ela_comecou", 20.0)  # resposta dentro da janela, sem cerebro_entregando

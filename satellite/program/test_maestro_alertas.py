@@ -150,7 +150,8 @@ class TestEntrega(Base):
     def test_parada_abre_com_aviso_de_lembrete_no_volume_de_alertas(self):
         r, acoes = self.m.campainha("e1", 0.0)
         self.assertEqual(r, "vou_abrir")
-        self.assertEqual(nomes(acoes), ["volume_alerta:True", "som:lembrete", "luz:falando", "conectar"])  # M4: recado com mic fechado
+        self.assertEqual(nomes(acoes), ["volume_alerta:True", "som:lembrete", "luz:falando", "conectar",
+                                        "microfone:False"])  # M4; 19/11: fechado desde o conectar
         self.assertEqual(achar(acoes, "conectar"), {"entrega": "e1"})
 
     def test_fim_da_entrega_volta_ao_volume_normal(self):
