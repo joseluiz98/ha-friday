@@ -200,7 +200,7 @@ def stamp_iso(mtime: float | None) -> str | None:
 def wakeword_pipeline_metrics(cache_mtime: float | None, satellites) -> dict:
     """Nightly wake-word cache (09/11/2026; every satellite since 18/11). cache = stamp featcache_nightly.sh touches
     only after caching every pending day of every satellite; satellites = its registry wwt-featcache.json
-    {"<sat_id>": "<ISO of that satellite's last OK pass>"}, anything else -> {}. Each satellite reports its own upload
+    {"<sat_id>": "<YYYY-MM-DD, that satellite's newest cached day>"}, anything else -> {}. Each satellite reports its own upload
     (recordings_sync_last_ok), so the office-only upload stamp left the server."""
     ok = isinstance(satellites, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in satellites.items())
     return {"wakeword_cache_last_ok": stamp_iso(cache_mtime),

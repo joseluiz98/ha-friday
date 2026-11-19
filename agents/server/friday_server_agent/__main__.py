@@ -51,7 +51,7 @@ PVE_BACKUP_STORAGE = os.environ.get("FRIDAY_PVE_BACKUP_STORAGE", "backup")  # th
 # Written by the bot (activity.py): open sessions, brain turns in flight, heartbeat (minor 13 of 19/10).
 ACTIVITY_FILE = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")
 # 09/11/2026: nightly wake-word cache. featcache_nightly.sh touches the stamp only after caching every pending day of
-# every satellite, and keeps {"<sat_id>": "<ISO>"} of each satellite's last OK pass in the registry (18/11).
+# every satellite, and keeps {"<sat_id>": "<YYYY-MM-DD>"} of each satellite's newest cached day in the registry (18-19/11).
 WAKEWORD_CACHE_STAMP = os.environ.get("FRIDAY_WAKEWORD_CACHE_STAMP", "/srv/friday/state/wwt-featcache.ok")
 WAKEWORD_CACHE_REGISTRY = os.environ.get("FRIDAY_WAKEWORD_CACHE_REGISTRY", "/srv/friday/state/wwt-featcache.json")
 

@@ -51,7 +51,14 @@ def _setup(tmp_path):
 def _wav(incoming, sat, d, hhmmss="101500"):
     a = incoming / sat / "gravacoes" / "ambiente"; a.mkdir(parents=True, exist_ok=True)
     (a / f"ambiente_{d}_{hhmmss}.wav").write_bytes(b"RIFF")
+    mark = incoming / sat / ".sync_ok"
+    if not mark.exists():
+        mark.write_text("x")  # this satellite's whole upload finished now
     return a
+
+
+def _iso(d: str) -> str:
+    return f"{d[:4]}-{d[4:6]}-{d[6:]}"
 
 
 def _run(env):
@@ -71,10 +78,8 @@ def test_two_satellites_cached_with_per_satellite_names(tmp_path):
     names = sorted(p.name for p in dirs["cache"].glob("*.json"))
     assert names == sorted([f"amb{day(1)}_{SAT_A}.json", f"amb{day(2)}_{SAT_A}.json", f"amb{day(3)}_{SAT_B}.json"])
     assert (dirs["state"] / "wwt-featcache.ok").exists()
-    reg = _registry(dirs["state"])
-    assert set(reg) == {SAT_A, SAT_B}
-    for v in reg.values():
-        assert dt.datetime.fromisoformat(v).tzinfo is not None
+    # the registry holds each satellite's newest cached day (spec §4: the watcher catches a satellite that stopped)
+    assert _registry(dirs["state"]) == {SAT_A: _iso(day(1)), SAT_B: _iso(day(3))}
     # already cached days are not extracted again
     calls = (tmp_path / "docker.log").read_text().split()
     r = _run(env)
@@ -88,7 +93,7 @@ def test_satellite_without_ambient_folder_counts_as_a_pass(tmp_path):
     _wav(dirs["incoming"], SAT_A, day(1))
     r = _run(env)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert set(_registry(dirs["state"])) == {SAT_A, SAT_B}
+    assert _registry(dirs["state"]) == {SAT_A: _iso(day(1))}  # nothing cached for SAT_B: no entry, no failure
     assert (dirs["state"] / "wwt-featcache.ok").exists()
 
 
@@ -132,3 +137,30 @@ def test_extractor_failure_stops_without_global_stamp_or_new_entry(tmp_path):
     assert left == {f"amb{day(1)}_{SAT_B}.log"}  # half-built cache removed, the log stays for the message
     msg = (tmp_path / "oc.log").read_text()
     assert "telegram" in msg and SAT_B in msg and day(1) in msg
+
+
+def test_a_day_is_cached_only_after_that_satellites_own_upload_finished(tmp_path):
+    """Any satellite's .sync_ok wakes the service; another satellite may still be uploading its day D-1. A day is
+    cached only if that satellite's own last whole upload ended after the day (its .sync_ok date > the day), so a
+    half-uploaded day is never cached (and then never rebuilt)."""
+    dirs, env = _setup(tmp_path)
+    _wav(dirs["incoming"], SAT_A, day(1)); _wav(dirs["incoming"], SAT_A, day(2))
+    stale = (dt.datetime.now() - dt.timedelta(days=1)).replace(hour=4, minute=0).timestamp()
+    os.utime(dirs["incoming"] / SAT_A / ".sync_ok", (stale, stale))  # last whole upload: yesterday 04:00
+    r = _run(env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(p.name for p in dirs["cache"].glob("*.json")) == [f"amb{day(2)}_{SAT_A}.json"]
+    assert _registry(dirs["state"]) == {SAT_A: _iso(day(2))}
+    os.utime(dirs["incoming"] / SAT_A / ".sync_ok")  # tonight's whole upload ends
+    assert _run(env).returncode == 0
+    assert f"amb{day(1)}_{SAT_A}.json" in {p.name for p in dirs["cache"].glob("*.json")}
+    assert _registry(dirs["state"]) == {SAT_A: _iso(day(1))}
+
+
+def test_a_satellite_without_a_finished_upload_is_not_cached(tmp_path):
+    dirs, env = _setup(tmp_path)
+    _wav(dirs["incoming"], SAT_A, day(1))
+    (dirs["incoming"] / SAT_A / ".sync_ok").unlink()
+    r = _run(env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not list(dirs["cache"].glob("*.json"))

@@ -5,11 +5,11 @@
 # satélite pareado depois da última instalação). Units: tools/wakeword/wwt/install.sh.
 # Para cada incoming/<sat>/:
 # 1) retenção (o dono, 08/11): áudio de ambiente na VM por 30 dias;
-# 2) todo dia de gravação anterior a hoje sem $C/amb<AAAAMMDD>_<sat>.json passa uma vez pelo extrator
+# 2) todo dia de gravação anterior a hoje E à data da .sync_ok do próprio satélite (19/11) sem $C/amb<AAAAMMDD>_<sat>.json passa uma vez pelo extrator
 #    (featcache.py cache, modo ambiente; ~80 min por dia, um por vez, nice 19);
 # 3) o cache acompanha o áudio do mesmo satélite: dia sem áudio sai do cache;
-# 4) satélite sem falha (inclusive sem gravacoes/ambiente, antes do 1º envio) -> $STATE/wwt-featcache.json
-#    {"<sat>": "<ISO agora>"} (merge atômico; o agente do servidor publica como atributo `satellites`).
+# 4) satélite com algum dia em cache -> $STATE/wwt-featcache.json {"<sat>": "<AAAA-MM-DD do dia mais novo em cache>"}
+#    (merge atômico; o agente do servidor publica como atributo `satellites`). Sem gravacoes/ambiente: sem entrada.
 # Só com todos OK: touch $STATE/wwt-featcache.ok. Falha avisa no Telegram e para.
 set -uo pipefail
 ENVF=${FRIDAY_LOCAL_CONFIG:-/srv/friday/state/local.env}
@@ -20,17 +20,17 @@ STATE=${FRIDAY_WWT_STATE:-/srv/friday/state}
 CODE=${FRIDAY_WWT_CODE:-/opt/friday/wwt/training}; TG=${FRIDAY_TELEGRAM_CHAT:?set FRIDAY_TELEGRAM_CHAT (local.env)}; HOJE=$(date +%Y%m%d)
 RETER_DIAS=30; CORTE=$(date -d "-$RETER_DIAS days" +%Y%m%d)
 falha() { oc message send --channel telegram --target "$TG" -m "Cache noturno das palavras falhou ($1). Log: journalctl -u friday-wwt-featcache" >/dev/null 2>&1; exit 1; }
-registra() {  # merge {"<sat>": "<ISO now>"} into the registry, atomically (temp file + rename in the same folder)
-  python3 - "$STATE/wwt-featcache.json" "$1" <<'EOF' || falha "registro de $1 em $STATE/wwt-featcache.json"
-import datetime, json, os, sys
-path, sat = sys.argv[1], sys.argv[2]
+registra() {  # merge {"<sat>": "<YYYY-MM-DD newest cached day>"} into the registry, atomically
+  python3 - "$STATE/wwt-featcache.json" "$1" "$2" <<'EOF' || falha "registro de $1 em $STATE/wwt-featcache.json"
+import json, os, sys
+path, sat, d = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     with open(path, encoding="utf-8") as f:
         reg = json.load(f)
 except (OSError, ValueError):
     reg = {}
 reg = reg if isinstance(reg, dict) else {}
-reg[sat] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+reg[sat] = f"{d[:4]}-{d[4:6]}-{d[6:]}"
 tmp = f"{path}.tmp{os.getpid()}"
 with open(tmp, "w", encoding="utf-8") as f:
     json.dump(reg, f, sort_keys=True)
@@ -46,6 +46,9 @@ for S in "$IN"/*/; do
   S=${S%/}; sat=$(basename "$S"); A="$S/gravacoes/ambiente"
   echo "== satélite $sat; marca: $(cat "$S/.sync_ok" 2>/dev/null)"
   apagados=0; feitos=0
+  # 19/11 (revisão): a marca de QUALQUER satélite acorda o serviço, e outro pode estar no meio do envio do dia D-1.
+  # Só entra no cache o dia anterior à data do último envio inteiro DESTE satélite (a .sync_ok dele); sem marca, nada.
+  LIMITE=0; [ -f "$S/.sync_ok" ] && LIMITE=$(date -r "$S/.sync_ok" +%Y%m%d)
   if [ -d "$A" ]; then
     # retenção do áudio primeiro (não gasta extrator com dia que vai sair)
     for f in "$A"/ambiente_????????_*.wav; do
@@ -54,7 +57,7 @@ for S in "$IN"/*/; do
       [ "$d" -lt "$CORTE" ] && { rm -f "$f"; apagados=$((apagados + 1)); }
     done
     for d in $(ls "$A" | sed -nE 's/^ambiente_([0-9]{8})_.*\.wav$/\1/p' | sort -u); do
-      [ "$d" -lt "$HOJE" ] || continue
+      [ "$d" -lt "$HOJE" ] && [ "$d" -lt "$LIMITE" ] || continue
       n="amb${d}_$sat"
       [ -s "$C/$n.json" ] && continue
       echo "== $n $(date +%T)"
@@ -70,7 +73,9 @@ for S in "$IN"/*/; do
     d=$(basename "$j" .json); d=${d#amb}; d=${d%%_*}
     ls "$A"/ambiente_"$d"_*.wav >/dev/null 2>&1 || { rm -f "$C/amb${d}_$sat".*; echo "removido do cache: amb${d}_$sat (sem áudio)"; }
   done
-  registra "$sat"
+  # o registro guarda o dia mais novo em cache deste satélite (o vigia das 09:30 cobra quem adotou o ambiente e parou)
+  ultimo=$(ls "$C" 2>/dev/null | sed -nE "s/^amb([0-9]{8})_${sat}\.json\$/\1/p" | sort | tail -1)
+  [ -n "$ultimo" ] && registra "$sat" "$ultimo"
   total=$((total + feitos))
   echo "satélite $sat: dias novos no cache: $feitos; wavs apagados (> $RETER_DIAS dias): $apagados"
 done
