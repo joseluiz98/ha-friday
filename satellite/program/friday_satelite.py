@@ -366,7 +366,9 @@ class Satelite:
             resumo = self.medidor_eco.resumo()
             if resumo:
                 print(json.dumps({"eco_rms_db": resumo}), flush=True)
-        if nome == "fala_comecou" and self.conexao:  # v0.3.7: depois de um corte, a fala nova dela volta a tocar
+        if nome == "fala_comecou" and self.conexao and not self.maestro._recado:
+            # v0.3.7: depois de um corte, a fala nova dela volta a tocar; 19/11 (revisão M2): fala da sala com o
+            # microfone fechado (recado) não chegou a ela e não conta
             self.conexao.pessoa_falou()
         if nome == "mudo" and valor is not None:  # 31/10: botão de mudo do Jabra chega ao HA na hora
             self.emissor.emitir("config", {"mudancas": {"mudo_botao": bool(valor)}, "origem": "botao"})
