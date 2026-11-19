@@ -532,6 +532,92 @@ def test_a_tag_promoted_by_us_counts_as_stable(tmp_path):
     assert w.store.data["promotions"]["v0.3.5"]["result"] == "superseded"
 
 
+# ---- two alphas in series, natural timeline (owner's ruling 19/11: each soak keeps its own clock; an older alpha
+# becomes stable unless a newer stable release already exists)
+ALPHA, STABLE = "sat-0000a1", "sat-0000b2"
+HOUR = 3600
+
+
+def _series_world(tmp_path, releases):
+    w = World(tmp_path, releases)
+    w.orch.publisher = FakePublisher()
+    w.offer("stable", installed="v0.3.11", sat=STABLE)
+    w.offer("alpha", installed="v0.3.11", sat=ALPHA)
+    w.orch.poll()
+    return w
+
+
+def _publish(w, tag):
+    """A new pre-release appears on GitHub; the server (alpha channel) installs it first, as in production."""
+    w.releases[tag] = rel(tag, pre=True)
+    w.manifests[w.releases[tag].release.sha] = man()
+    w.store.data["server_ota"]["installed_tag"] = tag
+    w.orch.poll()
+
+
+def _installed(w, sat, tag):
+    w.orch.report({"sat_id": sat, "tag": tag, "result": "installed", "stage": "", "error": ""})
+
+
+def test_two_alphas_in_series_are_each_promoted_on_their_own_clock(tmp_path):
+    w = _series_world(tmp_path, [rel("v0.3.11"), rel("v0.4.0", pre=True)])
+    _installed(w, ALPHA, "v0.4.0")
+    t0 = w.now
+    w.now = t0 + HOUR
+    _publish(w, "v0.4.1")
+    assert w.orch.target("alpha") == "v0.4.1"  # the alpha satellite moves on at once
+    w.now = t0 + 2 * HOUR
+    _installed(w, ALPHA, "v0.4.1")
+    assert w.store.data["soak"]["v0.4.0"]["started_at"] == t0  # the newer install leaves the older clock alone
+
+    w.now = t0 + SOAK_S - 60
+    w.orch.poll()
+    assert w.orch.publisher.calls == [] and w.orch.target("stable") == "v0.3.11"
+
+    w.now = t0 + SOAK_S + 600  # the first GitHub cycle after v0.4.0's 48 h
+    w.orch.poll()
+    assert w.orch.publisher.calls == ["v0.4.0"]
+    assert w.store.data["promotions"]["v0.4.0"]["result"] == "promoted"
+    assert w.orch.target("stable") == "v0.4.0"
+    assert w.offer("stable", installed="v0.3.11", sat=STABLE)["tag"] == "v0.4.0"
+    _installed(w, STABLE, "v0.4.0")
+
+    w.now = t0 + 2 * HOUR + SOAK_S + 600  # v0.4.1's own 48 h, counted from its install
+    w.orch.poll()
+    assert w.orch.publisher.calls == ["v0.4.0", "v0.4.1"]
+    assert {t: p["result"] for t, p in w.store.data["promotions"].items()} == {"v0.4.0": "promoted",
+                                                                            "v0.4.1": "promoted"}
+    assert w.offer("stable", installed="v0.4.0", sat=STABLE)["tag"] == "v0.4.1"
+
+
+def test_a_newer_alpha_failing_does_not_hold_back_the_older_one(tmp_path):
+    w = _series_world(tmp_path, [rel("v0.3.11"), rel("v0.4.0", pre=True)])
+    _installed(w, ALPHA, "v0.4.0")
+    t0 = w.now
+    _publish(w, "v0.4.1")
+    w.now = t0 + 2 * HOUR
+    _installed(w, ALPHA, "v0.4.1")
+    w.now = t0 + 30 * HOUR
+    w.orch.report({"sat_id": ALPHA, "tag": "v0.4.1", "result": "rolled_back", "stage": "health", "error": "x"})
+    assert w.store.data["soak"]["v0.4.1"]["failed"] and not w.store.data["soak"]["v0.4.0"]["failed"]
+    assert w.orch.target("alpha") == "v0.4.0"
+
+    w.now = t0 + SOAK_S + 600
+    w.orch.poll()
+    assert w.orch.publisher.calls == ["v0.4.0"] and w.orch.target("stable") == "v0.4.0"
+
+
+def test_an_alpha_no_satellite_installed_never_starts_its_clock(tmp_path):
+    # v0.4.1 is out before the alpha satellite takes v0.4.0: it goes straight to v0.4.1 and v0.4.0 is skipped
+    w = _series_world(tmp_path, [rel("v0.3.11"), rel("v0.4.0", pre=True), rel("v0.4.1", pre=True)])
+    assert w.offer("alpha", installed="v0.3.11", sat=ALPHA)["tag"] == "v0.4.1"
+    _installed(w, ALPHA, "v0.4.1")
+    w.now += SOAK_S + 600
+    w.orch.poll()
+    assert w.orch.publisher.calls == ["v0.4.1"]
+    assert "v0.4.0" not in w.store.data["soak"] and "v0.4.0" not in w.store.data["promotions"]
+
+
 # ---- server-first gate, built_by, offered marker (plan 2026-11-18 Task 3)
 from friday_server_agent.ota import packages as pk  # noqa: E402
 
