@@ -1064,6 +1064,20 @@ class TestRecadoSoAPalavraInterrompe(TestCerebro):
         self.assertNotIn(("microfone", False), self.m.evento("ela_comecou", 2.0))
 
 
+class TestRecadoComMicFechadoEsperandoResposta(unittest.TestCase):  # 19/11, revisão M1
+    def test_room_speech_during_the_gate_leaves_a_deadline_after_the_answer(self):
+        m = Maestro(Ajustes(close_mic_awaiting_reply=True))
+        m.mudo = False
+        m.evento("timer_venceu", 0.0, {"id": "t1", "nome": "x"})
+        m.evento("tique", 1.5)  # 1ª volta do alarme: a conversa do timer abre
+        m.evento("conectou", 2.5)
+        m.evento("ela_comecou", 3.0); m.evento("ela_parou", 5.0)
+        m.evento("fala_comecou", 5.2); m.evento("fala_parou", 5.5)  # sala, na pausa de 1,5 s do fim do recado
+        m.evento("tique", 6.6)  # o recado acabou: o microfone abre
+        m.evento("fala_comecou", 7.0); m.evento("fala_parou", 8.0)  # a resposta da pessoa
+        self.assertIsNotNone(m._prazo)
+
+
 class TestRecadoFecha(TestRecadoSoAPalavraInterrompe):
     def test_closing_clears_the_delivery(self):
         self.recado()

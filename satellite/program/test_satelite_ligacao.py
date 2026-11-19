@@ -946,6 +946,15 @@ class TestPararFala(Base):
                 self.s._agir(tipo, arg)
         self.assertFalse(self.s.microfone_aberto)
 
+    async def test_room_speech_during_the_gate_is_not_told_to_the_connection(self):  # 19/11, revisão M2
+        self.s.maestro.mudo = False
+        _, acoes = self.s.maestro.campainha("e1abcdef", 0.0)
+        for tipo, arg in acoes:
+            if tipo in ("conectar", "microfone"):
+                self.s._agir(tipo, arg)
+        self.s.evento("fala_comecou", None)
+        self.assertEqual(F.falas_pessoa, 0)
+
     async def test_person_speaking_is_told_to_the_connection(self):
         self.s.maestro.evento("palavra", 0.0)
         self.s._agir("conectar", None)
