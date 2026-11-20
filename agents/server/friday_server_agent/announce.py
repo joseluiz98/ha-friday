@@ -65,6 +65,6 @@ def make_handlers(post=http_post, token_path: str = TOKEN_PATH, url: str = BOT_U
             return {"ok": False, "error": "invalid", "detail": data.get("erro")}
         if status != 200:
             return {"ok": False, "error": "bot_error"}
-        return data
+        return {"data": data}  # the agent core only forwards `data` (and `error`) to the integration
 
     return {"announce": announce}

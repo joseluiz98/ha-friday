@@ -39,7 +39,7 @@ def make(tmp_path, reply=(200, {"id": "x"}), error=None):
 def test_posts_with_bearer(tmp_path):
     handler, calls, tok = make(tmp_path, (200, {"id": "a1", "satelites": {"s1": "ok"}, "cache": "miss"}))
     out = asyncio.run(handler({"text": "Oi", "satellites": ["s1"]}))
-    assert out == {"id": "a1", "satelites": {"s1": "ok"}, "cache": "miss"}
+    assert out == {"data": {"id": "a1", "satelites": {"s1": "ok"}, "cache": "miss"}}
     assert calls == [(URL, tok, {"text": "Oi", "satellites": ["s1"]})]
 
 
