@@ -127,3 +127,38 @@ async def test_late_client_hello_does_not_suppress_push_for_existing(aiohttp_cli
 def test_core_refuses_empty_or_blank_token(token):
     with pytest.raises(ValueError):
         AgentCore(token=token, device={"id": "d"}, capabilities_fn=list, state_fn=dict, handlers={})
+
+
+async def test_slow_command_does_not_block_the_next_one(aiohttp_client):
+    """A slow handler (announce waits up to 25 s) runs in its own task: the next command answers first, and every
+    reply keeps its id and shape."""
+    release = asyncio.Event()
+
+    async def slow(cmd):
+        await release.wait()
+        return {"data": {"who": "slow"}}
+
+    async def fast(cmd):
+        return {"ok": True, "data": {"who": "fast"}}
+
+    _, ws, _ = await _connect(aiohttp_client, _make({"announce": slow, "set": fast}))
+    await ws.send_json({"type": "command", "id": 1, "name": "announce"})
+    await ws.send_json({"type": "command", "id": 2, "name": "set"})
+    first = await ws.receive_json(timeout=2)
+    assert first == {"type": "result", "id": 2, "ok": True, "data": {"who": "fast"}}
+    release.set()
+    second = await ws.receive_json(timeout=2)
+    assert second == {"type": "result", "id": 1, "ok": True, "data": {"who": "slow"}}
+
+
+async def test_concurrent_replies_are_not_interleaved(aiohttp_client):
+    async def h(cmd):
+        await asyncio.sleep(0)
+        return {"data": {"n": cmd["id"]}}
+
+    _, ws, _ = await _connect(aiohttp_client, _make({"x": h}))
+    for i in range(20):
+        await ws.send_json({"type": "command", "id": i, "name": "x"})
+    got = [await ws.receive_json(timeout=2) for _ in range(20)]
+    assert sorted(m["id"] for m in got) == list(range(20))
+    assert all(m == {"type": "result", "id": m["id"], "ok": True, "data": {"n": m["id"]}} for m in got)
