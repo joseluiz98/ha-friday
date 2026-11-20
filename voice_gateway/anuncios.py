@@ -28,15 +28,15 @@ def validar(corpo, satelites: dict) -> tuple[str, list[str]]:
     """(texto, ids). `satelites` ausente = todos os cadastrados. Levanta ValueError."""
     if not isinstance(corpo, dict):
         raise ValueError("corpo precisa ser um objeto")
-    texto = corpo.get("texto")
+    texto = corpo.get("text")
     texto = texto.strip() if isinstance(texto, str) else ""
     if not 1 <= len(texto) <= MAX_TEXTO:
         raise ValueError(f"texto de 1 a {MAX_TEXTO} caracteres")
-    ids = corpo.get("satelites")
+    ids = corpo.get("satellites")
     if ids is None:
         ids = sorted(satelites)
     elif not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids):
-        raise ValueError("satelites é uma lista de ids")
+        raise ValueError("satellites é uma lista de ids")
     ids = list(dict.fromkeys(ids))
     desconhecidos = [i for i in ids if i not in satelites]
     if desconhecidos:

@@ -76,27 +76,36 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.deps = Deps(os.path.join(self._tmp.name, "cache"))
 
     async def anunciar(self, corpo=None, **kw):
-        r = await an.anunciar(corpo or {"texto": "O jantar está pronto"}, self.deps)
+        r = await an.anunciar(corpo or {"text": "O jantar está pronto"}, self.deps)
         await an.aguardar_pendentes()
         return r
 
 
 class TestValidar(unittest.TestCase):
+    def test_contrato_do_pedido_do_agente(self):
+        """announce_request.json é o corpo que o agente do servidor posta (tests/agents/test_announce.py o confere
+        do outro lado): o bot tem de aceitá-lo como está. Dois lados com nomes de campo diferentes recusavam
+        todo anúncio real como `invalid`."""
+        corpo = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "announce_request.json"),
+                               encoding="utf-8"))
+        self.assertEqual(set(corpo), {"text", "satellites"})
+        self.assertEqual(an.validar(corpo, SATS), (corpo["text"], corpo["satellites"]))
+
     def test_sem_satelites_vale_todos(self):
-        self.assertEqual(an.validar({"texto": " Oi "}, SATS), ("Oi", ["sat-0a1b2c", "sat-0d1e2f"]))
+        self.assertEqual(an.validar({"text": " Oi "}, SATS), ("Oi", ["sat-0a1b2c", "sat-0d1e2f"]))
 
     def test_lista_explicita(self):
-        self.assertEqual(an.validar({"texto": "Oi", "satelites": ["sat-0d1e2f"]}, SATS)[1], ["sat-0d1e2f"])
+        self.assertEqual(an.validar({"text": "Oi", "satellites": ["sat-0d1e2f"]}, SATS)[1], ["sat-0d1e2f"])
 
     def test_recusas(self):
-        for corpo in (None, [], {"texto": "   "}, {"texto": "x" * 501}, {"texto": 5}, {},
-                      {"texto": "Oi", "satelites": ["sat-ffffff"]}, {"texto": "Oi", "satelites": "sat-0a1b2c"},
-                      {"texto": "Oi", "satelites": []}):
+        for corpo in (None, [], {"text": "   "}, {"text": "x" * 501}, {"text": 5}, {},
+                      {"text": "Oi", "satellites": ["sat-ffffff"]}, {"text": "Oi", "satellites": "sat-0a1b2c"},
+                      {"text": "Oi", "satellites": []}):
             with self.assertRaises(ValueError, msg=repr(corpo)):
                 an.validar(corpo, SATS)
 
     def test_limite_500_vale(self):
-        self.assertEqual(len(an.validar({"texto": "x" * 500}, SATS)[0]), 500)
+        self.assertEqual(len(an.validar({"text": "x" * 500}, SATS)[0]), 500)
 
 
 class TestWav(unittest.TestCase):
@@ -183,7 +192,7 @@ class TestAnunciar(Base):
             self.assertEqual((await self.anunciar())["cache"], "hit")
 
     async def test_texto_invalido_nao_chama_o_tts(self):
-        for corpo in ({"texto": "   "}, {"texto": "x" * 501}):
+        for corpo in ({"text": "   "}, {"text": "x" * 501}):
             with self.assertRaises(ValueError):
                 await an.anunciar(corpo, self.deps)
         self.assertEqual(self.deps.tts_chamadas, [])
@@ -246,7 +255,7 @@ class TestAnunciar(Base):
 
     async def test_tarefas_de_reenvio_ficam_referenciadas(self):
         self.deps.roteiro["192.0.2.16"] = ["vou_tocar"]
-        await an.anunciar({"texto": "Oi"}, self.deps)
+        await an.anunciar({"text": "Oi"}, self.deps)
         self.assertGreaterEqual(len(an._em_curso), 1)
         await an.aguardar_pendentes()
         self.assertEqual(len(an._em_curso), 0)
