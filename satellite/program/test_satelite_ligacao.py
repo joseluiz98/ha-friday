@@ -443,6 +443,19 @@ class TestAnuncio(Base):
                       [json.loads(l) for l in saida.getvalue().splitlines()])
         self.assertIsNone(self.s._anuncio_tarefa)
 
+    async def test_chegou_velho_e_descartado_e_o_arquivo_some(self):
+        """F6: o bot manda a idade (reenvio tardio); com 5 min ou mais não toca, não enfileira e apaga o WAV."""
+        arq = self._fala()
+        import io, contextlib
+        saida = io.StringIO()
+        with contextlib.redirect_stdout(saida):
+            self.assertEqual(self.s.anuncio("abcd1234", idade_s=300), "expirado")
+        self.assertFalse(os.path.exists(arq))
+        self.assertEqual(F.sons, [])
+        self.assertEqual(self.s.maestro.estado, "parada")
+        self.assertIn({"anuncio": {"id": "abcd1234", "resultado": "expirado"}},
+                      [json.loads(l) for l in saida.getvalue().splitlines()])
+
     async def test_anuncio_apagar_remove_o_arquivo_e_ignora_ausente(self):
         arq = self._fala()
         self.s._agir("anuncio_apagar", "abcd1234")

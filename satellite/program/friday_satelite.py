@@ -698,9 +698,11 @@ class Satelite:
             self._agir(tipo, arg)
         return resposta
 
-    def anuncio(self, anuncio_id):
-        """POST /announce (spec 2026-11-20): o WAV já está em ANUNCIOS; o maestro decide tocar, enfileirar ou calar."""
-        resposta, acoes = self.maestro.anuncio(anuncio_id, time.monotonic(), ocupado=self._claim_pendente)
+    def anuncio(self, anuncio_id, idade_s=0):
+        """POST /announce (spec 2026-11-20): o WAV já está em ANUNCIOS; o maestro decide tocar, enfileirar ou calar.
+        `idade_s` = há quanto tempo o bot recebeu o pedido (os 5 min contam de lá)."""
+        resposta, acoes = self.maestro.anuncio(anuncio_id, time.monotonic(), ocupado=self._claim_pendente,
+                                               idade_s=idade_s)
         print(json.dumps({"anuncio": anuncio_id, "resposta": resposta, "estado": self.maestro.estado}), flush=True)
         if resposta == "calado":  # não perturbe: o maestro não toca nem enfileira, então o arquivo não tem dono
             acoes = [("registrar_anuncio", {"id": anuncio_id, "resultado": "calado"}),

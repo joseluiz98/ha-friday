@@ -88,6 +88,27 @@ class TestAnuncio(Base):
         self.assertNotIn(("anuncio_tocar", A1), acoes)
         self.assertEqual(m.publico()["fila_anuncios"], 0)
 
+    def test_age_from_the_bot_counts_against_the_5_minutes(self):
+        """F6: the bot sends how long ago it was asked (resends included); the 300 s run from the request."""
+        m = Maestro(Ajustes(), mudo_inicial=None)  # boot: held in the queue
+        self.assertEqual(m.anuncio(A1, 1000.0, idade_s=200), ("na_fila", []))
+        self.assertEqual(m.evento("tique", 1100.0), [])  # 300 s since the request: still held
+        acoes = m.evento("tique", 1101.0)
+        self.assertIn(("registrar_anuncio", {"id": A1, "resultado": "expirado"}), acoes)
+        self.assertIn(("anuncio_apagar", A1), acoes)
+
+    def test_age_of_5_minutes_is_dropped_at_receipt(self):
+        for idade in (300, 301, 10_000):
+            m = Maestro(Ajustes())
+            self.assertEqual(m.anuncio(A1, 50.0, idade_s=idade),
+                             ("expirado", [("anuncio_apagar", A1), ("registrar_anuncio", {"id": A1, "resultado": "expirado"})]))
+            self.assertEqual(m.estado, "parada")
+            self.assertEqual(m.publico()["fila_anuncios"], 0)
+            self.assertFalse(m.tem_anuncio(A1))
+
+    def test_young_age_still_plays_at_rest(self):
+        self.assertEqual(self.m.anuncio(A1, 0.0, idade_s=299), ("vou_tocar", TOCAR))
+
     def test_expires_when_conversation_runs_long(self):
         self.m.evento("palavra", 0.0)
         self.m.anuncio(A1, 0.0)

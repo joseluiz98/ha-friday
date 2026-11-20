@@ -32,7 +32,7 @@ class Ajustes:
     volta_alarme_s: float = 1.5
     alarme_max_s: float = 300.0
     fila_entrega_max_s: float = 90.0
-    anuncio_max_s: float = 300.0  # spec 2026-11-20: quanto um anúncio pode esperar na fila (contado do recebimento)
+    anuncio_max_s: float = 300.0  # spec 2026-11-20: quanto um anúncio pode esperar (contado do pedido ao bot, F6)
     # Spec 2026-10-21 R13: fala contínua (sem pausa) por mais que isto deixa de contar como "alguém falando" e a
     # conversa fecha (`fala_longa`). Música cantada que o VAD confunde com voz não segura o microfone aberto.
     speech_max_s: float = 15.0  # 10/11: 0 desliga o teto (ditado longo no MK1), com ou sem música
@@ -150,16 +150,21 @@ class Maestro:
             return "na_fila", []
         return "vou_abrir", self._filtrar(self._abrir_entrega(agora, entrega_id))
 
-    def anuncio(self, anuncio_id: str, agora: float, ocupado=False):
-        """POST /announce (spec 2026-11-20): ("calado" | "na_fila" | "vou_tocar", ações). Mesmo contrato da campainha:
-        `ocupado` = o programa espera o veredito da disputa de uma palavra. Fila ordenada: alarmes, entregas, anúncios."""
+    def anuncio(self, anuncio_id: str, agora: float, ocupado=False, idade_s: float = 0):
+        """POST /announce (spec 2026-11-20): ("calado" | "na_fila" | "vou_tocar" | "expirado", ações). Mesmo contrato da
+        campainha: `ocupado` = o programa espera o veredito da disputa de uma palavra. Fila ordenada: alarmes, entregas,
+        anúncios. `idade_s` = há quanto tempo o bot recebeu o pedido (reenvios incluídos): os 5 min contam de lá."""
         if self.tem_anuncio(anuncio_id):  # reenvio do mesmo id (o POST do add-on estourou o prazo): já é nosso
             return "na_fila", []
         if self.nao_perturbe:
             return "calado", []
+        idade = max(0.0, float(idade_s or 0))
+        if idade >= self.a.anuncio_max_s:  # chegou velho (reenvio tardio): não toca nem enfileira
+            return "expirado", [("anuncio_apagar", anuncio_id),
+                                ("registrar_anuncio", {"id": anuncio_id, "resultado": "expirado"})]
         if (ocupado or self.estado != PARADA or self._alarme is not None or self.mudo is None
                 or self._fila_alarmes or self._fila_entregas or self._fila_anuncios):
-            self._fila_anuncios.append((anuncio_id, agora))
+            self._fila_anuncios.append((anuncio_id, agora - idade))
             return "na_fila", []
         return "vou_tocar", self._filtrar(self._tocar_anuncio(anuncio_id))
 
