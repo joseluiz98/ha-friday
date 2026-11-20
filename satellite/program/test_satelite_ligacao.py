@@ -402,6 +402,25 @@ class TestAnuncio(Base):
         self.assertEqual(self.s.maestro.estado, "parada")
         self.assertIsNone(self.s._anuncio_tarefa)
 
+    async def test_palavra_ativa_corta_o_anuncio_e_abre_a_conversa(self):
+        """A palavra ativa durante a fala: a tarefa cancela, o som para na hora, o arquivo some e a conversa abre."""
+        self.curto.stop()
+        self.curto = mock.patch.object(fs.Satelite, "_duracao_wav", staticmethod(lambda c: 30.0))
+        self.curto.start()
+        arq = self._fala()
+        self.s.anuncio("abcd1234")
+        tarefa = self.s._anuncio_tarefa
+        await asyncio.sleep(0)
+        parou = F.parou_ja
+        self.s.evento("palavra")
+        await asyncio.sleep(0)
+        self.assertTrue(tarefa.cancelled())
+        self.assertGreater(F.parou_ja, parou)
+        self.assertFalse(os.path.exists(arq))
+        self.assertIsNone(self.s._anuncio_tarefa)
+        self.assertNotEqual(self.s.maestro.estado, "anuncio")
+        self.assertTrue(F.conexoes)  # a conversa normal abriu
+
     async def test_musica_abaixa_no_anuncio_e_volta_no_fim(self):
         self._fala()
         self.s.anuncio("abcd1234")
