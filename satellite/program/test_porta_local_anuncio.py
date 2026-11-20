@@ -24,8 +24,11 @@ class Base(unittest.IsolatedAsyncioTestCase):
 
         self.seguros = set()  # ids que o "maestro" já tem (na fila ou tocando)
 
-        def fn(aid):
+        self.idades = []
+
+        def fn(aid, idade_s=0):
             self.pedidos.append(aid)
+            self.idades.append(idade_s)
             return "na_fila" if aid in self.seguros else "vou_tocar"
         app = porta_local.criar_app(self.p, lambda: {"estado": "parada"}, lambda n: None,
                                     anuncio_fn=fn if self.com_fn else None, anuncio_dir=self.pasta,
@@ -75,7 +78,7 @@ class TestAnnounce(Base):
         self.assertEqual(os.listdir(self.pasta), ["abcd1234.wav"])  # nenhum .tmp sobra
 
     async def test_funcao_que_levanta_nao_deixa_o_arquivo(self):
-        def quebra(aid):
+        def quebra(aid, idade_s=0):
             raise RuntimeError("boom")
         # a second app whose fn raises
         app = porta_local.criar_app(self.p, lambda: {}, lambda n: None, anuncio_fn=quebra, anuncio_dir=self.pasta)
@@ -105,7 +108,7 @@ class TestAnnounce(Base):
         self.assertEqual(os.listdir(self.pasta), ["abcd1234.wav"])
 
     async def test_id_em_maos_do_maestro_cujo_fn_levanta_nao_apaga_o_arquivo(self):
-        def quebra(aid):
+        def quebra(aid, idade_s=0):
             raise RuntimeError("boom")
         r = await self.cli.post("/announce", data=WAV, headers=dict(self.h, **{"X-Announcement-Id": "abcd1234"}))
         self.assertEqual(r.status, 200)
@@ -125,6 +128,27 @@ class TestAnnounce(Base):
             self.assertEqual(r.status, 200)
         self.assertEqual(sorted(os.listdir(self.pasta)), ["abcd1234.wav", "efgh5678.wav"])
         self.assertEqual(self.pedidos, ["abcd1234", "efgh5678"])
+
+
+    def test_teto_de_16_mb(self):
+        """F5: 500 caracteres em ritmo lento passam de 8 MB; o teto é 16 MB."""
+        self.assertEqual(porta_local.ANUNCIO_MAX_BYTES, 16 * 1024 * 1024)
+
+    async def test_corpo_de_12_mb_passa(self):
+        corpo = WAV + b"\x00" * (12 * 1024 * 1024)
+        r = await self.cli.post("/announce", data=corpo, headers=dict(self.h, **{"X-Announcement-Id": "abcd1234"}))
+        self.assertEqual(r.status, 200)
+
+    async def test_idade_do_cabecalho_vai_ao_maestro(self):
+        """F6: X-Announcement-Age (segundos inteiros desde o pedido ao bot); ausente ou inválido = 0."""
+        casos = [("120", 120), ("0", 0), (None, 0), ("abc", 0), ("-5", 0), ("1.5", 0), ("", 0)]
+        for n, (valor, esperado) in enumerate(casos):
+            h = dict(self.h, **{"X-Announcement-Id": f"abcd12{n:02d}"})
+            if valor is not None:
+                h["X-Announcement-Age"] = valor
+            r = await self.cli.post("/announce", data=WAV, headers=h)
+            self.assertEqual(r.status, 200, valor)
+        self.assertEqual(self.idades, [e for _, e in casos])
 
 
 class TestSemFuncao(Base):

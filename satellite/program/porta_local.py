@@ -6,8 +6,15 @@ import configuracao as c
 
 
 _ID_MENSAGEM = re.compile(r"^[a-z0-9]{8,32}$")
-ANUNCIO_MAX_BYTES = 8 * 1024 * 1024  # spec 2026-11-20: 500 caracteres de fala ~ 35 s ~ 6,7 MB
+ANUNCIO_MAX_BYTES = 16 * 1024 * 1024  # spec 2026-11-20: 500 caracteres em ritmo lento passam de 8 MB (F5)
 ANUNCIOS_PADRAO = "/home/jose/anuncios"
+
+
+def _idade(valor) -> int:
+    """X-Announcement-Age: segundos inteiros desde o pedido ao bot (F6). Ausente ou inválido = 0."""
+    if isinstance(valor, str) and valor.strip().isdigit():
+        return int(valor.strip())
+    return 0
 
 
 def pasta_anuncios():
@@ -86,8 +93,8 @@ def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavr
                 f.write(corpo)
             os.replace(destino + ".tmp", destino)
         try:
-            resposta = anuncio_fn(aid)
-        except BaseException:  # sem dono para o arquivo: não deixa o WAV (até 8 MB) na SD da Pi
+            resposta = anuncio_fn(aid, idade_s=_idade(req.headers.get("X-Announcement-Age")))
+        except BaseException:  # sem dono para o arquivo: não deixa o WAV (até 16 MB) na SD da Pi
             if not ja_tem:
                 try:
                     os.unlink(destino)
