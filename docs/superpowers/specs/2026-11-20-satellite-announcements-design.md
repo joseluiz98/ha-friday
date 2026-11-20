@@ -54,8 +54,10 @@ is tested, so today the living room hears nothing.
 - **Open conversation:** the announcement waits in the satellite's queue and plays when the conversation ends.
   Same for a ringing timer alarm, a pending wake-word claim, or a delivery being opened. **One queue order
   (builder's call): alarms, then deliveries already queued, then announcements**; deliveries keep their 90 s expiry.
-- **Maximum wait: 5 minutes (owner, 20/11)**, counted from the satellite's receipt. Older than
-  that, it is dropped and logged.
+- **Maximum wait: 5 minutes (owner, 20/11)**, counted from the request to the bot (final review, Ruling F6): the bot
+  sends `X-Announcement-Age` (integer seconds since the request) on every attempt, resends included, and the
+  satellite counts the 5 minutes from `now - age`. Older than that, it is dropped and logged (`expirado`; one that
+  arrives already 5 minutes old is dropped at receipt and its file deleted).
 - **Do-not-disturb:** dropped (not queued), like the Echo in DND. Answer `calado`.
 - **Microphone muted (owner, 20/11):** it plays; mute means "don't listen", not "don't speak".
 - **Satellite still booting (owner, 20/11):** the announcement is held in the queue until the boot finishes (the
@@ -91,7 +93,8 @@ is tested, so today the living room hears nothing.
 
 ## Flow
 1. **Home Assistant, house script:** for the satellites it calls `friday.announce` (`message`, optional
-   `device_id` list of satellite devices; default: every satellite), with `continue_on_error: true`.
+   `device_id` list of satellite devices; default: every F.R.I.D.A.Y. satellite device in Home Assistant's device
+   registry, Ruling F2), with `continue_on_error: true`. The integration always sends the explicit list of ids.
 2. **Integration, `friday.announce` (new service):** validates (non-empty, ≤ 500 chars; devices are F.R.I.D.A.Y.
    satellites) and sends an `announce` command to the server agent over the existing authenticated connection,
    with the satellite ids. Returns the per-satellite answers as the service response (`supports_response:
@@ -118,7 +121,7 @@ is tested, so today the living room hears nothing.
      announcement in the deliveries log (`tipo: "anuncio"`), with cache hit/miss and TTS ms. The TTS call goes
      into the cost log like the other voice calls.
 5. **Satellite, `POST /announce` on the local port** (same auth as `/doorbell`): body = WAV bytes, header
-   `X-Announcement-Id`. Body cap 8 MB (500 chars of speech ≈ 35 s ≈ 6.7 MB); larger → 413. The program writes it
+   `X-Announcement-Id`. Body cap 16 MB (500 chars at the slow rate do not fit in 8 MB, Ruling F5); larger → 413. The program writes it
    to `~/anuncios/<id>.wav` and asks `Maestro.anuncio(id, agora)`, which returns `calado | na_fila | vou_tocar`
    and actions. Playing = alert volume, chime (`sons.anuncio`), speech, back to rest; files are deleted after
    playing or expiring.
