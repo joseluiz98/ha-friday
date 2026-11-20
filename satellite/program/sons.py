@@ -14,6 +14,8 @@ VARIANTES = {
     "alarme": {"a": [(1175, 0.12), (0, 0.08), (1175, 0.12), (0, 0.08), (1175, 0.12), (0, 0.08), (1175, 0.12),
                      (0, 0.55)]},
     "lembrete": {"a": [(523, 0.12), (659, 0.12), (784, 0.24)]},
+    # 20/11 (announcements on the satellites): two rising notes; fallback for the ElevenLabs chime
+    "anuncio": {"a": [(784, 0.10), (1047, 0.16)]},
 }
 
 

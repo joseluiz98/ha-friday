@@ -1,5 +1,6 @@
 """Testes dos sons: cd /homeassistant/tools/satelite/programa && python3 -m unittest test_sons -v"""
 import os, tempfile, unittest, wave
+import configuracao
 import sons
 
 
@@ -46,3 +47,18 @@ class TestGarantir(unittest.TestCase):
             with open(erro, "rb") as f:
                 self.assertEqual(f.read(), b"keep")
             self.assertEqual(sons.garantir(d), {})
+
+
+class TestAnuncio(unittest.TestCase):
+    """20/11 (announcements on the satellites): the announcement chime is a satellite sound; the generated `a` is the
+    fallback when the vault file is absent."""
+
+    def test_garantir_cria_anuncio_a(self):
+        with tempfile.TemporaryDirectory() as d:
+            feitos = sons.garantir(d)
+            self.assertIn("anuncio_a", feitos)
+            with wave.open(os.path.join(d, "anuncio_a.wav")) as w:
+                self.assertEqual((w.getframerate(), w.getnchannels(), w.getsampwidth()), (48000, 2, 2))
+
+    def test_padrao_do_anuncio(self):
+        self.assertEqual(configuracao.PADROES["sons"]["anuncio"], "anuncio_elevenlabs.wav")

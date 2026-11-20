@@ -73,7 +73,7 @@ def test_satellite_package_layout(src):
     files = _members(info["path"])
     assert files["program/friday_satelite.py"] and "program/test_maestro.py" not in files
     assert files["program/vendor/xvf_host.py"] == b"v" and files["program/sons/onboarding/ready.wav"] == b"w"
-    assert "program/sons/alarme.wav" not in files
+    assert files["program/sons/alarme.wav"] == b"a"   # top-level vault sounds ship too (20/11)
     assert files["program/FRIDAY_VERSION"] == f"v9.9.9 {SHA}\n".encode()
     assert files["agent/friday_agent_core/FRIDAY_VERSION"] == f"v9.9.9 {SHA}\n".encode()
     assert files["migrations/0001_layout.sh"] == b"exit 0" and "system/install.sh" not in files
@@ -107,6 +107,23 @@ def test_package_refuses_missing_vault_set(tmp_path, monkeypatch):
         pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(tmp_path / "pkg"))
     assert e.value.code == "vault_error"
     assert not list((tmp_path / "pkg").glob("*.tar.gz"))
+
+
+def test_bundle_carries_top_level_sounds(tmp_path, monkeypatch):
+    """20/11: every direct child of satellite/sounds/ ships (the announcement chime); sub-folders (backups) do not."""
+    cfg = tmp_path / "haos"
+    archive, _ = _make_sources(cfg, monkeypatch)
+    _extra_tree(cfg)
+    vault, root, man = _vault_mod(), cfg.parent / "vault", cfg.parent / "release" / "vault" / "manifest.json"
+    (cfg.parent / "vsrc" / "atuais").mkdir()
+    (cfg.parent / "vsrc" / "anuncio.wav").write_bytes(b"chime")
+    (cfg.parent / "vsrc" / "atuais" / "bipe.wav").write_bytes(b"old")
+    vault.put(str(cfg.parent / "vsrc" / "anuncio.wav"), "satellite/sounds/anuncio_elevenlabs.wav", root=str(root), manifest=str(man))
+    vault.put(str(cfg.parent / "vsrc" / "atuais" / "bipe.wav"), "satellite/sounds/atuais-20261012/bipe.wav", root=str(root), manifest=str(man))
+    info = pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(tmp_path / "pkg"))
+    files = _members(info["path"])
+    assert files["program/sons/anuncio_elevenlabs.wav"] == b"chime"
+    assert "program/sons/atuais-20261012/bipe.wav" not in files
 
 
 class FakeRepo:

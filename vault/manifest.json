@@ -30,6 +30,11 @@
       "size": 316878,
       "source": "tools/satelite/sons/alarme_elevenlabs.wav"
     },
+    "satellite/sounds/anuncio_elevenlabs.wav": {
+      "sha256": "a3ae6bb4be9444a6fd21351fef797f3cc62b369194f300f6a0d2da7744ff4e19",
+      "size": 241536,
+      "source": "tools/satelite/sons/anuncio_elevenlabs.wav"
+    },
     "satellite/sounds/aprendizagem_cancelada.wav": {
       "sha256": "0b2835cd58a4809f880ce93a30b775da0fabf10fb91ded57f6d17ebbff4fda31",
       "size": 497324,
