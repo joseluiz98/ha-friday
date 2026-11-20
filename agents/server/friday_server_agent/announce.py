@@ -1,7 +1,7 @@
 """Announce command: the integration asks, the bot (voice gateway) speaks on the satellites.
 
 The agent only forwards `{"text", "satellites"}` to the bot's POST /announce with a bearer token that the
-agent creates (600) and the bot reads from the same file (FRIDAY_TOKEN_ANNOUNCE). The token is never logged.
+agent creates (600) on the first command and the bot reads from the same file (FRIDAY_TOKEN_ANNOUNCE). The token is never logged.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import urllib.request
 
 BOT_URL = "http://127.0.0.1:7860/announce"
 TOKEN_PATH = "/srv/friday/state/announce.token"
-TIMEOUT_S = 60  # TTS plus the first send to every satellite; the bot answers before the retries
+TIMEOUT_S = 25  # the bot answers within its 18 s first-round budget (TTS + first sends); the integration waits 30 s
 
 
 def token(path: str = TOKEN_PATH) -> str:
@@ -53,12 +53,19 @@ def http_post(url: str, bearer: str, body: dict) -> tuple[int, dict]:
 
 
 def make_handlers(post=http_post, token_path: str = TOKEN_PATH, url: str = BOT_URL):
-    bearer = token(token_path)
+    # The token is created on the first command, not at startup: an unwritable state dir must cost only the
+    # announce command, never the whole agent (every server entity).
+    bearer: list[str] = []
 
     async def announce(cmd: dict) -> dict:
+        if not bearer:
+            try:
+                bearer.append(await asyncio.to_thread(token, token_path))
+            except OSError:
+                return {"ok": False, "error": "token_unavailable"}
         body = {"text": cmd.get("text"), "satellites": cmd.get("satellites")}
         try:
-            status, data = await asyncio.to_thread(post, url, bearer, body)
+            status, data = await asyncio.to_thread(post, url, bearer[0], body)
         except (OSError, ValueError):
             return {"ok": False, "error": "bot_unreachable"}
         if status == 400:
