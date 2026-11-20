@@ -71,6 +71,19 @@ class TestAnnounce(Base):
             self.assertEqual(f.read(), WAV)
         self.assertEqual(os.listdir(self.pasta), ["abcd1234.wav"])  # nenhum .tmp sobra
 
+    async def test_funcao_que_levanta_nao_deixa_o_arquivo(self):
+        def quebra(aid):
+            raise RuntimeError("boom")
+        # a second app whose fn raises
+        app = porta_local.criar_app(self.p, lambda: {}, lambda n: None, anuncio_fn=quebra, anuncio_dir=self.pasta)
+        cli = TestClient(TestServer(app)); await cli.start_server()
+        try:
+            r = await cli.post("/announce", data=WAV, headers=dict(self.h, **{"X-Announcement-Id": "abcd1234"}))
+            self.assertEqual(r.status, 500)
+        finally:
+            await cli.close()
+        self.assertEqual(os.listdir(self.pasta), [])
+
     async def test_dois_ids_dois_arquivos(self):
         for aid in ("abcd1234", "efgh5678"):
             r = await self.cli.post("/announce", data=WAV, headers=dict(self.h, **{"X-Announcement-Id": aid}))

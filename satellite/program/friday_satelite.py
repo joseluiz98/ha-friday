@@ -702,6 +702,9 @@ class Satelite:
         """POST /announce (spec 2026-11-20): o WAV já está em ANUNCIOS; o maestro decide tocar, enfileirar ou calar."""
         resposta, acoes = self.maestro.anuncio(anuncio_id, time.monotonic(), ocupado=self._claim_pendente)
         print(json.dumps({"anuncio": anuncio_id, "resposta": resposta, "estado": self.maestro.estado}), flush=True)
+        if resposta == "calado":  # não perturbe: o maestro não toca nem enfileira, então o arquivo não tem dono
+            acoes = [("registrar_anuncio", {"id": anuncio_id, "resultado": "calado"}),
+                     ("anuncio_apagar", anuncio_id)]
         for tipo, arg in acoes:
             self._agir(tipo, arg)
         return resposta

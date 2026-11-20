@@ -81,7 +81,15 @@ def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavr
         with open(destino + ".tmp", "wb") as f:
             f.write(corpo)
         os.replace(destino + ".tmp", destino)
-        return web.json_response({"resposta": anuncio_fn(aid)})
+        try:
+            resposta = anuncio_fn(aid)
+        except BaseException:  # sem dono para o arquivo: não deixa o WAV (até 8 MB) na SD da Pi
+            try:
+                os.unlink(destino)
+            except OSError:
+                pass
+            raise
+        return web.json_response({"resposta": resposta})
 
     async def comando(req):
         """Spec 2026-11-05: comandos de provisionamento do agente (play_phrases, ring, wake_word_test,

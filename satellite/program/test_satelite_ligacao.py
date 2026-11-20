@@ -430,6 +430,19 @@ class TestAnuncio(Base):
             self.s.duck_tique(t + i * 0.05)
         self.assertEqual(F.music[-1], 100)
 
+    async def test_nao_perturbe_no_recebimento_nao_deixa_o_arquivo(self):
+        self._fala()
+        self.s.maestro.nao_perturbe = True
+        import io, contextlib
+        saida = io.StringIO()
+        with contextlib.redirect_stdout(saida):
+            self.assertEqual(self.s.anuncio("abcd1234"), "calado")
+        self.assertEqual(os.listdir(self.pasta), [])
+        self.assertEqual(F.sons, [])
+        self.assertIn({"anuncio": {"id": "abcd1234", "resultado": "calado"}},
+                      [json.loads(l) for l in saida.getvalue().splitlines()])
+        self.assertIsNone(self.s._anuncio_tarefa)
+
     async def test_anuncio_apagar_remove_o_arquivo_e_ignora_ausente(self):
         arq = self._fala()
         self.s._agir("anuncio_apagar", "abcd1234")
