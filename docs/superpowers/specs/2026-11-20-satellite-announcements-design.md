@@ -54,12 +54,13 @@ is tested, so today the living room hears nothing.
 - **Open conversation:** the announcement waits in the satellite's queue and plays when the conversation ends.
   Same for a ringing timer alarm, a pending wake-word claim, or a delivery being opened. **One queue order
   (builder's call): alarms, then deliveries already queued, then announcements**; deliveries keep their 90 s expiry.
-- **Maximum wait: 10 minutes (builder's call, owner to check)**, counted from the satellite's receipt. Older than
+- **Maximum wait: 5 minutes (owner, 20/11)**, counted from the satellite's receipt. Older than
   that, it is dropped and logged.
 - **Do-not-disturb:** dropped (not queued), like the Echo in DND. Answer `calado`.
-- **Microphone muted (owner, 20/11):** it plays; mute means "don't listen", not "don't speak". Mute state still
-  unknown (`mudo is None`, right after boot): it waits in the queue, as deliveries do.
-- **Wake word during the announcement (builder's call, owner to check):** an active wake word stops the
+- **Microphone muted (owner, 20/11):** it plays; mute means "don't listen", not "don't speak".
+- **Satellite still booting (owner, 20/11):** the announcement is held in the queue until the boot finishes (the
+  program is up and the mute state is known, `mudo is not None`), then plays, within the maximum wait.
+- **Wake word during the announcement (approved by the owner, 20/11):** an active wake word stops the
   announcement and opens a normal conversation, consistent with the 19/11 rule "only an active wake word interrupts
   her". Room speech does not stop it. The detector already runs while she speaks (the 19/11 gate depends on it);
   stopping means killing the announcement's `aplay` and opening the conversation with `como_abriu: palavra`. If
@@ -78,8 +79,7 @@ is tested, so today the living room hears nothing.
 - Registry: new key `sons.anuncio` in `configuracao.PADROES` = `anuncio_elevenlabs.wav`; synthetic fallback
   `anuncio_a` in `sons.py` (two rising notes), created by `garantir` when missing, like the other tones.
 - Running satellites: today the OTA bundle carries only `satellite/sounds/onboarding/` from the vault, and
-  `friday-ota-apply` already merges `program/sons/` into `~/satelite/sons/` (never deletes). **Builder's call
-  (owner to check):** add the top-level `satellite/sounds/` to `VAULT_FOR_BUNDLE`, so every release carries the
+  `friday-ota-apply` already merges `program/sons/` into `~/satelite/sons/` (never deletes). **Approved by the owner (20/11):** add the top-level `satellite/sounds/` to `VAULT_FOR_BUNDLE`, so every release carries the
   top-level tones (12 files, ~8.7 MB today, +1 with this one) and a satellite that predates a tone gets it. A
   migration points `sons.anuncio` at the new file when the file exists, like `0003_elevenlabs_tones.sh`.
 
@@ -134,8 +134,8 @@ promoted to stable. Until then the MK2 answers 404 and is logged as `sem_suporte
 - Server agent: command posts with the token, token file created 600 when missing, bot down → error.
 - Bot: token refused/accepted; validation; cache hit does not call the TTS; TTS failure → `erro`; per-satellite
   fan-out with one satellite down; 404 → `sem_suporte`; log line.
-- Maestro: idle → plays; open conversation → queued, plays on close; DND → `calado`; muted → plays; mute unknown →
-  queued; older than 10 min → dropped; two queued play in order; alarm/delivery before the announcement; wake word
+- Maestro: idle → plays; open conversation → queued, plays on close; DND → `calado`; muted → plays; booting (mute unknown) →
+  held, plays when boot finishes; older than 5 min → dropped; two queued play in order; alarm/delivery before the announcement; wake word
   cuts it and opens a conversation; room speech does not cut it.
 - Local port: auth, bad body, size cap, file written.
 - Sounds: `garantir` creates `anuncio_a`; bundle carries the top-level tones; migration idempotent.
