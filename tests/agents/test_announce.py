@@ -101,3 +101,18 @@ def test_request_body_matches_the_bots_contract_fixture(tmp_path):
 def test_http_timeout_leaves_room_for_the_bots_first_round():
     # the bot answers within 18 s (first-round budget); the integration waits 30 s, the agent 25 s
     assert 18 < an.TIMEOUT_S < 30
+
+
+def test_token_path_follows_friday_token_announce(tmp_path, monkeypatch):
+    """Same variable and default as the bot (FRIDAY_TOKEN_ANNOUNCE, else /srv/friday/state/announce.token)."""
+    path = tmp_path / "elsewhere.token"
+    monkeypatch.setenv("FRIDAY_TOKEN_ANNOUNCE", str(path))
+    calls = []
+    handler = an.make_handlers(lambda url, bearer, body: calls.append(bearer) or (200, {}))["announce"]
+    asyncio.run(handler({"text": "Oi", "satellites": ["s"]}))
+    assert path.exists() and calls == [path.read_text().strip()]
+
+
+def test_default_token_path_is_the_bots(monkeypatch):
+    monkeypatch.delenv("FRIDAY_TOKEN_ANNOUNCE", raising=False)
+    assert an.token_path() == "/srv/friday/state/announce.token"

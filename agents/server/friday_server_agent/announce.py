@@ -14,8 +14,12 @@ import urllib.error
 import urllib.request
 
 BOT_URL = "http://127.0.0.1:7860/announce"
-TOKEN_PATH = "/srv/friday/state/announce.token"
+TOKEN_PATH = "/srv/friday/state/announce.token"  # default; FRIDAY_TOKEN_ANNOUNCE overrides it, as in the bot
 TIMEOUT_S = 25  # the bot answers within its 18 s first-round budget (TTS + first sends); the integration waits 30 s
+
+
+def token_path() -> str:
+    return os.environ.get("FRIDAY_TOKEN_ANNOUNCE") or TOKEN_PATH
 
 
 def token(path: str = TOKEN_PATH) -> str:
@@ -52,7 +56,7 @@ def http_post(url: str, bearer: str, body: dict) -> tuple[int, dict]:
         raise OSError(type(err.reason).__name__) from err
 
 
-def make_handlers(post=http_post, token_path: str = TOKEN_PATH, url: str = BOT_URL):
+def make_handlers(post=http_post, path: str | None = None, url: str = BOT_URL):
     # The token is created on the first command, not at startup: an unwritable state dir must cost only the
     # announce command, never the whole agent (every server entity).
     bearer: list[str] = []
@@ -60,7 +64,7 @@ def make_handlers(post=http_post, token_path: str = TOKEN_PATH, url: str = BOT_U
     async def announce(cmd: dict) -> dict:
         if not bearer:
             try:
-                bearer.append(await asyncio.to_thread(token, token_path))
+                bearer.append(await asyncio.to_thread(token, path or token_path()))
             except OSError:
                 return {"ok": False, "error": "token_unavailable"}
         body = {"text": cmd.get("text"), "satellites": cmd.get("satellites")}
