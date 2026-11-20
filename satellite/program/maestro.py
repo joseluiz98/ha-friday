@@ -153,6 +153,8 @@ class Maestro:
     def anuncio(self, anuncio_id: str, agora: float, ocupado=False):
         """POST /announce (spec 2026-11-20): ("calado" | "na_fila" | "vou_tocar", ações). Mesmo contrato da campainha:
         `ocupado` = o programa espera o veredito da disputa de uma palavra. Fila ordenada: alarmes, entregas, anúncios."""
+        if self.tem_anuncio(anuncio_id):  # reenvio do mesmo id (o POST do add-on estourou o prazo): já é nosso
+            return "na_fila", []
         if self.nao_perturbe:
             return "calado", []
         if (ocupado or self.estado != PARADA or self._alarme is not None or self.mudo is None
@@ -160,6 +162,10 @@ class Maestro:
             self._fila_anuncios.append((anuncio_id, agora))
             return "na_fila", []
         return "vou_tocar", self._filtrar(self._tocar_anuncio(anuncio_id))
+
+    def tem_anuncio(self, anuncio_id: str) -> bool:
+        """O anúncio está na fila ou tocando agora (o arquivo <id>.wav tem dono)."""
+        return anuncio_id == self._anuncio or any(aid == anuncio_id for aid, _ in self._fila_anuncios)
 
     def _tocar_anuncio(self, anuncio_id):
         self.estado, self._anuncio = ANUNCIO, anuncio_id

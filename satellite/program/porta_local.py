@@ -15,7 +15,7 @@ def pasta_anuncios():
 
 
 def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavras_fn=None, comando_fn=None,
-              musica_fn=None, anuncio_fn=None, anuncio_dir=None):
+              musica_fn=None, anuncio_fn=None, anuncio_dir=None, anuncio_tem_fn=None):
     async def autorizado(req):
         senha = c.carregar(cfg_caminho)["senha_porta_local"]
         dada = req.headers.get("Authorization", "").removeprefix("Bearer ")
@@ -76,18 +76,23 @@ def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavr
         if not corpo.startswith(b"RIFF"):
             return web.json_response({"erro": "não é WAV"}, status=400)
         pasta = anuncio_dir or pasta_anuncios()
-        os.makedirs(pasta, exist_ok=True)
         destino = os.path.join(pasta, aid + ".wav")
-        with open(destino + ".tmp", "wb") as f:
-            f.write(corpo)
-        os.replace(destino + ".tmp", destino)
+        # Reenvio do mesmo id (o POST do add-on estourou o prazo depois de a Pi receber): o arquivo que o maestro já
+        # tem, na fila ou tocando, não é regravado nem apagado aqui; o maestro responde "na_fila".
+        ja_tem = bool(anuncio_tem_fn and anuncio_tem_fn(aid))
+        if not ja_tem:
+            os.makedirs(pasta, exist_ok=True)
+            with open(destino + ".tmp", "wb") as f:
+                f.write(corpo)
+            os.replace(destino + ".tmp", destino)
         try:
             resposta = anuncio_fn(aid)
         except BaseException:  # sem dono para o arquivo: não deixa o WAV (até 8 MB) na SD da Pi
-            try:
-                os.unlink(destino)
-            except OSError:
-                pass
+            if not ja_tem:
+                try:
+                    os.unlink(destino)
+                except OSError:
+                    pass
             raise
         return web.json_response({"resposta": resposta})
 
@@ -164,9 +169,9 @@ def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavr
 
 
 async def iniciar(cfg_caminho, estado_fn, ao_mudar_config, porta, campainha_fn=None, palavras_fn=None, comando_fn=None,
-                  musica_fn=None, anuncio_fn=None, anuncio_dir=None):
+                  musica_fn=None, anuncio_fn=None, anuncio_dir=None, anuncio_tem_fn=None):
     runner = web.AppRunner(criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn, palavras_fn, comando_fn,
-                                     musica_fn, anuncio_fn, anuncio_dir))
+                                     musica_fn, anuncio_fn, anuncio_dir, anuncio_tem_fn))
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", porta).start()
     return runner

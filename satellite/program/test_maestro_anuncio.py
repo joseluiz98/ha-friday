@@ -20,6 +20,30 @@ class TestAnuncio(Base):
         self.assertEqual(self.m.estado, "anuncio")
         self.assertEqual(ANUNCIO, "anuncio")
 
+    def test_known_id_is_not_queued_again(self):
+        """G2-c: the add-on resends the same id when its first POST timed out after the Pi had it."""
+        self.assertEqual(self.m.anuncio(A1, 0.0)[0], "vou_tocar")  # playing
+        self.assertEqual(self.m.anuncio(A1, 1.0), ("na_fila", []))
+        self.assertEqual(self.m.publico()["fila_anuncios"], 0)  # not queued behind itself
+        self.assertEqual(self.m.anuncio(A2, 2.0), ("na_fila", []))  # a different id queues
+        self.assertEqual(self.m.anuncio(A2, 3.0), ("na_fila", []))
+        self.assertEqual(self.m.anuncio(A2, 3.5), ("na_fila", []))
+        self.assertEqual(self.m.publico()["fila_anuncios"], 1)
+        self.assertTrue(self.m.tem_anuncio(A1) and self.m.tem_anuncio(A2))
+        self.assertFalse(self.m.tem_anuncio("zzzz9999"))
+        self.m.evento("anuncio_fim", 10.0, A1)  # A1 finished: it is no longer held, A2 plays next
+        self.assertFalse(self.m.tem_anuncio(A1))
+        self.assertTrue(self.m.tem_anuncio(A2))
+
+    def test_queued_id_is_not_queued_twice_while_a_conversation_is_open(self):
+        self.m.evento("palavra", 0.0)
+        self.assertEqual(self.m.anuncio(A1, 0.5), ("na_fila", []))
+        self.assertEqual(self.m.anuncio(A1, 1.0), ("na_fila", []))
+        self.assertEqual(self.m.publico()["fila_anuncios"], 1)
+        self.m.evento("encerrar", 10.0)
+        self.assertEqual([a for a in self.m.evento("tique", 10.2) if a[0] == "anuncio_tocar"], [("anuncio_tocar", A1)])
+        self.assertEqual(self.m.publico()["fila_anuncios"], 0)
+
     def test_dnd_is_dropped(self):
         self.m.evento("nao_perturbe", 0.0, True)
         self.assertEqual(self.m.anuncio(A1, 1.0), ("calado", []))

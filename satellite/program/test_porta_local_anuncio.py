@@ -22,11 +22,14 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.pasta = os.path.join(self.d, "anuncios")
         self.pedidos = []
 
+        self.seguros = set()  # ids que o "maestro" já tem (na fila ou tocando)
+
         def fn(aid):
             self.pedidos.append(aid)
-            return "vou_tocar"
+            return "na_fila" if aid in self.seguros else "vou_tocar"
         app = porta_local.criar_app(self.p, lambda: {"estado": "parada"}, lambda n: None,
-                                    anuncio_fn=fn if self.com_fn else None, anuncio_dir=self.pasta)
+                                    anuncio_fn=fn if self.com_fn else None, anuncio_dir=self.pasta,
+                                    anuncio_tem_fn=lambda aid: aid in self.seguros)
         self.cli = TestClient(TestServer(app)); await self.cli.start_server()
         self.h = {"Authorization": f"Bearer {c.carregar(self.p)['senha_porta_local']}"}
 
@@ -83,6 +86,38 @@ class TestAnnounce(Base):
         finally:
             await cli.close()
         self.assertEqual(os.listdir(self.pasta), [])
+
+    async def test_id_ja_em_maos_do_maestro_nao_regrava_o_arquivo(self):
+        """G2-c: reenvio do mesmo id (o POST estourou o prazo depois de a Pi receber): o arquivo que está na fila ou
+        tocando não pode ser sobrescrito nem apagado."""
+        r = await self.cli.post("/announce", data=WAV, headers=dict(self.h, **{"X-Announcement-Id": "abcd1234"}))
+        self.assertEqual(await r.json(), {"resposta": "vou_tocar"})
+        destino = os.path.join(self.pasta, "abcd1234.wav")
+        self.seguros.add("abcd1234")
+        os.utime(destino, (1, 1))
+        outro = WAV + b"outro corpo"
+        r = await self.cli.post("/announce", data=outro, headers=dict(self.h, **{"X-Announcement-Id": "abcd1234"}))
+        self.assertEqual(r.status, 200)
+        self.assertEqual(await r.json(), {"resposta": "na_fila"})
+        with open(destino, "rb") as f:
+            self.assertEqual(f.read(), WAV)  # intacto
+        self.assertEqual(os.stat(destino).st_mtime, 1)  # nem reescrito
+        self.assertEqual(os.listdir(self.pasta), ["abcd1234.wav"])
+
+    async def test_id_em_maos_do_maestro_cujo_fn_levanta_nao_apaga_o_arquivo(self):
+        def quebra(aid):
+            raise RuntimeError("boom")
+        r = await self.cli.post("/announce", data=WAV, headers=dict(self.h, **{"X-Announcement-Id": "abcd1234"}))
+        self.assertEqual(r.status, 200)
+        app = porta_local.criar_app(self.p, lambda: {}, lambda n: None, anuncio_fn=quebra, anuncio_dir=self.pasta,
+                                    anuncio_tem_fn=lambda aid: True)
+        cli = TestClient(TestServer(app)); await cli.start_server()
+        try:
+            r = await cli.post("/announce", data=WAV, headers=dict(self.h, **{"X-Announcement-Id": "abcd1234"}))
+            self.assertEqual(r.status, 500)
+        finally:
+            await cli.close()
+        self.assertEqual(os.listdir(self.pasta), ["abcd1234.wav"])  # o dono (maestro) é quem apaga
 
     async def test_dois_ids_dois_arquivos(self):
         for aid in ("abcd1234", "efgh5678"):
