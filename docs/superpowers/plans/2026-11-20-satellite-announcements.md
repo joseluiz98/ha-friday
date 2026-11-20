@@ -19,8 +19,8 @@
 - Maximum wait: 300 s (5 min), counted on the satellite from receipt; the bot's retry window is also 300 s from the request.
 - Bot retry: only connection errors (refused/timeout), every 15 s, until 300 s; 404 → `sem_suporte` (final); other 4xx/5xx → `erro` (final).
 - Answers per satellite: `vou_tocar | na_fila | calado | sem_suporte | erro | reenviando | nao_entregue`.
-- TTS: model env `FRIDAY_ANNOUNCE_TTS_MODEL`, default `models/gemini-3.8-flash-tts`; voice `voice_settings.voz(cfg)`; no `speech_metadata` style; timeout 15 s.
-- Cache dir `/srv/friday/state/announce-cache/` (env `FRIDAY_ANNOUNCE_CACHE`), cap 200 files, oldest mtime out; key `sha256(f"{voice}\n{model}\n{text}")` hex.
+- TTS identity is centralized: every TTS call takes voice, model and speaking rate from `voice_settings.tts(cfg)` (Task 4a); nothing else reads `FRIDAY_VOICE`, `FRIDAY_TTS_MODEL` or `FRIDAY_WHISPER_TTS_MODEL`. Announcement TTS timeout 15 s.
+- Cache dir `/srv/friday/state/announce-cache/` (env `FRIDAY_ANNOUNCE_CACHE`), cap 200 files, oldest mtime out; key `sha256(f"{voice}\n{model}\n{rate}\n{text}")` hex.
 - Token file `/srv/friday/state/announce.token` (env `FRIDAY_TOKEN_ANNOUNCE`), mode 600, created by the server agent with `secrets.token_urlsafe(32)` when missing.
 - Satellite WAV dir `/home/jose/anuncios/` (env `FRIDAY_ANNOUNCE_DIR`); id regex `^[a-z0-9]{8,32}$` (same as `_ID_MENSAGEM`).
 - Sound key `sons.anuncio = "anuncio_elevenlabs.wav"`; fallback file `anuncio_a.wav`.
@@ -115,6 +115,25 @@
 - [ ] **Step 1: Failing tests**: 401 without token; 400 bad id; 400 non-RIFF; 413 over cap; 200 writes `<id>.wav` and returns the fn's answer; two ids → two files; `_agir("anuncio_apagar")` removes the file; `_agir("anuncio_tocar")` with a missing configured chime plays `anuncio_a.wav` then the WAV (fake `alto` recording calls).
 - [ ] **Step 2: Run, expect FAIL**; **Step 3: Implement**; **Step 4: full satellite suite PASS** (`cd satellite/program && TMPDIR=$(mktemp -d) python3 -m unittest -q`); **Step 5: Commit** `feat(satellite): /announce on the local port`.
 
+### Task 4a: One source for the TTS voice, model and speaking rate
+
+**Files:**
+- Modify: `voice_gateway/voice_settings.py`
+- Modify: `voice_gateway/whisper_mode.py` (`stream_whisper_tts` takes the settings and the rate)
+- Modify: `voice_gateway/bot.py:1566-1571` (whisper wiring reads `vs_cfg.tts(cfg_voz)`)
+- Test: `voice_gateway/test_voice_settings.py`, `voice_gateway/test_whisper_mode.py`
+
+**Interfaces:**
+- Produces:
+  - `voice_settings.TTS_MODELO_PADRAO = "models/gemini-3.8-flash-tts"`.
+  - `voice_settings.tts(cfg=None, ambiente=None) -> dict` = `{"voice": voz(cfg, ambiente), "model": <FRIDAY_TTS_MODEL or FRIDAY_WHISPER_TTS_MODEL or TTS_MODELO_PADRAO>, "rate": cfg.get("speaking_rate") or "normal"}`.
+  - `voice_settings.tts_texto(texto: str, rate: str) -> str`: the text sent to the TTS with the pace applied. Before writing it, check the installed `google-genai` (the friday image) for a pace/rate field in `types.SpeechMetadata` or `SpeechConfig`; if one exists, use it and keep `tts_texto` returning the text unchanged; if not, prefix the Gemini TTS pace instruction in Portuguese for `slow` ("Fale devagar: ") and `fast` ("Fale rápido: "), nothing for `normal`. Record which one in the ledger as a ruling.
+  - `whisper_mode.stream_whisper_tts(client, tts: dict, text: str)` (replaces `model, voice` arguments; keeps `style="whispers"`; applies the rate the same way).
+- Consumed by Task 4 (`anuncios.falar` receives `tts: dict`).
+
+- [ ] **Step 1: Failing tests**: `tts({})` with an empty environment → voice `"Charon"`, model `TTS_MODELO_PADRAO`, rate `"normal"`; `tts({"voice": "Kore", "speaking_rate": "slow"})` → `"Kore"`, `"slow"`; `FRIDAY_TTS_MODEL` wins over `FRIDAY_WHISPER_TTS_MODEL`; `tts_texto("Oi", "normal") == "Oi"`; `slow`/`fast` change the request (prefix or field, per the ruling); `stream_whisper_tts` builds its request from the dict (fake client records the call: voice name, model, style `whispers`).
+- [ ] **Step 2–4**: FAIL → implement → PASS (voice gateway suite on the VM image). **Step 5: Commit** `refactor(voice): one source for TTS voice, model and rate`.
+
 ### Task 4: Bot `/announce` (TTS, cache, fan-out with retry)
 
 **Files:**
@@ -125,15 +144,15 @@
 **Interfaces:**
 - Produces (`anuncios.py`):
   - `validar(corpo, satelites: dict) -> tuple[str, list[str]]` raises `ValueError`; `satellites` missing → `sorted(satelites)`; unknown id → error.
-  - `chave(voz: str, modelo: str, texto: str) -> str`.
   - `class Cache(pasta: str, limite: int = 200)` with `ler(chave) -> bytes | None`, `gravar(chave, wav: bytes)` (evicts oldest mtime over the cap).
   - `wav_48k_estereo(pcm24_mono: bytes) -> bytes` (resample with `whisper_mode._reamostrar(pcm, 24000, 48000)`, duplicate channels, WAV header).
-  - `async def falar(client, modelo: str, voz: str, texto: str) -> tuple[bytes, dict]` — non-streaming `client.aio.models.generate_content` with `response_modalities=["AUDIO"]` and `PrebuiltVoiceConfig(voice_name=voz)`, no style; returns (PCM 24 kHz mono, usage dict for `usage_ledger`).
+  - `async def falar(client, tts: dict, texto: str) -> tuple[bytes, dict]` — `tts` from `voice_settings.tts(voice_settings.ler())` read **per announcement** (Home Assistant changes apply without restart); non-streaming `client.aio.models.generate_content` with `response_modalities=["AUDIO"]`, `PrebuiltVoiceConfig(voice_name=tts["voice"])`, the rate applied per Task 4a (`tts_texto`), no style; returns (PCM 24 kHz mono, usage dict for `usage_ledger`).
+  - `chave(tts: dict, texto: str) -> str` (replaces the 3-argument form above): sha256 of voice, model, rate and text.
   - `async def anunciar(corpo, deps) -> dict` → `{"id": <token_hex(6)>, "satelites": {sid: answer}, "cache": "hit"|"miss"}`; on TTS error/timeout every satellite gets `"erro"`; satellites that failed by connection error get `"reenviando"` and a background retry task (every 15 s until 300 s from start; final answer logged).
   - `deps` provides: `satelites`, `ip_wifi(sid)`, `enviar(ip, senha, anuncio_id, wav) -> str` (POST `http://{ip}:8700/announce`, header `X-Announcement-Id`, `Content-Type: audio/wav`, timeout 5 s; 404 → `"sem_suporte"`), `tts(texto) -> (pcm, usage)`, `cache`, `registrar(linha)`, `agora()`, `dormir(s)`.
 - `bot.py`: `@app.post("/announce")` — `cc.token_confere(_ler_token_announce(), Authorization)` else 401; `ValueError` → 400; returns `anunciar(...)` JSON. Logs `entrega: {...,"tipo":"anuncio"}` per announcement; appends the TTS usage with `ul.append_voice(..., model=<modelo>, ...)` (session `anuncio:<id>`).
 
-- [ ] **Step 1: Failing tests** (`unittest.IsolatedAsyncioTestCase`, fake deps): token checks (route-level test with the FastAPI app like other route tests, or `cc.token_confere` + `anunciar`); `"   "` and 501 chars → `ValueError`, TTS not called; cache hit → `tts` not called, `cache == "hit"`; TTS raises → all `"erro"`; one satellite refuses connection then succeeds on the 2nd try (fake clock) → first answer `"reenviando"`, log shows final `"vou_tocar"`; never succeeds → final `"nao_entregue"` after 300 s; 404 → `"sem_suporte"`, no retry; Wi-Fi IP tried after the cable IP fails; `wav_48k_estereo` output is 48 kHz, 2 ch, twice the frames of the input.
+- [ ] **Step 1: Failing tests** (`unittest.IsolatedAsyncioTestCase`, fake deps): changing `speaking_rate` or `voice` in the settings file misses the cache and the TTS gets the new values; token checks (route-level test with the FastAPI app like other route tests, or `cc.token_confere` + `anunciar`); `"   "` and 501 chars → `ValueError`, TTS not called; cache hit → `tts` not called, `cache == "hit"`; TTS raises → all `"erro"`; one satellite refuses connection then succeeds on the 2nd try (fake clock) → first answer `"reenviando"`, log shows final `"vou_tocar"`; never succeeds → final `"nao_entregue"` after 300 s; 404 → `"sem_suporte"`, no retry; Wi-Fi IP tried after the cable IP fails; `wav_48k_estereo` output is 48 kHz, 2 ch, twice the frames of the input.
 - [ ] **Step 2: Run, expect FAIL** (voice gateway tests run on the VM image: `bash scripts/test-all.sh` step "voice gateway", or the module alone there).
 - [ ] **Step 3: Implement**; **Step 4: PASS**; **Step 5: Commit** `feat(voice): /announce with TTS cache and satellite fan-out`.
 

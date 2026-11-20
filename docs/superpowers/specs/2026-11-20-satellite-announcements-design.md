@@ -101,9 +101,14 @@ is tested, so today the living room hears nothing.
    when missing; never printed), and relays the bot's answer.
 4. **Bot (VM), `POST /announce`:**
    - Token checked like `/reminder`; validation repeated (text, satellite ids from `satellites.json`).
-   - Speech: plain (unstyled) Gemini TTS with `voice_settings.voz()`; model from a new env var
-     `FRIDAY_ANNOUNCE_TTS_MODEL` (default: the whisper TTS model, `gemini-3.8-flash-tts`). `stream_whisper_tts`
-     hard-codes `style: whispers`, so the call is a sibling, not a reuse. Key = sha256(voice + model + text).
+   - Speech: Gemini TTS configured **in one place** (owner, 20/11): `voice_settings.tts(cfg)` returns the voice,
+     the TTS model and the speaking rate, and is the only source for every TTS call (announcements and the whisper
+     mode). The voice is the same one the conversation uses (`voice_settings.voz`), so changing the voice in Home
+     Assistant (or swapping the voice provider later) changes the announcements too. The TTS model comes from
+     `FRIDAY_TTS_MODEL` (falls back to the old `FRIDAY_WHISPER_TTS_MODEL`, then `models/gemini-3.8-flash-tts`).
+   - The announcement follows the voice settings already configurable in Home Assistant: the speaking rate
+     (`slow | normal | fast`) is applied to the TTS. Brief mode does not apply (the text is fixed). Whisper keeps its
+     own `whispers` style on top of the same settings. Key = sha256(voice + model + rate + text).
      Cache hit → reuse; miss → TTS (PCM 24 kHz mono) resampled to 48 kHz stereo 16-bit WAV, stored in
      `/srv/friday/state/announce-cache/` (cap 200 files, oldest out). TTS timeout 15 s. The WAV is speech only;
      the satellite plays its own chime.
