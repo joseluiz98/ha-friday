@@ -1566,9 +1566,8 @@ async def bot(runner_args: RunnerArguments):
     if sussurro:
         from google import genai as _genai
         _cliente_tts = _genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-        _modelo_tts = os.environ.get("FRIDAY_WHISPER_TTS_MODEL", "models/gemini-3.8-flash-tts")
-        _voz_tts = vs_cfg.voz(cfg_voz)  # a mesma voz da sessão Live
-        voz_sussurrada = wm.WhisperVoice(lambda frase: wm.stream_whisper_tts(_cliente_tts, _modelo_tts, _voz_tts, frase))
+        _tts = vs_cfg.tts(cfg_voz)  # voz (a mesma da sessão Live), modelo e ritmo: fonte única
+        voz_sussurrada = wm.WhisperVoice(lambda frase: wm.stream_whisper_tts(_cliente_tts, _tts, frase))
 
     contador_pi = sm.ContadorFerramentas()  # dividido entre os sinais do satélite e a vigia de promessa
 
