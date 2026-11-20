@@ -514,12 +514,13 @@ class DepsAnuncio:
     async def tts(self, ajustes, texto):
         return await an.falar(_cliente_tts_anuncio(), ajustes, texto)
 
-    async def enviar(self, ip, senha, anuncio_id, wav):
+    async def enviar(self, ip, senha, anuncio_id, wav, idade_s):
         """Resposta da Pi; 404 (programa antigo) = sem_suporte; outro HTTP de erro = erro. Só falha de conexão/prazo levanta."""
         conectar, total = an.prazo_envio(len(wav))
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=conectar, total=total)) as session:
             async with session.post(f"http://{ip}:8700/announce", data=wav,
                                     headers={"Authorization": f"Bearer {senha}", "X-Announcement-Id": anuncio_id,
+                                             "X-Announcement-Age": str(idade_s),
                                              "Content-Type": "audio/wav"}) as resp:
                 if resp.status == 404:
                     return "sem_suporte"

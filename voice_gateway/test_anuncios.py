@@ -22,6 +22,7 @@ class Deps:
         self.ajustes = ajustes or vs.tts({}, ambiente={})
         self.roteiro = {}  # ip -> lista de respostas (str ou Exception); a última se repete
         self.enviados = []  # (ip, anuncio_id, tamanho do corpo)
+        self.idades = []  # (ip, X-Announcement-Age enviado)
         self.tts_chamadas = []
         self.tts_erro = None
         self.tts_atraso = 0
@@ -45,9 +46,11 @@ class Deps:
     async def ip_wifi(self, sid):
         return self.wifi.get(sid)
 
-    async def enviar(self, ip, senha, anuncio_id, wav):
+    async def enviar(self, ip, senha, anuncio_id, wav, idade_s):
         assert wav[:4] == b"RIFF"
+        assert isinstance(idade_s, int) and idade_s >= 0
         self.enviados.append((ip, anuncio_id, len(wav)))
+        self.idades.append((ip, idade_s))
         if self.atraso_envio.get(ip):
             await asyncio.sleep(self.atraso_envio[ip])
         fila = self.roteiro.get(ip)
@@ -248,6 +251,21 @@ class TestAnunciar(Base):
         self.assertEqual((final[0]["satelite"], final[0]["resposta"], final[0]["id"]),
                          ("sat-0a1b2c", "vou_tocar", r["id"]))
 
+    async def test_idade_vai_em_toda_tentativa_reenvios_incluidos(self):
+        """F6: segundos inteiros desde o pedido, em cada tentativa (cabo e Wi-Fi), para a Pi contar os 5 min do pedido."""
+        self.deps.roteiro["192.0.2.15"] = [ConnectionError("x"), ConnectionError("x"), "vou_tocar"]
+        self.deps.roteiro["192.0.2.8"] = [ConnectionError("w")]
+        self.ok("192.0.2.16")
+        await self.anunciar()
+        sala = [i for ip, i in self.deps.idades if ip in ("192.0.2.15", "192.0.2.8")]
+        self.assertEqual(sala, [0, 0, 15, 15, 30])
+        self.assertEqual([i for ip, i in self.deps.idades if ip == "192.0.2.16"], [0])
+
+    async def test_expirado_da_pi_e_resposta_final(self):
+        self.ok("192.0.2.15", "expirado"); self.ok("192.0.2.16")
+        r = await self.anunciar()
+        self.assertEqual(r["satelites"]["sat-0a1b2c"], "expirado")
+
     async def test_nunca_entrega_vira_nao_entregue_aos_300s(self):
         self.ok("192.0.2.16")
         r = await self.anunciar()  # o outro satélite não responde em IP nenhum
@@ -311,6 +329,7 @@ class TestPrazoDeEnvio(unittest.TestCase):
         corpo = t.split("class DepsAnuncio", 1)[1].split("async def telegram_direto", 1)[0]
         self.assertIn("an.prazo_envio(len(wav))", corpo)
         self.assertIn("sock_connect=", corpo)
+        self.assertIn('"X-Announcement-Age": str(idade_s)', corpo)
         self.assertNotIn("ClientTimeout(total=5)", corpo)
 
 

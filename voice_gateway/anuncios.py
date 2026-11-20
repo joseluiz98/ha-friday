@@ -20,7 +20,7 @@ RETRY_CADA_S = 15.0
 RETRY_ATE_S = 300.0
 PRIMEIRA_RODADA_S = 18.0  # a resposta sai até aqui (a integração espera 30 s); o que faltar segue em segundo plano
 CACHE_LIMITE = 200
-RESPOSTAS_DA_PI = ("vou_tocar", "na_fila", "calado")
+RESPOSTAS_DA_PI = ("vou_tocar", "na_fila", "calado", "expirado")
 
 _em_curso: set = set()  # referência às tarefas de reenvio (o laço só guarda referência fraca)
 
@@ -161,8 +161,9 @@ async def falar(client, tts: dict, texto: str) -> tuple[bytes, dict]:
     return pcm, _tokens_da_resposta(resp)
 
 
-async def _enviar_uma(deps, sid: str, anuncio_id: str, wav: bytes):
-    """IP do cabo e, se ele não responder, o do Wi-Fi. Resposta da Pi, ou None se nenhum IP respondeu."""
+async def _enviar_uma(deps, sid: str, anuncio_id: str, wav: bytes, t0: float):
+    """IP do cabo e, se ele não responder, o do Wi-Fi. Resposta da Pi, ou None se nenhum IP respondeu. Cada tentativa
+    leva a idade do pedido (segundos inteiros desde t0): a Pi conta os 5 min do pedido, não do recebimento."""
     sat = deps.satelites[sid]
     tentados = []
     for origem in (lambda: sat.get("ip"), lambda: deps.ip_wifi(sid)):
@@ -175,7 +176,7 @@ async def _enviar_uma(deps, sid: str, anuncio_id: str, wav: bytes):
             continue
         tentados.append(ip)
         try:
-            return await deps.enviar(ip, sat["senha"], anuncio_id, wav)
+            return await deps.enviar(ip, sat["senha"], anuncio_id, wav, max(0, int(deps.agora() - t0)))
         except Exception:
             continue
     return None
@@ -198,7 +199,7 @@ async def _reenviar(deps, sid: str, anuncio_id: str, wav: bytes, t0: float, prim
                 await deps.dormir(RETRY_CADA_S)
                 if deps.agora() - t0 > RETRY_ATE_S:
                     break
-                r = await _enviar_uma(deps, sid, anuncio_id, wav)
+                r = await _enviar_uma(deps, sid, anuncio_id, wav, t0)
                 if r is not None:
                     resposta = _resposta_valida(r)
                     break
@@ -239,7 +240,7 @@ async def anunciar(corpo, deps) -> dict:
 
     async def uma(sid):
         try:
-            return await _enviar_uma(deps, sid, anuncio_id, wav)
+            return await _enviar_uma(deps, sid, anuncio_id, wav, t0)
         except Exception:
             return None
 
