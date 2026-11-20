@@ -71,7 +71,6 @@ def valores(saida):
 
 
 @unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
-@unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
 class TestStreamWhisperTts(unittest.IsolatedAsyncioTestCase):
     """stream_whisper_tts builds the request from the tts dict (voice, model, rate) and keeps style whispers."""
 
@@ -115,6 +114,7 @@ class TestStreamWhisperTts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kw["contents"].parts[0].speech_metadata.style, "whispers")
 
 
+@unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
 class TestSplit(unittest.TestCase):
     def test_corta_depois_da_pontuacao_com_espaco(self):
         self.assertEqual(wm.split_sentences("Oi. Tudo bem? Sim"), (["Oi.", "Tudo bem?"], "Sim"))
