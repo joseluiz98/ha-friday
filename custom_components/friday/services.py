@@ -193,20 +193,60 @@ def _device_name(hass: HomeAssistant, satellite_id: str) -> str:
     return (device.name_by_user or device.name) if device and (device.name_by_user or device.name) else satellite_id
 
 
+def _satellite_subentries(hass: HomeAssistant) -> set[tuple[str, str]]:
+    return {(entry.entry_id, sub_id) for entry in hass.config_entries.async_entries(DOMAIN)
+            for sub_id, sub in entry.subentries.items() if sub.subentry_type == DEVICE_KIND_SATELLITE}
+
+
+def _friday_id(device) -> str | None:
+    return next((i[1] for i in device.identifiers if i[0] == DOMAIN), None) if device else None
+
+
+def _is_satellite(device, satellite_subs: set[tuple[str, str]]) -> bool:
+    """The kind lives in the registry: the device belongs to a `satellite` subentry (no live hello needed)."""
+    return any((entry_id, sub_id) in satellite_subs
+               for entry_id, sub_ids in device.config_entries_subentries.items() for sub_id in sub_ids)
+
+
+def announce_targets(hass: HomeAssistant, device_ids: list[str]) -> list[str]:
+    """F.R.I.D.A.Y. satellite ids from HA's device registry: the devices given, or every satellite device."""
+    registry = dr.async_get(hass)
+    satellite_subs = _satellite_subentries(hass)
+    if device_ids:
+        ids = []
+        for dev in device_ids:
+            device = registry.async_get(dev)
+            friday_id = _friday_id(device)
+            if friday_id is None:
+                raise ServiceValidationError("Not a F.R.I.D.A.Y. device.")
+            if not _is_satellite(device, satellite_subs):
+                raise ServiceValidationError("Only satellites can announce.")
+            ids.append(friday_id)
+        return list(dict.fromkeys(ids))
+    ids = sorted({_friday_id(device) for entry in hass.config_entries.async_entries(DOMAIN)
+                  for device in dr.async_entries_for_config_entry(registry, entry.entry_id)
+                  if _friday_id(device) is not None and _is_satellite(device, satellite_subs)})
+    if not ids:
+        raise ServiceValidationError("There is no satellite to announce to.")
+    return ids
+
+
 async def _announce(call: ServiceCall) -> dict:
     """Speak the message on the chosen satellites (all by default); the answer is the bot's, per satellite."""
     hass = call.hass
-    ids = [find_satellite(hass, dev).hello.device["id"] for dev in call.data.get("device_id") or []]
     connection = find_server(hass)
+    ids = announce_targets(hass, call.data.get("device_id") or [])
     try:
-        data = await connection.send("announce", timeout=30, text=call.data["message"], satellites=ids or None)
+        data = await connection.send("announce", timeout=30, text=call.data["message"], satellites=ids)
     except HomeAssistantError as err:
+        async_log_entry(hass, "F.R.I.D.A.Y.", f"Announcement failed: {err}", DOMAIN)
         raise ServiceValidationError(f"The announcement failed ({err}).") from err
     if data.get("ok") is False:  # defensive: the agent core turns ok:false into an exception already
-        raise ServiceValidationError(f"The announcement failed ({data.get('error', 'error')}).")
+        code = data.get("error", "error")
+        async_log_entry(hass, "F.R.I.D.A.Y.", f"Announcement failed: {code}", DOMAIN)
+        raise ServiceValidationError(f"The announcement failed ({code}).")
     answers = data.get("satelites") or {}
-    targets = ids or list(answers)
-    names = ", ".join(_device_name(hass, sid) for sid in targets) or "no satellite"
+    names = ", ".join(_device_name(hass, sid) for sid in ids)
     detail = ", ".join(f"{_device_name(hass, sid)} {answer}" for sid, answer in answers.items())
     async_log_entry(hass, "F.R.I.D.A.Y.", f"Announcement sent to {names}" + (f": {detail}" if detail else ""), DOMAIN)
     return data
