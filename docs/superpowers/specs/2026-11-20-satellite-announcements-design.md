@@ -60,12 +60,17 @@ is tested, so today the living room hears nothing.
 - **Microphone muted (owner, 20/11):** it plays; mute means "don't listen", not "don't speak".
 - **Satellite still booting (owner, 20/11):** the announcement is held in the queue until the boot finishes (the
   program is up and the mute state is known, `mudo is not None`), then plays, within the maximum wait.
+  While the program is down (rebooting, local port refusing), the bot retries that satellite every 15 s until the
+  maximum wait runs out (only connection errors; a 404 or a 4xx answer is final) (builder's call, from the owner's
+  rule).
 - **Wake word during the announcement (approved by the owner, 20/11):** an active wake word stops the
   announcement and opens a normal conversation, consistent with the 19/11 rule "only an active wake word interrupts
   her". Room speech does not stop it. The detector already runs while she speaks (the 19/11 gate depends on it);
   stopping means killing the announcement's `aplay` and opening the conversation with `como_abriu: palavra`. If
   that proves unsafe in the build, the fallback is to finish the announcement and then honor the word (ledgered
   ruling).
+- **Button during the announcement (builder's call):** any button stops it, like the timer alarm; no
+  conversation opens.
 - **Several announcements in a row:** played in order, one chime each.
 - **Music playing (MK1):** ducked the same way as a reminder.
 - **No answer expected:** after the speech the satellite returns to idle; no microphone, no "listening" light.
@@ -80,8 +85,9 @@ is tested, so today the living room hears nothing.
   `anuncio_a` in `sons.py` (two rising notes), created by `garantir` when missing, like the other tones.
 - Running satellites: today the OTA bundle carries only `satellite/sounds/onboarding/` from the vault, and
   `friday-ota-apply` already merges `program/sons/` into `~/satelite/sons/` (never deletes). **Approved by the owner (20/11):** add the top-level `satellite/sounds/` to `VAULT_FOR_BUNDLE`, so every release carries the
-  top-level tones (12 files, ~8.7 MB today, +1 with this one) and a satellite that predates a tone gets it. A
-  migration points `sons.anuncio` at the new file when the file exists, like `0003_elevenlabs_tones.sh`.
+  top-level tones (12 files, ~8.7 MB today, +1 with this one) and a satellite that predates a tone gets it. No
+  migration: `configuracao.carregar` already merges `PADROES["sons"]` under the saved `sons`, so the new key
+  appears by itself; when `anuncio_elevenlabs.wav` is missing the program plays `anuncio_a.wav`.
 
 ## Flow
 1. **Home Assistant, house script:** for the satellites it calls `friday.announce` (`message`, optional
@@ -115,7 +121,8 @@ is tested, so today the living room hears nothing.
 ## Failures
 - TTS fails or times out: `erro` for every satellite; the Echos still speak (the house script does not depend on
   the satellites). Logged.
-- Satellite unreachable or on an older version (404): logged; no retry.
+- Satellite unreachable: retried every 15 s within the maximum wait, then `nao_entregue`. Older version (404):
+  `sem_suporte`, no retry.
 - VM or server agent down: the service raises; the house script continues (`continue_on_error`).
 
 ## House part (not in this repo, done at release time)
@@ -138,7 +145,7 @@ promoted to stable. Until then the MK2 answers 404 and is logged as `sem_suporte
   held, plays when boot finishes; older than 5 min → dropped; two queued play in order; alarm/delivery before the announcement; wake word
   cuts it and opens a conversation; room speech does not cut it.
 - Local port: auth, bad body, size cap, file written.
-- Sounds: `garantir` creates `anuncio_a`; bundle carries the top-level tones; migration idempotent.
+- Sounds: `garantir` creates `anuncio_a`; the bundle carries the top-level tones; missing file → `anuncio_a`.
 
 ## Left to the builder
 Module layout, how the WAV reaches `aplay` (reuse the existing playback path of sounds and the alert volume), the
