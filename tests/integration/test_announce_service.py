@@ -92,6 +92,28 @@ async def test_response_is_the_bot_answer(hass):
     await finish(hass, entry, agents)
 
 
+async def test_waits_30_seconds_for_the_bot(hass):
+    """The bot answers within its 18 s first-round budget and the agent gives up at 25 s: the integration
+    must outwait both (it used to give up at 20 s, before a slow TTS plus the first sends could finish)."""
+    from unittest.mock import patch
+
+    from custom_components.friday.connection import FridayConnection
+
+    agents = [("server", agent("server", "srv"))]
+    entry = await setup(hass, agents)
+    seen = []
+    real = FridayConnection.send
+
+    async def spy(self, name, timeout=10, **fields):
+        seen.append((name, timeout))
+        return await real(self, name, timeout=timeout, **fields)
+
+    with patch.object(FridayConnection, "send", spy):
+        await announce(hass, message="Oi")
+    assert seen == [("announce", 30)]
+    await finish(hass, entry, agents)
+
+
 async def test_works_without_asking_for_the_response(hass):
     agents = [("server", agent("server", "srv")), ("satellite", agent("satellite", "sat1"))]
     entry = await setup(hass, agents)

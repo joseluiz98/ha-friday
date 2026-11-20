@@ -199,7 +199,7 @@ async def _announce(call: ServiceCall) -> dict:
     ids = [find_satellite(hass, dev).hello.device["id"] for dev in call.data.get("device_id") or []]
     connection = find_server(hass)
     try:
-        data = await connection.send("announce", timeout=20, text=call.data["message"], satellites=ids or None)
+        data = await connection.send("announce", timeout=30, text=call.data["message"], satellites=ids or None)
     except HomeAssistantError as err:
         raise ServiceValidationError(f"The announcement failed ({err}).") from err
     if data.get("ok") is False:  # defensive: the agent core turns ok:false into an exception already
