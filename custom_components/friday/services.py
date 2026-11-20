@@ -6,7 +6,8 @@ import re
 
 import voluptuous as vol
 
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.components.logbook import async_log_entry
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 
@@ -179,6 +180,38 @@ async def _build_image(call: ServiceCall) -> None:
         raise ServiceValidationError(IMAGE_ERRORS.get(code, f"The server refused the build ({code}).")) from err
 
 
+SERVICE_ANNOUNCE = "announce"
+MESSAGE_MAX = 500
+ANNOUNCE_SCHEMA = vol.Schema({
+    vol.Required("message"): vol.All(cv.string, vol.Strip, vol.Length(min=1, max=MESSAGE_MAX)),
+    vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
+})
+
+
+def _device_name(hass: HomeAssistant, satellite_id: str) -> str:
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, satellite_id)})
+    return (device.name_by_user or device.name) if device and (device.name_by_user or device.name) else satellite_id
+
+
+async def _announce(call: ServiceCall) -> dict:
+    """Speak the message on the chosen satellites (all by default); the answer is the bot's, per satellite."""
+    hass = call.hass
+    ids = [find_satellite(hass, dev).hello.device["id"] for dev in call.data.get("device_id") or []]
+    connection = find_server(hass)
+    try:
+        data = await connection.send("announce", timeout=20, text=call.data["message"], satellites=ids or None)
+    except HomeAssistantError as err:
+        raise ServiceValidationError(f"The announcement failed ({err}).") from err
+    if data.get("ok") is False:  # defensive: the agent core turns ok:false into an exception already
+        raise ServiceValidationError(f"The announcement failed ({data.get('error', 'error')}).")
+    answers = data.get("satelites") or {}
+    targets = ids or list(answers)
+    names = ", ".join(_device_name(hass, sid) for sid in targets) or "no satellite"
+    detail = ", ".join(f"{_device_name(hass, sid)} {answer}" for sid, answer in answers.items())
+    async_log_entry(hass, "F.R.I.D.A.Y.", f"Announcement sent to {names}" + (f": {detail}" if detail else ""), DOMAIN)
+    return data
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     if not hass.services.has_service(DOMAIN, SERVICE_SET_WIFI):
         hass.services.async_register(DOMAIN, SERVICE_SET_WIFI, _set_wifi, schema=SCHEMA)
@@ -188,3 +221,6 @@ def async_register_services(hass: HomeAssistant) -> None:
         hass.services.async_register(DOMAIN, SERVICE_RETRY, _retry_provisioning, schema=RETRY_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_BUILD_IMAGE):
         hass.services.async_register(DOMAIN, SERVICE_BUILD_IMAGE, _build_image, schema=BUILD_IMAGE_SCHEMA)
+    if not hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
+        hass.services.async_register(
+            DOMAIN, SERVICE_ANNOUNCE, _announce, schema=ANNOUNCE_SCHEMA, supports_response=SupportsResponse.OPTIONAL)

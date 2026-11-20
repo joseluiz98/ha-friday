@@ -241,6 +241,20 @@
           "description": "Release to build, with or without the v (for example 0.3.8). Empty = the stable release."
         }
       }
+    },
+    "announce": {
+      "name": "Announce on satellites",
+      "description": "Speaks a text on the satellites. The server turns it into speech once and every chosen satellite plays it, with a chime first; the answer lists how each satellite took it.",
+      "fields": {
+        "message": {
+          "name": "Message",
+          "description": "Text to speak (up to 500 characters)."
+        },
+        "device_id": {
+          "name": "Satellites",
+          "description": "Satellites to announce on. Empty = every satellite."
+        }
+      }
     }
   },
   "selector": {
