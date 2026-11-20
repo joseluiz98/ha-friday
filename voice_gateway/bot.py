@@ -516,7 +516,8 @@ class DepsAnuncio:
 
     async def enviar(self, ip, senha, anuncio_id, wav):
         """Resposta da Pi; 404 (programa antigo) = sem_suporte; outro HTTP de erro = erro. Só falha de conexão/prazo levanta."""
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+        conectar, total = an.prazo_envio(len(wav))
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=conectar, total=total)) as session:
             async with session.post(f"http://{ip}:8700/announce", data=wav,
                                     headers={"Authorization": f"Bearer {senha}", "X-Announcement-Id": anuncio_id,
                                              "Content-Type": "audio/wav"}) as resp:

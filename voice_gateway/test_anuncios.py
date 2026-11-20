@@ -25,6 +25,8 @@ class Deps:
         self.tts_chamadas = []
         self.tts_erro = None
         self.tts_atraso = 0
+        self.atraso_envio = {}  # ip -> segundos (reais) antes de a Pi responder
+        self.primeira_rodada_s = 0.4  # o real é 18 s; aqui cabe no teste
         self.registros, self.usos = [], []
         self.agora_ = 1000.0
         self.dormidas = []
@@ -46,6 +48,8 @@ class Deps:
     async def enviar(self, ip, senha, anuncio_id, wav):
         assert wav[:4] == b"RIFF"
         self.enviados.append((ip, anuncio_id, len(wav)))
+        if self.atraso_envio.get(ip):
+            await asyncio.sleep(self.atraso_envio[ip])
         fila = self.roteiro.get(ip)
         if not fila:
             raise ConnectionError(ip)
@@ -86,8 +90,9 @@ class TestValidar(unittest.TestCase):
         """announce_request.json é o corpo que o agente do servidor posta (tests/agents/test_announce.py o confere
         do outro lado): o bot tem de aceitá-lo como está. Dois lados com nomes de campo diferentes recusavam
         todo anúncio real como `invalid`."""
-        corpo = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "announce_request.json"),
-                               encoding="utf-8"))
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "announce_request.json"),
+                  encoding="utf-8") as f:
+            corpo = json.load(f)
         self.assertEqual(set(corpo), {"text", "satellites"})
         self.assertEqual(an.validar(corpo, SATS), (corpo["text"], corpo["satellites"]))
 
@@ -253,12 +258,60 @@ class TestAnunciar(Base):
         final = [l for l in self.deps.registros if l.get("tipo") == "anuncio_final"]
         self.assertEqual(final[0]["resposta"], "nao_entregue")
 
+    async def test_responde_dentro_da_primeira_rodada_com_tts_e_envios_lentos(self):
+        """G2-b: TTS lento + um satélite lento: a resposta sai no orçamento da 1ª rodada (18 s no real, 0,4 s aqui)
+        com o lento em `reenviando`; ele segue em segundo plano e o resultado final vai para o log."""
+        self.deps.tts_atraso = 0.15
+        self.ok("192.0.2.15"); self.ok("192.0.2.16")
+        self.deps.atraso_envio["192.0.2.15"] = 1.0
+        t0 = time.monotonic()
+        r = await an.anunciar({"text": "Oi"}, self.deps)
+        gasto = time.monotonic() - t0
+        self.assertLess(gasto, 0.4 + 0.25)
+        self.assertGreaterEqual(gasto, 0.35)  # esperou o orçamento, não respondeu antes da hora
+        self.assertEqual(r["satelites"], {"sat-0a1b2c": "reenviando", "sat-0d1e2f": "vou_tocar"})
+        self.assertEqual(self.deps.registros[0]["satelites"], r["satelites"])
+        await an.aguardar_pendentes()
+        final = [l for l in self.deps.registros if l.get("tipo") == "anuncio_final"]
+        self.assertEqual([(l["satelite"], l["resposta"]) for l in final], [("sat-0a1b2c", "vou_tocar")])
+        # a primeira tentativa continuou (não foi cancelada nem repetida com o mesmo id)
+        self.assertEqual(len([e for e in self.deps.enviados if e[0] == "192.0.2.15"]), 1)
+
+    async def test_envio_lento_que_falha_depois_do_orcamento_segue_o_reenvio_normal(self):
+        self.deps.atraso_envio["192.0.2.15"] = 0.6
+        self.deps.roteiro["192.0.2.15"] = [ConnectionError("x"), "vou_tocar"]
+        self.deps.roteiro["192.0.2.8"] = [ConnectionError("w")]
+        self.ok("192.0.2.16")
+        r = await an.anunciar({"text": "Oi"}, self.deps)
+        self.assertEqual(r["satelites"]["sat-0a1b2c"], "reenviando")
+        await an.aguardar_pendentes()
+        final = [l for l in self.deps.registros if l.get("tipo") == "anuncio_final"]
+        self.assertEqual([l["resposta"] for l in final], ["vou_tocar"])
+        self.assertEqual(self.deps.dormidas, [15])
+
     async def test_tarefas_de_reenvio_ficam_referenciadas(self):
         self.deps.roteiro["192.0.2.16"] = ["vou_tocar"]
         await an.anunciar({"text": "Oi"}, self.deps)
         self.assertGreaterEqual(len(an._em_curso), 1)
         await an.aguardar_pendentes()
         self.assertEqual(len(an._em_curso), 0)
+
+
+class TestPrazoDeEnvio(unittest.TestCase):
+    def test_prazo_cresce_com_o_corpo(self):
+        """G2-c: conexão 3 s; total 5 s + 1 s por 500 KB (6,7 MB de WAV não cabem em 5 s no Wi-Fi da Pi)."""
+        self.assertEqual(an.prazo_envio(0), (3.0, 5.0))
+        self.assertEqual(an.prazo_envio(500_000), (3.0, 6.0))
+        c, total = an.prazo_envio(6_700_000)
+        self.assertEqual(c, 3.0)
+        self.assertAlmostEqual(total, 5.0 + 6_700_000 / 500_000)
+
+    def test_bot_usa_o_prazo(self):
+        t = open(os.path.join(os.path.dirname(__file__), "bot.py")).read()
+        corpo = t.split("class DepsAnuncio", 1)[1].split("async def telegram_direto", 1)[0]
+        self.assertIn("an.prazo_envio(len(wav))", corpo)
+        self.assertIn("sock_connect=", corpo)
+        self.assertNotIn("ClientTimeout(total=5)", corpo)
 
 
 class TestToken(unittest.TestCase):

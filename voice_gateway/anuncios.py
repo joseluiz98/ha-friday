@@ -2,7 +2,7 @@
 
 Texto fixo → TTS do Gemini (voz, modelo e ritmo da fonte única `voice_settings.tts`) → WAV 48 kHz estéreo (cache por
 sha256 de voz+modelo+ritmo+texto) → todos os satélites pedidos, em paralelo, no IP do cabo e depois no do Wi-Fi.
-Quem não responde (conexão recusada/prazo) fica `reenviando` e o bot tenta de novo a cada 15 s por até 300 s.
+A resposta sai em até 18 s do pedido; quem não respondeu (conexão recusada/prazo/ainda enviando) fica `reenviando` e o bot tenta de novo a cada 15 s por até 300 s.
 Lógica com IO injetado (deps): roda sem Pipecat e sem rede (test_anuncios.py); quem liga isto ao servidor é o bot.py."""
 import asyncio
 import hashlib
@@ -18,10 +18,17 @@ MAX_TEXTO = 500
 TTS_TIMEOUT_S = 15.0
 RETRY_CADA_S = 15.0
 RETRY_ATE_S = 300.0
+PRIMEIRA_RODADA_S = 18.0  # a resposta sai até aqui (a integração espera 30 s); o que faltar segue em segundo plano
 CACHE_LIMITE = 200
 RESPOSTAS_DA_PI = ("vou_tocar", "na_fila", "calado")
 
 _em_curso: set = set()  # referência às tarefas de reenvio (o laço só guarda referência fraca)
+
+
+def prazo_envio(tamanho: int) -> tuple[float, float]:
+    """(sock_connect, total) em segundos do POST do WAV à Pi: 3 s para conectar; 5 s + 1 s por 500 KB do corpo
+    (até 6,7 MB no Wi-Fi). Prazo curto demais virava erro de conexão e reenvio de um WAV que a Pi já recebera."""
+    return 3.0, 5.0 + tamanho / 500_000
 
 
 def validar(corpo, satelites: dict) -> tuple[str, list[str]]:
@@ -178,17 +185,23 @@ def _resposta_valida(r) -> str:
     return r if r in RESPOSTAS_DA_PI or r in ("sem_suporte", "erro") else "erro"
 
 
-async def _reenviar(deps, sid: str, anuncio_id: str, wav: bytes, t0: float) -> None:
+async def _reenviar(deps, sid: str, anuncio_id: str, wav: bytes, t0: float, primeira=None) -> None:
+    """Segundo plano de um satélite sem resposta: espera a 1ª tentativa, se ainda corre (estourou o orçamento da 1ª
+    rodada), e depois reenvia a cada 15 s até 300 s do início. O resultado final vai para o log."""
     resposta = "nao_entregue"
     try:
-        while True:
-            await deps.dormir(RETRY_CADA_S)
-            if deps.agora() - t0 > RETRY_ATE_S:
-                break
-            r = await _enviar_uma(deps, sid, anuncio_id, wav)
-            if r is not None:
-                resposta = _resposta_valida(r)
-                break
+        r = await primeira if primeira is not None else None
+        if r is not None:
+            resposta = _resposta_valida(r)
+        else:
+            while True:
+                await deps.dormir(RETRY_CADA_S)
+                if deps.agora() - t0 > RETRY_ATE_S:
+                    break
+                r = await _enviar_uma(deps, sid, anuncio_id, wav)
+                if r is not None:
+                    resposta = _resposta_valida(r)
+                    break
     except Exception as e:
         logging.warning(f"announce: retry for {sid} failed: {e!r}")
         resposta = "erro"
@@ -198,6 +211,7 @@ async def _reenviar(deps, sid: str, anuncio_id: str, wav: bytes, t0: float) -> N
 
 async def anunciar(corpo, deps) -> dict:
     texto, ids = validar(corpo, deps.satelites)  # ValueError → 400, sem TTS
+    inicio = time.monotonic()
     t0 = deps.agora()
     anuncio_id = secrets.token_hex(6)
     ajustes = deps.ajustes_tts()  # lido a cada anúncio: o que o HA muda vale sem reiniciar
@@ -229,12 +243,17 @@ async def anunciar(corpo, deps) -> dict:
         except Exception:
             return None
 
-    respostas = await asyncio.gather(*(uma(sid) for sid in ids))
+    # Orçamento da 1ª rodada, contado desde o pedido (TTS incluído): passou dele, quem ainda não respondeu vira
+    # `reenviando` e a tentativa em curso continua em segundo plano (não é cancelada: a Pi pode já estar recebendo).
+    tarefas = {sid: asyncio.create_task(uma(sid)) for sid in ids}
+    restante = max(0.0, getattr(deps, "primeira_rodada_s", PRIMEIRA_RODADA_S) - (time.monotonic() - inicio))
+    await asyncio.wait(list(tarefas.values()), timeout=restante)
     resultado = {}
-    for sid, r in zip(ids, respostas):
-        if r is None:
+    for sid, tarefa in tarefas.items():
+        r = tarefa.result() if tarefa.done() else "pendente"
+        if r is None or r == "pendente":
             resultado[sid] = "reenviando"
-            t = asyncio.create_task(_reenviar(deps, sid, anuncio_id, wav, t0))
+            t = asyncio.create_task(_reenviar(deps, sid, anuncio_id, wav, t0, None if r is None else tarefa))
             _em_curso.add(t)
             t.add_done_callback(_em_curso.discard)
         else:
