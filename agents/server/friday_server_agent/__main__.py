@@ -17,6 +17,7 @@ from friday_agent_core.cpu import CpuUsage
 from friday_agent_core.server import AgentCore
 
 from . import collectors as c
+from . import announce as announcemod
 from . import commands as cmds
 from . import cost as costmod
 from . import diagnostics as diagmod
@@ -269,7 +270,7 @@ async def main() -> None:
                       "diagnostics": diagmod.make_handler(lambda: dict(state), lambda: diagmod.load_literals(SECRETS, OPENCLAW_JSON, ENV_FILE) + tuple(x for x in (token, status_token, pve) if x)),
                       **modelsmod.make_handlers(store),
                       **provmod.make_handlers(bundles),
-                      **cmd_handlers, "press": press_dispatch,
+                      **cmd_handlers, **announcemod.make_handlers(), "press": press_dispatch,
                       **otahttp.make_handlers(orch, kick, lambda: ota_tls)})
 
     async def loop(fn, arg, period, label, src):
