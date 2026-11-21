@@ -1,4 +1,5 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = ["slow: long differential run, opt in with FRIDAY_SWEEP_EQUIV=1"]
 testpaths = ["tests"]
 pythonpath = [".", "agents/common", "agents/server"]
