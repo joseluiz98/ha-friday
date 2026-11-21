@@ -179,6 +179,24 @@ class TestMudoESonsTurno(Base):
             self.s._agir("som", n)
         self.assertEqual(F.sons, ["erro_b.wav"])
 
+    async def test_som_de_erro_pisca_o_anel(self):  # spec 2026-11-21
+        vistos = []
+        self.s.anel = types.SimpleNamespace(flash_error=lambda *a: vistos.append("flash"),
+                                            show_maestro=lambda *a, **k: None)
+        self.s._agir("som", "erro")
+        self.assertEqual(vistos, ["flash"])
+        self.assertEqual(F.sons, ["erro_b.wav"])
+        self.s._agir("som", "fim")
+        self.assertEqual(vistos, ["flash"])
+
+    async def test_som_de_erro_pisca_mesmo_com_sons_de_turno_desligados(self):
+        vistos = []
+        self.s.cfg["sons_turno"] = False
+        self.s.anel = types.SimpleNamespace(flash_error=lambda *a: vistos.append("flash"),
+                                            show_maestro=lambda *a, **k: None)
+        self.s._agir("som", "erro")
+        self.assertEqual(vistos, ["flash"])
+
     async def test_padrao_toca_os_sons_de_turno(self):
         self.s._agir("som", "inicio"); self.s._agir("som", "fim")
         self.assertEqual(F.sons, ["inicio_elevenlabs.wav", "fim_elevenlabs_20261020.wav"])
@@ -736,11 +754,11 @@ class TestRedeEsgotadaLigacao(unittest.TestCase):
 
     def test_tique_polls_the_state_file_at_most_every_5_s(self):
         corpo = self.src.split("    def tique(self):", 1)[1].split("\n    def ", 1)[0]
-        self.assertIn("net_recovery.read_exhausted(", corpo)
+        self.assertIn("net_recovery.read_net_down(time.time())", corpo)
         self.assertIn("time.monotonic()", corpo)
         self.assertIn(">= 5", corpo)
         self.assertIn('self.evento("rede_esgotada"', corpo)
-        self.assertIn('"net_exhausted"', corpo)
+        self.assertIn('"net_down"', corpo)
         self.assertIn("self.maestro.rede_esgotada", corpo)
 
     def test_agir_handles_desfazer_mudo(self):

@@ -404,6 +404,8 @@ class Satelite:
 
     def _agir(self, tipo, arg):
         if tipo == "som":
+            if arg == "erro":  # spec 2026-11-21: todo bipe de erro pisca o anel de vermelho por 2 s (só no XVF)
+                self.anel.flash_error()
             if cfgmod.som_permitido(self.cfg, arg):  # spec 2026-10-29: sons_turno falso pula inicio/fim
                 self.alto.tocar_wav(self._som(arg))
         elif tipo == "luz":
@@ -862,10 +864,11 @@ class Satelite:
         agora = time.monotonic()
         if self._rede_checada is None or agora - self._rede_checada >= 5:  # spec 2026-11-08: estado do netwatch, a cada 5 s
             self._rede_checada = agora
-            v = net_recovery.read_exhausted()
+            # spec 2026-11-21: vermelho depois de 2 min sem rede, qualquer que seja a falha (não só a cadeia esgotada)
+            v = net_recovery.read_net_down(time.time())
             if v != self.maestro.rede_esgotada:
                 self.evento("rede_esgotada", v)
-                print(json.dumps({"net_exhausted": v}), flush=True)
+                print(json.dumps({"net_down": v}), flush=True)
         self._tique_cadastro()
         fr = self.contagem.tique(time.monotonic())
         if fr is not None:
