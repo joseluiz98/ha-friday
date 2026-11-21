@@ -252,4 +252,5 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("image_build", "Build provisioning image", platform="button", category="config", icon="mdi:sd"),
         s("image_latest", "Provisioning image", icon="mdi:sd", **diag),
         s("ota_waiting_server", "Satellites waiting for the server", icon="mdi:timer-sand", **diag),
+        s("ota_alpha_promotion", "Alpha promotion", device_class="timestamp", icon="mdi:timer-sand", **diag),
     ]

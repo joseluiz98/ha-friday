@@ -16,6 +16,7 @@ import json
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Callable
 
 from friday_agent_core import version
@@ -299,6 +300,16 @@ class Orchestrator:
         self._flush_pushes()
         return {"targets": {c: self.target(c) for c in ch.CHANNELS}, "built": built}
 
+    def _newest_stable_key(self) -> tuple | None:
+        """Version key of the newest stable release: the releases GitHub reports as stable, plus the tags this agent
+        promoted (the stored flag stays pre-release until a full poll). None when there is none."""
+        with self.store.lock:
+            stable_keys = [ch.version_key(i.release.tag) for i in self.store.release_infos().values()
+                           if not i.release.prerelease and ch.eligible([i.release])]
+            stable_keys += [ch.version_key(t) for t, p in self.store.data.setdefault("promotions", {}).items()
+                            if isinstance(p, dict) and p.get("result") == "promoted"]
+        return max(stable_keys, default=None)
+
     def _promote_step(self) -> None:
         """A pre-release that passed the alpha soak becomes the stable release on GitHub (the release page is then the
         truth for the stable channel too). Once per tag; a newer stable release supersedes an older soaked one."""
@@ -309,16 +320,9 @@ class Orchestrator:
         with self.store.lock:
             promotions = self.store.data.setdefault("promotions", {})
             soak = self.store.soak()
-            infos = self.store.release_infos()
             candidates = [r for r in self._eligible()
                           if r.prerelease and ch.promoted(r, soak, now) and r.tag not in promotions]
-            # newest stable: releases GitHub reports as stable, plus the tags this agent promoted (the stored flag
-            # stays pre-release until a full poll)
-            stable_keys = [ch.version_key(i.release.tag) for i in infos.values()
-                           if not i.release.prerelease and ch.eligible([i.release])]
-            stable_keys += [ch.version_key(t) for t, p in promotions.items()
-                            if isinstance(p, dict) and p.get("result") == "promoted"]
-            newest_stable = max(stable_keys, default=None)
+            newest_stable = self._newest_stable_key()
             best = max(candidates, key=lambda r: ch.version_key(r.tag), default=None)
             if best is not None and newest_stable is not None and ch.version_key(best.tag) <= newest_stable:
                 best = None
@@ -573,6 +577,73 @@ class Orchestrator:
             if d.get("waiting_server_since") is None or d.get("waiting_server_tag") != tag:
                 d["waiting_server_since"], d["waiting_server_tag"] = now, tag
                 self._save_quiet()
+
+    def alpha_promotion(self) -> tuple[str | None, dict]:
+        """(state, attributes) of the sensor `ota_alpha_promotion`: when the tracked alpha will be promoted to stable.
+        Tracked = the newest eligible pre-release not yet decided and not older than the newest stable (that one can
+        only end superseded); none left: the last decided tag, so a promotion stays visible with its result. The state
+        is the promotion time (None without a running clock). `soaked_hours` is the only value that moves with time;
+        it is recomputed only when this is called (every OTA cycle), never by a timer of its own."""
+        now = self._clock()
+
+        def iso(ts: float | None) -> str | None:
+            return None if ts is None else datetime.fromtimestamp(ts, timezone.utc).isoformat()
+
+        with self.store.lock:
+            promotions = self.store.data.setdefault("promotions", {})
+            soak = self.store.soak()
+            newest_stable = self._newest_stable_key()
+            alphas = sorted((r for r in self._eligible()
+                             if r.prerelease and r.tag not in promotions
+                             and (newest_stable is None or ch.version_key(r.tag) > newest_stable)),
+                            key=lambda r: ch.version_key(r.tag), reverse=True)
+
+            def clock(tag: str) -> tuple[float | None, bool]:
+                rec = soak.get(tag)
+                return (rec.started_at, rec.failed) if rec is not None else (None, False)
+
+            def status(tag: str) -> str:
+                started, failed = clock(tag)
+                if failed:
+                    return "failed"
+                if started is None:
+                    return "waiting_install"
+                return "ready" if now - started >= SOAK_S else "soaking"
+
+            def promotes_at(tag: str) -> float | None:
+                started, failed = clock(tag)
+                return None if started is None or failed else started + SOAK_S
+
+            rows = [{"tag": r.tag, "status": status(r.tag), "promotes_at": iso(promotes_at(r.tag))} for r in alphas]
+            attrs: dict = {"tag": None, "status": None, "started_at": None, "promotes_at": None,
+                           "soaked_hours": None, "newer_stable": False, "alphas": rows}
+            tag, end, at = None, now, None
+            if alphas:
+                tag = alphas[0].tag
+                attrs["status"] = status(tag)
+                at = promotes_at(tag)
+            else:
+                decided = []
+                for t, p in promotions.items():
+                    try:
+                        decided.append((ch.version_key(t), t, p))
+                    except ValueError:
+                        continue
+                if decided:
+                    _key, tag, p = max(decided, key=lambda d: d[0])
+                    result = p.get("result") if isinstance(p, dict) else None
+                    attrs["status"] = result if result in ("promoted", "superseded") else None
+                    if isinstance(p, dict) and isinstance(p.get("at"), (int, float)):
+                        end = p["at"]
+                    if result == "promoted":
+                        at = promotes_at(tag)
+            if tag is not None:
+                started, _failed = clock(tag)
+                attrs.update(tag=tag, started_at=iso(started), promotes_at=iso(at),
+                             newer_stable=newest_stable is not None and ch.version_key(tag) < newest_stable)
+                if started is not None:
+                    attrs["soaked_hours"] = round(max(end - started, 0.0) / 3600, 1)
+        return attrs["promotes_at"], attrs
 
     def waiting_server(self) -> dict:
         """{sat_id: {tag, since, why}} for satellites held by the server for at least WAITING_PUSH_AFTER_S."""

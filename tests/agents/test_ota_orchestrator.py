@@ -852,3 +852,126 @@ def test_built_by_describe_string_counts_as_fresh(tmp_path):
     assert w.orch.meta["v0.4.0"]["built_by"] == "v0.4.0-1-gdeadbee"
     w.agent_at("v0.5.0")
     assert w.offer("stable", installed="v0.3.0")["tag"] == "v0.4.0" and w.built == ["v0.4.0"]
+
+
+# ---- alpha promotion clock for Home Assistant (plan 2026-11-21 Task 1)
+from datetime import datetime, timezone  # noqa: E402
+
+ALPHA_KEYS = {"tag", "status", "started_at", "promotes_at", "soaked_hours", "newer_stable", "alphas"}
+
+
+def _iso(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat()
+
+
+def _promo_world(tmp_path, releases):
+    w = World(tmp_path, releases)
+    w.orch.poll()  # stores the releases
+    return w
+
+
+def test_alpha_promotion_soaking(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True)])
+    t0 = w.now
+    w.store.soak_start("v1.1.0", t0)
+    w.now = t0 + 3600
+    state, attrs = w.orch.alpha_promotion()
+    assert state == _iso(t0 + SOAK_S) and set(attrs) == ALPHA_KEYS
+    assert attrs["tag"] == "v1.1.0" and attrs["status"] == "soaking"
+    assert attrs["started_at"] == _iso(t0) and attrs["promotes_at"] == _iso(t0 + SOAK_S)
+    assert attrs["soaked_hours"] == 1.0 and attrs["newer_stable"] is False
+    assert attrs["alphas"] == [{"tag": "v1.1.0", "status": "soaking", "promotes_at": _iso(t0 + SOAK_S)}]
+
+
+def test_alpha_promotion_ready_after_soak(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True)])
+    t0 = w.now
+    w.store.soak_start("v1.1.0", t0)
+    w.now = t0 + SOAK_S + 60
+    state, attrs = w.orch.alpha_promotion()
+    assert attrs["status"] == "ready" and state == _iso(t0 + SOAK_S)
+
+
+def test_alpha_promotion_waiting_install(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True)])
+    state, attrs = w.orch.alpha_promotion()
+    assert state is None and attrs["tag"] == "v1.1.0" and attrs["status"] == "waiting_install"
+    assert attrs["started_at"] is None and attrs["promotes_at"] is None and attrs["soaked_hours"] is None
+    assert attrs["alphas"] == [{"tag": "v1.1.0", "status": "waiting_install", "promotes_at": None}]
+
+
+def test_alpha_promotion_failed(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True)])
+    w.store.soak_start("v1.1.0", w.now)
+    w.store.soak_fail("v1.1.0")
+    w.now += 3600
+    state, attrs = w.orch.alpha_promotion()
+    assert state is None and attrs["status"] == "failed" and attrs["promotes_at"] is None
+    assert attrs["alphas"][0]["promotes_at"] is None
+
+
+def test_alpha_promotion_promoted_wins_over_stale_flag(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True)])  # the flag stays pre-release
+    t0 = w.now
+    w.store.soak_start("v1.1.0", t0)
+    t1 = t0 + SOAK_S + 600
+    w.store.data["promotions"]["v1.1.0"] = {"at": t1, "result": "promoted"}
+    w.now = t1 + 5000
+    state, attrs = w.orch.alpha_promotion()
+    assert attrs["tag"] == "v1.1.0" and attrs["status"] == "promoted"
+    assert attrs["soaked_hours"] == round((t1 - t0) / 3600, 1)
+    assert attrs["alphas"] == [] and state == _iso(t0 + SOAK_S)
+
+
+def test_alpha_promotion_two_in_series(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True), rel("v1.2.0", pre=True)])
+    t0 = w.now
+    w.store.soak_start("v1.1.0", t0)
+    w.store.soak_start("v1.2.0", t0 + 7200)
+    w.now = t0 + 10800
+    state, attrs = w.orch.alpha_promotion()
+    assert attrs["tag"] == "v1.2.0" and state == _iso(t0 + 7200 + SOAK_S)
+    assert [a["tag"] for a in attrs["alphas"]] == ["v1.2.0", "v1.1.0"]
+    assert [a["promotes_at"] for a in attrs["alphas"]] == [_iso(t0 + 7200 + SOAK_S), _iso(t0 + SOAK_S)]
+    # A is promoted: it leaves the list, B stays tracked
+    w.store.data["promotions"]["v1.1.0"] = {"at": t0 + SOAK_S, "result": "promoted"}
+    _state, attrs = w.orch.alpha_promotion()
+    assert attrs["tag"] == "v1.2.0" and [a["tag"] for a in attrs["alphas"]] == ["v1.2.0"]
+
+
+def test_alpha_promotion_newer_stable_after_supersede(tmp_path):
+    # an alpha older than a stable release ends `superseded`: it shows up as the last result, with newer_stable
+    w = _promo_world(tmp_path, [rel("v1.1.0", pre=True), rel("v1.2.0")])
+    t0 = w.now
+    w.store.soak_start("v1.1.0", t0)
+    w.store.data["promotions"]["v1.1.0"] = {"at": t0 + 60, "result": "superseded"}
+    state, attrs = w.orch.alpha_promotion()
+    assert state is None and attrs["tag"] == "v1.1.0" and attrs["status"] == "superseded"
+    assert attrs["newer_stable"] is True and attrs["promotes_at"] is None and attrs["alphas"] == []
+
+
+def test_alpha_promotion_skipped_old_alpha_drops_out(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.1.0", pre=True), rel("v1.2.0"), rel("v1.3.0", pre=True)])
+    t0 = w.now
+    w.store.soak_start("v1.3.0", t0)
+    w.now = t0 + 3600
+    state, attrs = w.orch.alpha_promotion()
+    assert attrs["tag"] == "v1.3.0" and state == _iso(t0 + SOAK_S) and attrs["newer_stable"] is False
+    assert [a["tag"] for a in attrs["alphas"]] == ["v1.3.0"]
+    # a stale alpha with a running clock drops out too: it can only end superseded
+    w.store.soak_start("v1.1.0", t0)
+    _state, attrs = w.orch.alpha_promotion()
+    assert [a["tag"] for a in attrs["alphas"]] == ["v1.3.0"]
+
+
+def test_alpha_promotion_only_stale_alpha_shows_nothing(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.1.0", pre=True), rel("v1.2.0")])
+    state, attrs = w.orch.alpha_promotion()
+    assert state is None and attrs["tag"] is None and attrs["status"] is None and attrs["alphas"] == []
+
+
+def test_alpha_promotion_empty_store(tmp_path):
+    w = World(tmp_path, [])
+    state, attrs = w.orch.alpha_promotion()
+    assert state is None and set(attrs) == ALPHA_KEYS and attrs["alphas"] == []
+    assert all(attrs[k] is None for k in ALPHA_KEYS - {"alphas", "newer_stable"}) and attrs["newer_stable"] is False
