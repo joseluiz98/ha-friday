@@ -48,11 +48,6 @@ class AllowRule(NamedTuple):
 LETTER = "A-Za-zÀ-ÖØ-öø-ÿ"
 
 
-def _has_value(text: str, val: str) -> bool:
-    """`val` as a whole word: not glued to another letter (so a handle like "xzelday98" is not the name "Zelda")."""
-    return re.search(rf"(?<![{LETTER}]){re.escape(val)}(?![{LETTER}])", text, re.I) is not None
-
-
 def parse_allow(lines) -> list[AllowRule]:
     rules = []
     for raw in lines:
@@ -69,37 +64,54 @@ def _allowed(path: str, text: str, allow, private: bool = False) -> bool:
     return any(fnmatch.fnmatch(path, r.glob) and r.regex.search(text) and (r.private or not private) for r in allow)
 
 
-def _line_hits(text: str, private) -> list[tuple[str, str]]:
-    hits = []
-    low = text.lower()
-    for cat, val in private:
-        if val and val.lower() in low:
-            hits.append((cat, val))
-    for cat, pats in GENERIC.items():
-        for pat in pats:
-            hits.extend((cat, m.group(0)) for m in pat.finditer(text))
-    return hits
+class _Value(NamedTuple):
+    """A private-list value with its whole-word regex compiled once (`rx` is None for an empty value)."""
+    cat: str
+    val: str
+    rx: re.Pattern | None
+
+
+def _word_rx(val: str) -> re.Pattern:
+    return re.compile(rf"(?<![{LETTER}]){re.escape(val)}(?![{LETTER}])", re.I)
+
+
+def _private(private) -> list[_Value]:
+    return [_Value(cat, val, _word_rx(val) if val else None) for cat, val in scan._known_pairs(private)]
+
+
+def _as_values(private) -> list[_Value]:
+    """`private` as `_Value`s; the old `(cat, val)` pairs are accepted too (the reference tests pass those)."""
+    if all(isinstance(v, _Value) for v in private):
+        return private
+    return _private([(v.cat, v.val) if isinstance(v, _Value) else v for v in private])
 
 
 def _scan_text(path: str, content: str, private, allow, rel: str | None = None) -> list:
     """Private-list values are always reported (in the text and in every folder/file name of `rel`); an allow rule
-    only drops the GENERIC matches of its line."""
+    only drops the GENERIC matches of its line.
+
+    Prefilter: a match inside a line is also a match in the whole text (no pattern has an anchor, and every
+    `splitlines` separator is a non-letter, non-word character, so `\\b` and the letter lookarounds see the same
+    thing at a line edge). So a value or pattern with no match in the whole text has none in any line and is dropped
+    before the per-line loop; the whole-text search is only ever used to skip work, never to report."""
     out = []
+    values = [v for v in _as_values(private) if v.rx is not None]
     parts = (rel or os.path.basename(path)).replace(os.sep, "/").split("/")
-    for cat, val in private:
-        if val and any(_has_value(p, val) for p in parts):
-            out.append(scan.Finding(cat, path, None, scan.mask(val)))
+    for v in values:
+        if any(v.rx.search(p) for p in parts):
+            out.append(scan.Finding(v.cat, path, None, scan.mask(v.val)))
+    live_values = [v for v in values if v.rx.search(content)]
+    live_pats = [(cat, pat) for cat, pats in GENERIC.items() for pat in pats if pat.search(content)]
+    if not live_values and not live_pats:
+        return out
     for n, line in enumerate(content.splitlines(), 1):
-        if not _allowed(path, line, allow, private=True):
-            out.extend(scan.Finding(cat, path, n, scan.mask(val)) for cat, val in private if val and _has_value(line, val))
-        if _allowed(path, line, allow):
-            continue
-        out.extend(scan.Finding(cat, path, n, scan.mask(v)) for cat, v in _line_hits(line, []))
+        hit_values = [v for v in live_values if v.rx.search(line)]
+        hit_generic = [(cat, m.group(0)) for cat, pat in live_pats for m in pat.finditer(line)]
+        if hit_values and not _allowed(path, line, allow, private=True):
+            out.extend(scan.Finding(v.cat, path, n, scan.mask(v.val)) for v in hit_values)
+        if hit_generic and not _allowed(path, line, allow):
+            out.extend(scan.Finding(cat, path, n, scan.mask(val)) for cat, val in hit_generic)
     return out
-
-
-def _private(private) -> list[tuple[str, str]]:
-    return scan._known_pairs(private)
 
 
 def sweep(paths: list[str], private: list, allow: list[AllowRule]) -> list:

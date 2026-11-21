@@ -1,5 +1,6 @@
 """Sweep v2: private list + generic patterns + path-scoped allow rules + history mode (plan 2026-11-09 Task 3)."""
 import importlib.util
+import re
 import pathlib
 import shutil
 import subprocess
@@ -188,3 +189,91 @@ def test_batch_history_does_not_deadlock_on_many_and_large_blobs(make_repo):
     repo = make_repo([files])
     found = sweep.sweep_history(repo, ["Zelda"], [])
     assert [(f.path.split("@")[0], f.line) for f in found] == [("big.txt", 40001)]
+
+
+# --- whole-blob prefilter (plan 2026-11-21-sweep-speed, Task 3) ---------------------------------------------------
+
+SEPARATORS = ["\n", "\r\n", "\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"]
+
+
+def _fragments():
+    ip, email = "192" + ".168.4." + "7", "who" + "@" + "mail.example.org"
+    mac = ":".join(["02", "00", "5E", "11", "22", "33"])
+    mac_esc = "\\\\:".join(["02", "00", "5E", "11", "22", "33"])
+    phone = "+55 11 9" + "1234-5678"
+    bearer = "Bearer " + "example" + "q" * 20
+    return [
+        "Zelda", "zelda", "ZELDA", "Karlinha", "xzelda", "zeldax", "Zeldaé", "éZelda", "1Zelda2", "_Zelda_", "Zel da",
+        "K" + "arlinha", "ſ", "İ", "ß", "é", "a", "bb", "-", "_", ".", " ", "\t", "word", "def f(x):", "    return 1",
+        ip, ip + "9", "x" + ip, mac, mac_esc, "x" + mac, email, "x" + email, phone, "+55 11", "91234-5678", "+55\n", "11 ",
+        "+55\x0c11\x1c91234-5678", '"token"', ":", '"' + "t" * 20 + '"', '"token"\n:\n"' + "t" * 20 + '"', bearer,
+        "Bearer short", "/home/zelda", "/home/jose", "/home/josefa", "/home/jose_x", "/home/" + "Zelda", "/api/webhook/abcdefgh12",
+        "https://silva" + "software.example/z", "AIza" + "B" * 35, "sk-" + "a" * 40, "ghp_" + "c" * 36,
+        "-----BEGIN " + "PRIVATE KEY-----", "eyJ" + "a" * 25,
+    ] + SEPARATORS * 3
+
+
+def test_prefilter_never_drops_a_line_hit(ref):
+    import random
+    rng = random.Random(20261121)
+    frags = _fragments()
+    private = [("person_name", "Zelda"), ("person_name", "Karlinha"), ("device_id", "Zel da"), ("person_name", ""),
+               ("person_name", "ſ"), ("person_name", "Zelda")]
+    allow_lines = ["*/docs/*:Bearer example", "*/docs/*:Zelda", "private:*/LICENSE:Zelda", "*:^def", "*/x/*:."]
+    a_new, a_ref = sweep.parse_allow(allow_lines), ref.parse_allow(allow_lines)
+    pv_new, pv_ref = sweep._private(private), ref._private(private)
+    paths = [("/r/a.py", "a.py"), ("/r/docs/n.md", "docs/n.md"), ("/r/LICENSE", "LICENSE"), ("/r/x/y.txt", "x/y.txt"),
+             ("/r/Zelda/n.txt", "Zelda/n.txt"), ("/r/ſ/zelda_karlinha.txt", "ſ/zelda_karlinha.txt"), ("/r/p.txt", None)]
+    hits = 0
+    for i in range(2000):
+        text = "".join(rng.choice(frags) for _ in range(rng.randint(0, 40)))
+        path, rel = paths[i % len(paths)]
+        expect = ref._scan_text(path, text, pv_ref, a_ref, rel)
+        assert sweep._scan_text(path, text, pv_new, a_new, rel) == expect, repr(text)
+        assert sweep._scan_text(path, text, private, a_new, rel) == expect, "old (cat, val) pairs must still work"
+        hits += bool(expect)
+    assert hits > 1000, "the fragments must produce findings in most texts"
+
+
+def test_clean_blob_runs_no_line_regex(monkeypatch):
+    calls = []
+    real = sweep._allowed
+    monkeypatch.setattr(sweep, "_allowed", lambda *a, **k: calls.append(a) or real(*a, **k))
+    text = "def f(x):\n    return x + 1  # nothing to see\n" * 25000
+    assert len(text) > 1_000_000
+    pv = sweep._private(["Zelda", "Karlinha"])
+    assert sweep._scan_text("/r/a.py", text, pv, sweep.parse_allow(["*:^def"]), "a.py") == []
+    assert calls == []
+    # a blob with one hit evaluates the allow rules for that line only
+    assert len(sweep._scan_text("/r/a.py", text + "who" + "@" + "mail.example.org\n", pv, [], "a.py")) == 1
+
+
+def test_separators_are_not_letters_or_word_characters():
+    """The prefilter relies on it: a line edge looks the same inside the whole text as inside the line."""
+    for c in SEPARATORS:
+        assert not re.fullmatch(r"\w", c)
+        assert not re.match(f"[{sweep.LETTER}]", c, re.I)
+        assert len(("a" + c + "b").splitlines()) == 2
+
+
+def test_no_anchor_in_patterns():
+    """A line-anchored pattern would make the whole-text prefilter unsound (it could drop a real line hit)."""
+    pats = [p for pats in sweep.GENERIC.values() for p in pats]
+    assert len(pats) >= 10
+    for pat in pats:
+        src, in_class, i = pat.pattern, False, 0
+        while i < len(src):
+            c = src[i]
+            if c == "\\":
+                assert src[i + 1] not in "AZB", f"{src}: \\{src[i + 1]} is position-dependent"
+                i += 2
+                continue
+            if in_class:
+                in_class = c != "]"
+            elif c == "[":
+                in_class = True
+            else:
+                assert c not in "^$", f"{src}: anchor outside a class"
+            i += 1
+        assert not (pat.flags & re.M), src
+        assert "(?m" not in src and "(?s" not in src and "(?a" not in src
