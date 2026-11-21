@@ -112,7 +112,7 @@ class TestListaDaPi(unittest.TestCase):
 
     def test_sexta_feira_sem_voz_vira_negativo(self):
         got = self._lista("sexta_feira", ["sexta_feira_sem_voz_20261121_185817.wav", "sexta_feira_paciencia_20261121_185336.wav"])
-        self.assertIn(("sem_voz", "sexta_feira_sem_voz_20261121_185817.wav"), got)
+        self.assertIn(("quase", "sexta_feira_sem_voz_20261121_185817.wav"), got)
         self.assertIn(("quase", "sexta_feira_paciencia_20261121_185336.wav"), got)
 
     def test_friday_sem_voz_continua(self):

@@ -61,11 +61,11 @@ def candidatos(modelo, falsas=()):
             b = os.path.basename(p)
             if re.fullmatch(r"sexta_feira_\d{8}_\d{6}\.wav", b):
                 yield "ativou", p
-            elif b.startswith("sexta_feira_sem_voz_"):
-                # 21/11: rejeição sem voz humana da palavra extra (TV): negativo sem rotulagem do dono
-                yield "sem_voz", p
-            elif b.startswith("sexta_feira_quase_") or b.startswith("sexta_feira_paciencia_"):
-                # 09/11: rejeição por paciência = quase-disparo com nota >= limiar; a transcrição decide o rótulo
+            elif (b.startswith("sexta_feira_quase_") or b.startswith("sexta_feira_paciencia_")
+                  or b.startswith("sexta_feira_sem_voz_")):
+                # 09/11: rejeição por paciência = quase-disparo com nota >= limiar; a transcrição decide o rótulo.
+                # 21/11: a rejeição sem voz (TV) também: como "quase" passa pelas guardas PARECE_SEXTA/protege_chamadas,
+                # e uma "sexta-feira" real mal transcrita não vira negativo duro (revisão final I1)
                 yield "quase", p
         for nome in sorted(falsas):
             cru, src = (nome[2:], "acervo_v") if nome.startswith("v:") else (nome, "acervo_f")
