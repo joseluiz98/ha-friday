@@ -1200,14 +1200,17 @@ class Satelite:
                     for n_ in nomes_e:
                         if n_ is not None:
                             rej_e.anotar_gravacao(n_)
-                    if (r_ and r_["causa"] == "paciencia" and e["modo"] == "ativa" and r_["gravacao"] is None
+                    if (r_ and r_["causa"] in ("paciencia", "sem_voz") and e["modo"] == "ativa" and r_["gravacao"] is None
                             and self.cfg.get("gravar_ativacoes") and gravando is None):
                         # 09/11: a palavra passou num quadro e faltou o seguinte (10:40 com música). O episódio só se
                         # resolve no fim, então o clipe sai do contexto: o episódio inteiro mais ~2 s antes.
-                        nome = self._nome_gravacao(registro_palavra.prefixo_paciencia_extra(nome_e))
+                        # spec 2026-11-21: o mesmo vale para a rejeição sem voz (TV no MK2), que antes não deixava clipe.
+                        prefixo_ = (registro_palavra.prefixo_sem_voz_extra(nome_e) if r_["causa"] == "sem_voz"
+                                    else registro_palavra.prefixo_paciencia_extra(nome_e))
+                        nome = self._nome_gravacao(prefixo_)
                         gravando = (trecho_do_episodio(self.contexto, r_["quadros"]), [], nome)
                         r_["gravacao"] = nome
-                        reg.escrever(registro_palavra.linha("paciencia", r_["nota"], r_["voz"], nome, palavra=nome_e))
+                        reg.escrever(registro_palavra.linha(r_["causa"], r_["nota"], r_["voz"], nome, palavra=nome_e))
                     if r_ and e["modo"] == "ativa":
                         self.emissor.emitir("ativacao", payload_ativacao(
                             nome_e, r_["nota"], "barrada", modo="ativa", limiar=det.limiar, limiar_voz=det.limiar_voz,

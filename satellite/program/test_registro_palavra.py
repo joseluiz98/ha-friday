@@ -65,6 +65,11 @@ class TestLinhaFala(unittest.TestCase):
         self.assertEqual((d["tipo"], d["palavra"], d["arquivo"]), ("paciencia", "sexta_feira", "/x/sexta_feira_paciencia_1.wav"))
         self.assertEqual(rp.prefixo_paciencia_extra("sexta_feira"), "sexta_feira_paciencia_")
 
+    def test_sem_voz_de_palavra_extra(self):
+        # 21/11: a rejeição sem voz de uma palavra extra (TV no MK2) também grava o clipe, com prefixo próprio
+        self.assertEqual(rp.prefixo_sem_voz_extra("sexta_feira"), "sexta_feira_sem_voz_")
+        self.assertFalse(rp.prefixo_sem_voz_extra("sexta_feira").startswith("sem_voz_"))
+
     def test_linha_fala(self):
         import datetime, json
         t = json.loads(rp.linha_fala({"pico_base": 0.12, "verificador_consultas": 0, "nota_verificador": 0.0,

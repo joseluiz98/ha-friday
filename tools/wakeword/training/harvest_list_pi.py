@@ -61,6 +61,9 @@ def candidatos(modelo, falsas=()):
             b = os.path.basename(p)
             if re.fullmatch(r"sexta_feira_\d{8}_\d{6}\.wav", b):
                 yield "ativou", p
+            elif b.startswith("sexta_feira_sem_voz_"):
+                # 21/11: rejeição sem voz humana da palavra extra (TV): negativo sem rotulagem do dono
+                yield "sem_voz", p
             elif b.startswith("sexta_feira_quase_") or b.startswith("sexta_feira_paciencia_"):
                 # 09/11: rejeição por paciência = quase-disparo com nota >= limiar; a transcrição decide o rótulo
                 yield "quase", p

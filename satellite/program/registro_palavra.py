@@ -33,6 +33,11 @@ def prefixo_paciencia_extra(nome: str) -> str:
     return f"{nome}_paciencia_"
 
 
+def prefixo_sem_voz_extra(nome: str) -> str:
+    """21/11: prefixo do áudio de uma rejeição sem voz humana de uma palavra extra (TV no MK2); a da Friday segue `sem_voz_`."""
+    return f"{nome}_sem_voz_"
+
+
 ARQUIVO_FALAS = "/home/jose/gravacoes/falas_palavra.ndjson"  # 20/10: pico do modelo base por trecho de fala
 
 

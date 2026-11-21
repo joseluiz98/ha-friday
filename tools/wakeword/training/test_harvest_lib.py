@@ -93,5 +93,32 @@ class TestSatellitePrefix(unittest.TestCase):  # 18/11/2026: the satellite id go
         self.assertEqual(h.verdadeiras_rotuladas(r, OTHER, OFFICE), [])
 
 
+class TestListaDaPi(unittest.TestCase):
+    """21/11: harvest_list_pi.py roda na Pi; aqui roda contra uma pasta temporária (H trocado no fonte)."""
+
+    def _lista(self, modelo, nomes):
+        import os, subprocess, sys, tempfile
+        aqui = os.path.dirname(os.path.abspath(__file__))
+        src = open(os.path.join(aqui, "harvest_list_pi.py"), encoding="utf-8").read()
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as tmp:
+            os.makedirs(tmp + "/gravacoes/ativacoes")
+            for n in nomes:
+                with open(tmp + "/gravacoes/ativacoes/" + n, "wb") as f:
+                    f.write(b"R" * 100)
+            r = subprocess.run([sys.executable, "-I", "-", modelo], input=src.replace('H = "/home/jose"', f'H = {tmp!r}'),
+                               capture_output=True, text=True, check=True,
+                               env={**os.environ, "FRIDAY_OWNER_VOICE_ID": "dono"})
+        return sorted((l.split("\t")[0], os.path.basename(l.split("\t")[1])) for l in r.stdout.splitlines())
+
+    def test_sexta_feira_sem_voz_vira_negativo(self):
+        got = self._lista("sexta_feira", ["sexta_feira_sem_voz_20261121_185817.wav", "sexta_feira_paciencia_20261121_185336.wav"])
+        self.assertIn(("sem_voz", "sexta_feira_sem_voz_20261121_185817.wav"), got)
+        self.assertIn(("quase", "sexta_feira_paciencia_20261121_185336.wav"), got)
+
+    def test_friday_sem_voz_continua(self):
+        got = self._lista("friday", ["sem_voz_20261103_094322.wav"])
+        self.assertEqual(got, [("sem_voz", "sem_voz_20261103_094322.wav")])
+
+
 if __name__ == "__main__":
     unittest.main()

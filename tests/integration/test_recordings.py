@@ -151,3 +151,5 @@ def test_title_from_prefix():
     assert title_for("sombra_sexta_feira_20261102_221000.wav", None) == "22:10:00 · shadow · sexta_feira"
     assert title_for("20261103_100215.wav", None) == "10:02:15 · conversation · friday"
     assert title_for("sexta_feira_quase_20261103_100215.wav", None) == "10:02:15 · near miss"
+    assert title_for("sexta_feira_sem_voz_20261121_185817.wav", None).endswith("rejected (no voice)")
+    assert title_for("sexta_feira_paciencia_20261121_185336.wav", None).endswith("rejected (patience)")

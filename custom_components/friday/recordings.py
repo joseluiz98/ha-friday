@@ -120,8 +120,10 @@ def title_for(name: str, attrs: dict | None) -> str:
         return " · ".join(parts)
     if prefix == "barrada":
         parts.append("rejected (verifier)")
-    elif prefix == "sem_voz":
+    elif prefix == "sem_voz" or prefix.endswith("_sem_voz"):
         parts.append("rejected (no voice)")
+    elif prefix.endswith("_paciencia"):
+        parts.append("rejected (patience)")
     elif prefix.startswith("sombra_"):
         parts += ["shadow", prefix[len("sombra_"):]]
     elif prefix == "quase" or prefix.endswith("_quase"):
