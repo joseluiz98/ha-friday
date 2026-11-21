@@ -100,6 +100,41 @@ class TestXvf(unittest.TestCase):
         self.timers[-1].fn()
         self.assertEqual(self.t.chamadas, [W("LED_COLOR", 0x0000FF), W("LED_EFFECT", 3)])
 
+    def test_flash_error_lasts_flash_s_and_returns(self):
+        self.r.show("speak")
+        self.t.chamadas.clear()
+        self.r.flash_error()
+        self.assertEqual(self.t.chamadas, [W("LED_COLOR", 0xFF0000), W("LED_SPEED", ring.SPEED_SLOW),
+                                           W("LED_BRIGHTNESS", ring.BRIGHTNESS), W("LED_EFFECT", 1)])
+        self.assertEqual(self.timers[-1].atraso, ring.FLASH_ERROR_S)
+        self.assertEqual(ring.FLASH_ERROR_S, 2.0)
+        self.t.chamadas.clear()
+        self.timers[-1].fn()
+        self.assertEqual(self.t.chamadas, [W("LED_COLOR", 0x0000FF), W("LED_EFFECT", 3)])
+
+    def test_flash_error_returns_to_maestro_light(self):
+        fresh = Falso()
+        ring.Xvf3800Ring(fresh, timer_factory=lambda a, f: TimerFalso(a, f, [])).show_maestro("listen")
+        self.r.show_maestro("listen")
+        self.r.flash_error()
+        self.t.chamadas.clear()
+        self.timers[-1].fn()
+        self.assertEqual(self.t.chamadas, fresh.chamadas)
+
+    def test_new_external_state_during_flash_cancels_return(self):
+        self.r.show("speak")
+        self.r.flash_error()
+        t = self.timers[-1]
+        self.r.show("muted")
+        self.assertTrue(t.cancelado)
+        self.t.chamadas.clear()
+        t.fn()
+        self.assertEqual(self.t.chamadas, [])
+
+    def test_show_error_still_holds_10s(self):
+        self.r.show("error")
+        self.assertEqual(self.timers[-1].atraso, ring.ERROR_HOLD_S)
+
     def test_erro_sem_estado_anterior_volta_a_apagar(self):
         self.r.show("error")
         self.t.chamadas.clear()
@@ -249,6 +284,13 @@ class TestJabra(unittest.TestCase):
             r.show(estado, 90)
         self.assertEqual(j.nomes, ["parada", "ouvindo", "cerebro", "cerebro", "nao_perturbe", "alarme", "cerebro",
                                    "cerebro", "alarme", "parada"])  # M4: speak (recado, mic fechado) = luz do cérebro
+
+    def test_flash_error_is_noop_on_jabra(self):
+        j = Jabra()
+        r = ring.JabraRing(j)
+        r.flash_error()
+        self.assertEqual(j.nomes, [])
+        ring.NullRing().flash_error()
 
     def test_delivery_light_from_the_maestro(self):  # M4
         self.assertEqual(ring.ESTADO_DO_MAESTRO["falando"], "speak")
