@@ -35,6 +35,12 @@ superseded / promovida)". The plan's Global Constraints carry it.
     rule decided on 19/11), else `False`.
   - `alphas`: list of `{tag, status, promotes_at}` for every eligible pre-release not in `promotions`, newest first
     (two alphas in series each keep their own clock).
+  - **Stale alphas drop out:** a pre-release older than (or equal to) the newest stable release can never be
+    promoted (it ends `superseded`), so it is excluded from `alphas` and from being the tracked alpha, even before
+    the promotion step writes it to `promotions` (e.g. one the MK1 skipped, which never started a clock). The newest
+    stable is computed as in `_promote_step` (GitHub stable releases plus tags in `promotions` with result
+    `promoted`); extract that computation into a helper `_newest_stable_key(self) -> tuple | None` used by both, with
+    no behavior change to `_promote_step`.
 - The owner's proposal said "horas restantes"; HA already renders a timestamp as "in 1 day", so the remaining time
   is the state itself and the attribute is `soaked_hours` (elapsed). Ruling, flag it in the PR.
 - **Push rate:** `soaked_hours` is only recomputed when `ota_state()` runs (already every OTA cycle); it must not add
@@ -82,6 +88,9 @@ superseded / promovida)". The plan's Global Constraints carry it.
   - `test_alpha_promotion_two_in_series` (Review Focus 2): `v1.1.0` started t0, `v1.2.0` started t0+7200 → tracked
     `v1.2.0`; `[a["tag"] for a in attrs["alphas"]] == ["v1.2.0", "v1.1.0"]`, each `promotes_at` from its own start.
   - `test_alpha_promotion_newer_stable`: stable `v1.2.0` published, alpha `v1.1.0` soaking → `newer_stable is True`.
+  - `test_alpha_promotion_skipped_old_alpha_drops_out`: pre-release `v1.1.0` never installed, stable `v1.2.0`
+    published, alpha `v1.3.0` soaking → tracked `v1.3.0`, `[a["tag"] for a in attrs["alphas"]] == ["v1.3.0"]`.
+  - existing `_promote_step` tests stay green unchanged (the helper extraction changes nothing).
   - `test_alpha_promotion_empty_store` (Review Focus 5): `(None, {... all None ..., "alphas": []})`, no exception.
 - [ ] **Step 2:** `python3 -m pytest -q tests/agents/test_ota_orchestrator.py -k alpha_promotion --basetemp=<job>/pt`
   Expected: FAIL (`AttributeError: ... alpha_promotion`).
@@ -113,7 +122,7 @@ superseded / promovida)". The plan's Global Constraints carry it.
   descriptor: if an integration test pins the descriptor list or entity count, update it). Expected: PASS.
 - [ ] **Step 5:** Commit `feat(ota): Alpha promotion sensor on the server device`.
 
-### Task 3: Version, notes, house doc pointer
+### Task 3: Version and release notes
 
 **Files:** `custom_components/friday/manifest.json` (`"version": "0.4.2"`), `docs/release-notes/v0.4.2.md`
 (alpha header and structure copied from `v0.4.1.md`; New features: the sensor, its statuses; Changes by area:
