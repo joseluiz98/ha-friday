@@ -130,6 +130,75 @@ async def test_zeroconf_discovery_offers_satellite(hass, monkeypatch):
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
 
 
+def _sat_info(ip="10.0.0.9", port=8701, state=None):
+    from ipaddress import ip_address
+
+    from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
+
+    props = {"id": "sat-1", "kind": "satellite", "port": str(port)}
+    if state:
+        props["state"] = state
+    return ZeroconfServiceInfo(
+        ip_address=ip_address(ip), ip_addresses=[ip_address(ip)], port=port,
+        hostname="sat.local.", type="_friday._tcp.local.", name="sat-1._friday._tcp.local.",
+        properties=props,
+    )
+
+
+async def _known_satellite(hass, monkeypatch):
+    """A configured entry with satellite sat-1 at 10.0.0.9:8701 (adopted through the zeroconf flow)."""
+    entry = await _entry_with_noop(hass, monkeypatch)
+    r = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "zeroconf"}, data=_sat_info())
+    await hass.config_entries.flow.async_configure(r["flow_id"], {"token": "t0k"})
+    await hass.async_block_till_done()
+    return entry, next(iter(entry.subentries.values()))
+
+
+async def _announce(hass, info):
+    from unittest.mock import patch
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        r = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "zeroconf"}, data=info)
+        await hass.async_block_till_done()
+    return r, reload
+
+
+async def test_zeroconf_new_address_updates_host(hass, monkeypatch):
+    entry, sub = await _known_satellite(hass, monkeypatch)
+    r, reload = await _announce(hass, _sat_info(ip="10.0.0.10"))
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
+    sub = entry.subentries[sub.subentry_id]
+    assert sub.data["host"] == "10.0.0.10" and sub.data["port"] == 8701
+    assert sub.data["token"] == "t0k"  # the rest of the data is kept
+    reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_zeroconf_same_address_does_nothing(hass, monkeypatch):
+    entry, sub = await _known_satellite(hass, monkeypatch)
+    r, reload = await _announce(hass, _sat_info())
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
+    assert entry.subentries[sub.subentry_id].data["host"] == "10.0.0.9"
+    reload.assert_not_called()
+
+
+async def test_zeroconf_new_port_updates(hass, monkeypatch):
+    entry, sub = await _known_satellite(hass, monkeypatch)
+    r, reload = await _announce(hass, _sat_info(port=8702))
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
+    assert entry.subentries[sub.subentry_id].data["port"] == 8702
+    reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_zeroconf_pairable_does_not_move_host(hass, monkeypatch):
+    entry, sub = await _known_satellite(hass, monkeypatch)
+    r, reload = await _announce(hass, _sat_info(ip="10.0.0.10", state="pairable"))
+    assert r["type"] == FlowResultType.FORM and r["step_id"] == "pair"
+    assert entry.subentries[sub.subentry_id].data["host"] == "10.0.0.9"
+    reload.assert_not_called()
+
+
 async def test_second_user_flow_aborts_single_instance(hass, monkeypatch):
     await _entry_with_noop(hass, monkeypatch)
     r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
