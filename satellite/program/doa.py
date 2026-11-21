@@ -4,11 +4,14 @@ Leitura: `AUDIO_MGR_SELECTED_AZIMUTHS[0]` (radianos; NaN quando nenhum feixe tem
 reconhecida depois que termina, por isso a direção é a média circular das amostras com fala do último 1,5 s; só vale
 com ≥ 3 amostras e ≥ 70% delas a até 30° da média (melhor não travar do que travar na TV).
 
-Regra (dono, 17/11; a mesma do projeto ESPHome da comunidade): trava na palavra, fica travada durante o primeiro pedido
-e solta quando a pessoa para de falar; no resto da conversa vale o comportamento de fábrica (segue quem anda). Solta
-também ao fechar a conversa, em erro, no teto de 90 s e na partida do programa (xvf_link.apply_startup).
+Regra (dono, 17/11; a mesma do projeto ESPHome da comunidade, revista em 21/11): trava na palavra e fica travada durante
+a primeira troca (o pedido E a resposta dela, nos dois canais); solta quando a primeira resposta termina (o microfone
+reabre ou a palavra a corta: `resposta_acabou`); no resto da conversa vale o comportamento de fábrica (segue quem anda).
+Solta também ao fechar a conversa, em erro, no teto de 90 s e na partida do programa (xvf_link.apply_startup).
 Travar = `AEC_FIXEDBEAMSAZIMUTH_VALUES [θ, θ]` → `AEC_FIXEDBEAMSONOFF 1` → canal 1 do feixe travado (`AUDIO_MGR_OP_R
-7 0`, seguro qualquer que seja o comportamento do auto-select); soltar = `AEC_FIXEDBEAMSONOFF 0` → `AUDIO_MGR_OP_R 7 3`.
+7 0`, seguro qualquer que seja o comportamento do auto-select) → canal 0, o da conversa, também (`AUDIO_MGR_OP_L 6 0`,
+feixe focado processado 0), conferido por leitura; se a placa não confirmar `6 0`, o canal 0 volta a `8 0` e a trava
+segue só no canal 1. Soltar = `AEC_FIXEDBEAMSONOFF 0` → `AUDIO_MGR_OP_R 7 3` → `AUDIO_MGR_OP_L 8 0`.
 """
 import collections
 import math
@@ -62,6 +65,11 @@ class TravaFeixe:
         ok = (self._link.write("AEC_FIXEDBEAMSAZIMUTH_VALUES", [theta, theta])
               and self._link.write("AEC_FIXEDBEAMSONOFF", [1])
               and self._link.write("AUDIO_MGR_OP_R", [7, 0]))
+        if ok:
+            # the conversation audio is channel 0 (since 18/11): lock it too, and confirm the board took it
+            if not (self._link.write("AUDIO_MGR_OP_L", [6, 0]) and self._link.read("AUDIO_MGR_OP_L") == [6, 0]):
+                self._link.write("AUDIO_MGR_OP_L", [8, 0])
+                self._log("trava de feixe: canal 0 ficou no 8 0")
         if not ok:
             self._log("trava de feixe: falha ao travar; volta ao modo de fábrica")
             self.travado = True  # para o soltar escrever
@@ -76,6 +84,7 @@ class TravaFeixe:
             return True
         ok = self._link.write("AEC_FIXEDBEAMSONOFF", [0])
         ok = self._link.write("AUDIO_MGR_OP_R", [7, 3]) and ok
+        ok = self._link.write("AUDIO_MGR_OP_L", [8, 0]) and ok
         self.travado, self._desde = False, None
         self._log("trava de feixe: solta" + ("" if ok else " (com falha de USB)"))
         return ok
@@ -90,7 +99,6 @@ class Regra:
     """Quando travar e soltar (regra do ESPHome). `ligada()` lê o switch Beam lock."""
     def __init__(self, direcao: Direcao, trava: TravaFeixe, ligada):
         self.direcao, self.trava, self._ligada = direcao, trava, ligada
-        self._pedido_comecou = False
 
     def palavra(self, agora: float):
         """Na palavra: trava se o switch estiver ligado e a direção for consistente; devolve os graus para o anel."""
@@ -99,15 +107,11 @@ class Regra:
         theta = self.direcao.decidir(agora)
         if theta is None or not self.trava.travar(theta):
             return None
-        self._pedido_comecou = False
         return math.degrees(theta) % 360
 
-    def fala_comecou(self) -> None:
+    def resposta_acabou(self) -> None:
+        """The first answer ended (mic reopened, or the word cut her): release the lock, if any."""
         if self.trava.travado:
-            self._pedido_comecou = True
-
-    def fala_parou(self) -> None:
-        if self.trava.travado and self._pedido_comecou:  # fim do primeiro pedido (o fim da palavra não conta)
             self.trava.soltar()
 
     def conversa_fechou(self) -> None:
