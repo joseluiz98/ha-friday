@@ -71,6 +71,50 @@ def valores(saida):
 
 
 @unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
+class TestStreamWhisperTts(unittest.IsolatedAsyncioTestCase):
+    """stream_whisper_tts builds the request from the tts dict (voice, model, rate) and keeps style whispers."""
+
+    def _cliente(self, chamadas):
+        class Blob:
+            data = b"\x01\x00" * 10
+            mime_type = "audio/L16;rate=24000"
+
+        class Resp:
+            candidates = [type("C", (), {"content": type("K", (), {"parts": [type("P", (), {"inline_data": Blob})()]})()})()]
+
+        async def stream():
+            yield Resp()
+
+        async def gerar(**kw):
+            chamadas.append(kw)
+            return stream()
+
+        return type("Cl", (), {"aio": type("A", (), {"models": type("M", (), {"generate_content_stream": staticmethod(gerar)})()})()})()
+
+    async def _rodar(self, tts, texto):
+        chamadas = []
+        saida = [p async for p in wm.stream_whisper_tts(self._cliente(chamadas), tts, texto)]
+        self.assertTrue(saida)
+        return chamadas[0]
+
+    async def test_request_comes_from_the_dict(self):
+        kw = await self._rodar({"voice": "Kore", "model": "models/m", "rate": "normal"}, "Oi")
+        self.assertEqual(kw["model"], "models/m")
+        voz = kw["config"].speech_config.voice_config.prebuilt_voice_config.voice_name
+        self.assertEqual(voz, "Kore")
+        parte = kw["contents"].parts[0]
+        self.assertEqual(parte.speech_metadata.style, "whispers")
+        self.assertEqual(parte.text, "Oi")
+
+    async def test_rate_changes_the_text(self):
+        kw = await self._rodar({"voice": "Kore", "model": "models/m", "rate": "slow"}, "Oi")
+        self.assertEqual(kw["contents"].parts[0].text, "Fale devagar: Oi")
+        kw = await self._rodar({"voice": "Kore", "model": "models/m", "rate": "fast"}, "Oi")
+        self.assertEqual(kw["contents"].parts[0].text, "Fale rápido: Oi")
+        self.assertEqual(kw["contents"].parts[0].speech_metadata.style, "whispers")
+
+
+@unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
 class TestSplit(unittest.TestCase):
     def test_corta_depois_da_pontuacao_com_espaco(self):
         self.assertEqual(wm.split_sentences("Oi. Tudo bem? Sim"), (["Oi.", "Tudo bem?"], "Sim"))

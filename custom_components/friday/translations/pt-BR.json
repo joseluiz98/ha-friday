@@ -241,6 +241,20 @@
           "description": "Release a gerar, com ou sem o v (por exemplo 0.3.8). Vazio = a release stable."
         }
       }
+    },
+    "announce": {
+      "name": "Anunciar nos satélites",
+      "description": "Fala um texto nos satélites. O servidor gera a fala uma vez e cada satélite escolhido a toca, com um sinal sonoro antes; a resposta diz como cada satélite recebeu.",
+      "fields": {
+        "message": {
+          "name": "Mensagem",
+          "description": "Texto a falar (até 500 caracteres)."
+        },
+        "device_id": {
+          "name": "Satélites",
+          "description": "Satélites onde anunciar. Vazio = todos os satélites."
+        }
+      }
     }
   },
   "selector": {

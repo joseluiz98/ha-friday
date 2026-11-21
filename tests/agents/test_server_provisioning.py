@@ -200,7 +200,7 @@ def test_update_bundle_layout_and_filters(dirs, monkeypatch):
         "agent/friday_agent_core/FRIDAY_VERSION", "agent/friday_agent_core/__init__.py",
         "agent/friday_satellite_agent/__main__.py", "agent/requirements.lock", "manifest.json",
         "program/FRIDAY_VERSION", "program/friday_satelite.py", "program/maestro.py", "program/requirements.lock",
-        "program/sons/onboarding/ready.wav", "program/vendor/SOURCE.md", "program/vendor/xvf_host.py"]
+        "program/sons/alarme.wav", "program/sons/onboarding/ready.wav", "program/vendor/SOURCE.md", "program/vendor/xvf_host.py"]
     assert asked and asked[0][0] == "v9.9.9"
 
 

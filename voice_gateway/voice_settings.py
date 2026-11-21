@@ -15,6 +15,10 @@ VOZES = {"Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", 
          "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird",
          "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"}
 RITMOS = ("slow", "normal", "fast")
+TTS_MODELO_PADRAO = "models/gemini-3.8-flash-tts"
+# Ruling 20/11/2026: google-genai 2.34.0 (friday image) has no pace/rate field (SpeechMetadata = speaker + style,
+# SpeechConfig = voice/language), so the Gemini TTS pace instruction is a prefix of the text.
+_PREFIXO_RITMO = {"slow": "Fale devagar: ", "fast": "Fale rápido: "}
 _MODELO = re.compile(r"(models/)?[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
 
 
@@ -62,3 +66,18 @@ def modelo(cfg=None, ambiente=None) -> str:
     cfg = ler() if cfg is None else cfg
     ambiente = os.environ if ambiente is None else ambiente
     return cfg.get("model") or ambiente.get("FRIDAY_GEMINI_MODEL") or "models/gemini-3.8-live"
+
+
+def tts(cfg=None, ambiente=None) -> dict:
+    """A identidade do TTS (anúncios e sussurro), numa fonte só: voz = a da conversa, modelo do TTS, ritmo das
+    configurações. Trocar a voz no futuro = mudar aqui (ou o arquivo de configurações)."""
+    cfg = ler() if cfg is None else cfg
+    ambiente = os.environ if ambiente is None else ambiente
+    return {"voice": voz(cfg, ambiente),
+            "model": ambiente.get("FRIDAY_TTS_MODEL") or ambiente.get("FRIDAY_WHISPER_TTS_MODEL") or TTS_MODELO_PADRAO,
+            "rate": cfg.get("speaking_rate") or "normal"}
+
+
+def tts_texto(texto: str, rate: str) -> str:
+    """O texto enviado ao TTS com o ritmo aplicado (`normal` = o texto como veio)."""
+    return _PREFIXO_RITMO.get(rate, "") + texto

@@ -90,7 +90,8 @@ def _vault():
     return mod
 
 
-VAULT_FOR_BUNDLE = {"satellite/program/vendor/": "program/vendor/", "satellite/sounds/onboarding/": "program/sons/onboarding/"}
+VAULT_FOR_BUNDLE = {"satellite/program/vendor/": "program/vendor/", "satellite/sounds/onboarding/": "program/sons/onboarding/",
+                    "satellite/sounds/": "program/sons/"}
 
 
 def host_key_path() -> str:

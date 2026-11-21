@@ -45,6 +45,7 @@ CFG = "/etc/friday-satelite/config.json"
 ID = "/etc/friday-satelite/id"
 SONS = "/home/jose/satelite/sons"
 TIMERS = "/home/jose/satelite/estado/timers.json"  # spec 2026-10-12 §2: sobrevive a reinício
+ANUNCIOS = os.environ.get("FRIDAY_ANNOUNCE_DIR", "/home/jose/anuncios")  # spec 2026-11-20: <id>.wav, apagado depois
 MODELO_VERIFICADOR = "/home/jose/modelos/friday_verificador.pkl"  # spec 2026-10-15 D13
 # D16: sem os WAVs das falas da aprendizagem, a Pi usa os sons de sempre
 SONS_RESERVA = {"intro": "inicio", "mudar_lugar": "inicio", "fala_livre": "inicio", "fim": "fim", "cancelada": "erro"}
@@ -135,6 +136,8 @@ class Satelite:
         self.ducker = MusicDucker(self.music_mixer.write, self.cfg["music_duck_percent"], self.cfg["music_restore_s"])
         self.ducker.start(time.monotonic())
         self._alarme = None  # tarefa que repete o som do alarme
+        self._anuncio_tarefa = None  # spec 2026-11-20: tarefa que toca a campainha e a fala do anúncio da vez
+        self._limpar_anuncios()  # sobras de antes do reinício: o maestro nasce sem anúncio pendente
         # spec 2026-10-15 §4.4: programa de aprendizagem de voz
         self.vozes = cadastro.Vozes()
         self._agendado = None  # {"nome", "id"} pedido na conversa
@@ -477,6 +480,21 @@ class Satelite:
                 self.volume.entrar_alerta(self.cfg.get("alarm_ramp_s", 0) if sobe else 0, time.monotonic())
             else:
                 self.volume.sair_alerta()
+        elif tipo == "anuncio_tocar":  # spec 2026-11-20
+            self._parar_tarefa_anuncio()
+            self._anuncio_tarefa = asyncio.ensure_future(self._tocar_anuncio(arg))
+        elif tipo == "anuncio_parar":  # a palavra ativa ou o botão cortaram: nada mais sai do alto-falante
+            self._parar_tarefa_anuncio()
+            self.alto.parar_ja()
+        elif tipo == "anuncio_apagar":
+            try:
+                os.unlink(self._arquivo_anuncio(arg))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                print(json.dumps({"anuncio_apagar_erro": f"{type(e).__name__}: {e}"}), flush=True)
+        elif tipo == "registrar_anuncio":
+            print(json.dumps({"anuncio": arg}), flush=True)
         elif tipo == "request_music":  # R11: campainha tocando, a música vem da VM em até music_wait_s
             asyncio.ensure_future(self._pedir_musica(arg))
         elif tipo == "music_ramp":  # a música do alarme entrou: sobe de 10% a 100% se houver alarme crescente
@@ -491,6 +509,49 @@ class Satelite:
             self._tocar_frases([f"{SONS}/onboarding/{arg}.wav"])
         elif tipo == "onboarding":
             self.emissor.emitir("onboarding", arg)
+
+    @staticmethod
+    def _arquivo_anuncio(anuncio_id):
+        return os.path.join(ANUNCIOS, f"{anuncio_id}.wav")
+
+    @staticmethod
+    def _limpar_anuncios():
+        """Na partida apaga o que sobrou (`*.wav`, `*.tmp`) e garante a pasta."""
+        try:
+            os.makedirs(ANUNCIOS, exist_ok=True)
+            for nome in os.listdir(ANUNCIOS):
+                if nome.endswith((".wav", ".tmp")):
+                    os.unlink(os.path.join(ANUNCIOS, nome))
+        except OSError as e:
+            print(json.dumps({"anuncios_limpar_erro": f"{type(e).__name__}: {e}"}), flush=True)
+
+    def _som_anuncio(self):
+        """A campainha configurada; sem o arquivo, a sintética `anuncio_a.wav` (sons.garantir a cria)."""
+        caminho = f"{SONS}/{self.cfg['sons'].get('anuncio', '')}"
+        return caminho if os.path.isfile(caminho) else f"{SONS}/anuncio_a.wav"
+
+    def _parar_tarefa_anuncio(self):
+        if self._anuncio_tarefa:
+            self._anuncio_tarefa.cancel()
+            self._anuncio_tarefa = None
+
+    async def _tocar_anuncio(self, anuncio_id):
+        """Campainha + fala, uma depois da outra, e o fim vai ao maestro. Falha (arquivo ausente, WAV inválido) também
+        termina: o maestro nunca fica preso em ANUNCIO. A música baixa sozinha: `should_duck` abaixa com o maestro
+        fora de `parada` (e restaura 1 s depois do fim), então não há ducking próprio aqui."""
+        try:
+            caminhos = [self._som_anuncio(), self._arquivo_anuncio(anuncio_id)]
+            duracao = sum(self._duracao_wav(c) for c in caminhos)
+            for c in caminhos:
+                self.alto.tocar_wav(c)
+            await asyncio.sleep(duracao)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(json.dumps({"anuncio_erro": anuncio_id, "erro": f"{type(e).__name__}: {e}"}), flush=True)
+        if self._anuncio_tarefa is asyncio.current_task():
+            self._anuncio_tarefa = None
+        self.evento("anuncio_fim", anuncio_id)
 
     def _tocar_frases(self, caminhos):
         for c in caminhos:
@@ -633,6 +694,19 @@ class Satelite:
         # com um aviso esperando o veredito a campainha entra na fila, como com a conversa aberta (a palavra vem antes)
         resposta, acoes = self.maestro.campainha(entrega_id, time.monotonic(), ocupado=self._claim_pendente)
         print(json.dumps({"campainha": entrega_id, "resposta": resposta, "estado": self.maestro.estado}), flush=True)
+        for tipo, arg in acoes:
+            self._agir(tipo, arg)
+        return resposta
+
+    def anuncio(self, anuncio_id, idade_s=0):
+        """POST /announce (spec 2026-11-20): o WAV já está em ANUNCIOS; o maestro decide tocar, enfileirar ou calar.
+        `idade_s` = há quanto tempo o bot recebeu o pedido (os 5 min contam de lá)."""
+        resposta, acoes = self.maestro.anuncio(anuncio_id, time.monotonic(), ocupado=self._claim_pendente,
+                                               idade_s=idade_s)
+        print(json.dumps({"anuncio": anuncio_id, "resposta": resposta, "estado": self.maestro.estado}), flush=True)
+        if resposta == "calado":  # não perturbe: o maestro não toca nem enfileira, então o arquivo não tem dono
+            acoes = [("registrar_anuncio", {"id": anuncio_id, "resultado": "calado"}),
+                     ("anuncio_apagar", anuncio_id)]
         for tipo, arg in acoes:
             self._agir(tipo, arg)
         return resposta
@@ -1202,7 +1276,9 @@ async def principal():
     threading.Thread(target=s.teclas, daemon=True).start()
     threading.Thread(target=s.duck_laco, daemon=True).start()
     await porta_local.iniciar(CFG, s.estado_publico, s.ao_mudar_config, s.cfg["porta_local"], s.campainha,
-                             palavras_fn=s.palavras_carregadas, comando_fn=s.comando_porta, musica_fn=s._musica_agora)
+                             palavras_fn=s.palavras_carregadas, comando_fn=s.comando_porta, musica_fn=s._musica_agora,
+                             anuncio_fn=s.anuncio, anuncio_dir=ANUNCIOS,
+                             anuncio_tem_fn=s.maestro.tem_anuncio)
     print(json.dumps({"iniciado": s.sid}), flush=True)
     s.carregar_timers()
     while not morreu.is_set():

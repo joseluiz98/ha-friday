@@ -6,7 +6,8 @@ import re
 
 import voluptuous as vol
 
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.components.logbook import async_log_entry
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 
@@ -179,6 +180,78 @@ async def _build_image(call: ServiceCall) -> None:
         raise ServiceValidationError(IMAGE_ERRORS.get(code, f"The server refused the build ({code}).")) from err
 
 
+SERVICE_ANNOUNCE = "announce"
+MESSAGE_MAX = 500
+ANNOUNCE_SCHEMA = vol.Schema({
+    vol.Required("message"): vol.All(cv.string, vol.Strip, vol.Length(min=1, max=MESSAGE_MAX)),
+    vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
+})
+
+
+def _device_name(hass: HomeAssistant, satellite_id: str) -> str:
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, satellite_id)})
+    return (device.name_by_user or device.name) if device and (device.name_by_user or device.name) else satellite_id
+
+
+def _satellite_subentries(hass: HomeAssistant) -> set[tuple[str, str]]:
+    return {(entry.entry_id, sub_id) for entry in hass.config_entries.async_entries(DOMAIN)
+            for sub_id, sub in entry.subentries.items() if sub.subentry_type == DEVICE_KIND_SATELLITE}
+
+
+def _friday_id(device) -> str | None:
+    return next((i[1] for i in device.identifiers if i[0] == DOMAIN), None) if device else None
+
+
+def _is_satellite(device, satellite_subs: set[tuple[str, str]]) -> bool:
+    """The kind lives in the registry: the device belongs to a `satellite` subentry (no live hello needed)."""
+    return any((entry_id, sub_id) in satellite_subs
+               for entry_id, sub_ids in device.config_entries_subentries.items() for sub_id in sub_ids)
+
+
+def announce_targets(hass: HomeAssistant, device_ids: list[str]) -> list[str]:
+    """F.R.I.D.A.Y. satellite ids from HA's device registry: the devices given, or every satellite device."""
+    registry = dr.async_get(hass)
+    satellite_subs = _satellite_subentries(hass)
+    if device_ids:
+        ids = []
+        for dev in device_ids:
+            device = registry.async_get(dev)
+            friday_id = _friday_id(device)
+            if friday_id is None:
+                raise ServiceValidationError("Not a F.R.I.D.A.Y. device.")
+            if not _is_satellite(device, satellite_subs):
+                raise ServiceValidationError("Only satellites can announce.")
+            ids.append(friday_id)
+        return list(dict.fromkeys(ids))
+    ids = sorted({_friday_id(device) for entry in hass.config_entries.async_entries(DOMAIN)
+                  for device in dr.async_entries_for_config_entry(registry, entry.entry_id)
+                  if _friday_id(device) is not None and _is_satellite(device, satellite_subs)})
+    if not ids:
+        raise ServiceValidationError("There is no satellite to announce to.")
+    return ids
+
+
+async def _announce(call: ServiceCall) -> dict:
+    """Speak the message on the chosen satellites (all by default); the answer is the bot's, per satellite."""
+    hass = call.hass
+    connection = find_server(hass)
+    ids = announce_targets(hass, call.data.get("device_id") or [])
+    try:
+        data = await connection.send("announce", timeout=30, text=call.data["message"], satellites=ids)
+    except HomeAssistantError as err:
+        async_log_entry(hass, "F.R.I.D.A.Y.", f"Announcement failed: {err}", DOMAIN)
+        raise ServiceValidationError(f"The announcement failed ({err}).") from err
+    if data.get("ok") is False:  # defensive: the agent core turns ok:false into an exception already
+        code = data.get("error", "error")
+        async_log_entry(hass, "F.R.I.D.A.Y.", f"Announcement failed: {code}", DOMAIN)
+        raise ServiceValidationError(f"The announcement failed ({code}).")
+    answers = data.get("satelites") or {}
+    names = ", ".join(_device_name(hass, sid) for sid in ids)
+    detail = ", ".join(f"{_device_name(hass, sid)} {answer}" for sid, answer in answers.items())
+    async_log_entry(hass, "F.R.I.D.A.Y.", f"Announcement sent to {names}" + (f": {detail}" if detail else ""), DOMAIN)
+    return data
+
+
 def async_register_services(hass: HomeAssistant) -> None:
     if not hass.services.has_service(DOMAIN, SERVICE_SET_WIFI):
         hass.services.async_register(DOMAIN, SERVICE_SET_WIFI, _set_wifi, schema=SCHEMA)
@@ -188,3 +261,6 @@ def async_register_services(hass: HomeAssistant) -> None:
         hass.services.async_register(DOMAIN, SERVICE_RETRY, _retry_provisioning, schema=RETRY_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_BUILD_IMAGE):
         hass.services.async_register(DOMAIN, SERVICE_BUILD_IMAGE, _build_image, schema=BUILD_IMAGE_SCHEMA)
+    if not hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
+        hass.services.async_register(
+            DOMAIN, SERVICE_ANNOUNCE, _announce, schema=ANNOUNCE_SCHEMA, supports_response=SupportsResponse.OPTIONAL)

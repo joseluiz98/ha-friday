@@ -5,9 +5,12 @@ Depends only on aiohttp. Never logs tokens or command arguments.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 from typing import Awaitable, Callable
+
+CONCURRENT_COMMANDS = frozenset({"announce"})  # only these leave the receive loop; the rest keep arrival order
 
 from aiohttp import WSMsgType, web
 
@@ -34,6 +37,8 @@ class AgentCore:
         self._state_fn = state_fn
         self._handlers = handlers
         self._clients: set[web.WebSocketResponse] = set()
+        self._send_locks: dict[web.WebSocketResponse, asyncio.Lock] = {}
+        self._tasks: set[asyncio.Task] = set()  # commands in flight (the loop keeps only weak references)
         self._last: dict = {}
 
     def app(self) -> web.Application:
@@ -67,6 +72,7 @@ class AgentCore:
                 "state": state,
             }
         )
+        lock = self._send_locks[ws] = asyncio.Lock()  # one frame at a time per client (replies and pushes)
         self._clients.add(ws)
         try:
             async for msg in ws:
@@ -77,10 +83,25 @@ class AgentCore:
                 except ValueError:
                     continue
                 if isinstance(data, dict) and data.get("type") == "command":
-                    await ws.send_json(await self._run(data))
+                    if data.get("name") in CONCURRENT_COMMANDS:
+                        # announce waits up to 25 s: off the receive loop, which also answers the websocket pings
+                        task = asyncio.create_task(self._answer(ws, lock, data))
+                        self._tasks.add(task)
+                        task.add_done_callback(self._tasks.discard)
+                    else:  # everything else in arrival order, as before (settings are read-modify-write)
+                        await self._answer(ws, lock, data)
         finally:
             self._clients.discard(ws)
+            self._send_locks.pop(ws, None)
         return ws
+
+    async def _answer(self, ws: web.WebSocketResponse, lock: asyncio.Lock, cmd: dict) -> None:
+        reply = await self._run(cmd)
+        try:
+            async with lock:
+                await ws.send_json(reply)
+        except (ConnectionError, RuntimeError):
+            pass  # the client went away while the command ran; the command itself is not cancelled
 
     async def _run(self, cmd: dict) -> dict:
         cid = cmd.get("id")
@@ -103,7 +124,11 @@ class AgentCore:
     async def _broadcast(self, payload: dict) -> None:
         for ws in list(self._clients):
             try:
-                await ws.send_json(payload)
+                lock = self._send_locks.get(ws)
+                if lock is None:
+                    continue
+                async with lock:
+                    await ws.send_json(payload)
             except (ConnectionError, RuntimeError):
                 self._clients.discard(ws)
 

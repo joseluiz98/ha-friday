@@ -57,6 +57,7 @@ import inventario_casa as ic
 import gemini_watch as gw
 import speech_cut
 import canal_casa as cc
+import anuncios as an
 from arbitration import Arbiter, load_offsets
 import whisper_mode as wm
 import memory_views as mv
@@ -123,6 +124,9 @@ AGENTE = os.environ.get("FRIDAY_OPENCLAW_AGENT", "friday")
 SATELITES_ARQ = os.environ.get("FRIDAY_SATELLITES", "/share/friday/satellites.json")
 SATELITES_CACHE = os.environ.get("FRIDAY_SATELLITES_CACHE", "/srv/friday/state/satellites.cache.json")
 TOKEN_CANAL_ARQ = os.environ.get("FRIDAY_TOKEN_CANAL", "/srv/friday/state/canal_casa.token")
+# Senha só do POST /announce (anúncios nos satélites; criada pelo agente do servidor, 600) e a pasta dos WAVs prontos.
+TOKEN_ANNOUNCE_ARQ = os.environ.get("FRIDAY_TOKEN_ANNOUNCE", "/srv/friday/state/announce.token")
+ANNOUNCE_CACHE = an.Cache(os.environ.get("FRIDAY_ANNOUNCE_CACHE", "/srv/friday/state/announce-cache"))
 # Senha só do POST /reminder: o OpenClaw a manda como `cron.webhookToken` (fica também no openclaw.json, 600).
 TOKEN_REMINDER_ARQ = os.environ.get("FRIDAY_TOKEN_REMINDER", "/srv/friday/state/reminder_webhook.token")
 # 04/11 (minor 13 de 19/10): conversas abertas e turnos do cérebro, para a porta de status e o agente do HA
@@ -485,6 +489,61 @@ class DepsCanal:
         logger.info("entrega: " + json.dumps(linha, ensure_ascii=False))
 
 
+_cliente_anuncio = None
+
+
+def _cliente_tts_anuncio():
+    global _cliente_anuncio
+    if _cliente_anuncio is None:
+        from google import genai as _genai
+        _cliente_anuncio = _genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    return _cliente_anuncio
+
+
+class DepsAnuncio:
+    """IO real de anuncios.anunciar (POST /announce)."""
+    cache = ANNOUNCE_CACHE
+    ip_wifi = DepsCanal.ip_wifi
+
+    def __init__(self, satelites: dict):
+        self.satelites = satelites
+
+    def ajustes_tts(self):
+        return vs_cfg.tts(vs_cfg.ler())  # a cada anúncio: o que o HA muda vale sem reiniciar
+
+    async def tts(self, ajustes, texto):
+        return await an.falar(_cliente_tts_anuncio(), ajustes, texto)
+
+    async def enviar(self, ip, senha, anuncio_id, wav, idade_s):
+        """Resposta da Pi; 404 (programa antigo) = sem_suporte; outro HTTP de erro = erro. Só falha de conexão/prazo levanta."""
+        conectar, total = an.prazo_envio(len(wav))
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=conectar, total=total)) as session:
+            async with session.post(f"http://{ip}:8700/announce", data=wav,
+                                    headers={"Authorization": f"Bearer {senha}", "X-Announcement-Id": anuncio_id,
+                                             "X-Announcement-Age": str(idade_s),
+                                             "Content-Type": "audio/wav"}) as resp:
+                if resp.status == 404:
+                    return "sem_suporte"
+                if resp.status != 200:
+                    return "erro"
+                try:
+                    return (await resp.json(content_type=None)).get("resposta")
+                except Exception:
+                    return "erro"
+
+    def registrar(self, linha):
+        logger.info("entrega: " + json.dumps(linha, ensure_ascii=False))
+
+    def registrar_uso(self, anuncio_id, modelo, uso):
+        ul.append_voice(datetime.now(timezone.utc), f"anuncio:{anuncio_id}", 1, None, modelo, uso)
+
+    def agora(self):
+        return time.time()
+
+    async def dormir(self, s):
+        await asyncio.sleep(s)
+
+
 async def telegram_direto(texto: str):
     """D14: ferramenta `message` do OpenClaw pelo /tools/invoke, sem turno do cérebro."""
     if not TELEGRAM_JOSE:
@@ -519,6 +578,14 @@ def _ler_token_reminder() -> str:
             return f.read().strip()
     except OSError:
         return ""  # sem o arquivo, o /reminder recusa tudo
+
+
+def _ler_token_announce() -> str:
+    try:
+        with open(TOKEN_ANNOUNCE_ARQ) as f:
+            return f.read().strip()
+    except OSError:
+        return ""  # sem o arquivo, o /announce recusa tudo
 
 
 _skills_lock = asyncio.Lock()  # gravações do registro de habilidades (rotas e contagem de uso)
@@ -568,6 +635,17 @@ def registrar_rotas(app):
         if not cc.token_confere(_ler_token_canal(), request.headers.get("authorization")):
             return JSONResponse({"erro": "não autorizado"}, status_code=401)
         return JSONResponse(await cc.entregar(await corpo_json(request), await deps_canal()))
+
+    @app.post("/announce")
+    async def rota_announce(request: Request):
+        """Anúncio de texto fixo nos satélites: TTS + cache + envio a cada satélite (anuncios.py). Responde já, com a
+        resposta de cada satélite; os que não responderam ficam `reenviando` e o bot insiste por até 5 min."""
+        if not cc.token_confere(_ler_token_announce(), request.headers.get("authorization")):
+            return JSONResponse({"erro": "não autorizado"}, status_code=401)
+        try:
+            return JSONResponse(await an.anunciar(await corpo_json(request), DepsAnuncio(REGISTRO_SATELITES.current())))
+        except ValueError as e:
+            return JSONResponse({"erro": str(e)}, status_code=400)
 
     async def _ferramentas_e_inventario():
         """Schemas das ferramentas da voz (satélite) e o inventário da casa, para validar receitas."""
@@ -1566,9 +1644,8 @@ async def bot(runner_args: RunnerArguments):
     if sussurro:
         from google import genai as _genai
         _cliente_tts = _genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-        _modelo_tts = os.environ.get("FRIDAY_WHISPER_TTS_MODEL", "models/gemini-3.8-flash-tts")
-        _voz_tts = vs_cfg.voz(cfg_voz)  # a mesma voz da sessão Live
-        voz_sussurrada = wm.WhisperVoice(lambda frase: wm.stream_whisper_tts(_cliente_tts, _modelo_tts, _voz_tts, frase))
+        _tts = vs_cfg.tts(cfg_voz)  # voz (a mesma da sessão Live), modelo e ritmo: fonte única
+        voz_sussurrada = wm.WhisperVoice(lambda frase: wm.stream_whisper_tts(_cliente_tts, _tts, frase))
 
     contador_pi = sm.ContadorFerramentas()  # dividido entre os sinais do satélite e a vigia de promessa
 

@@ -9,6 +9,7 @@ PARADA, CONECTANDO, OUVINDO, CORTADA, AGUARDANDO = "parada", "conectando", "ouvi
 ALARME = "alarme"  # spec 2026-10-12 §2: timer vencido tocando
 CADASTRO = "cadastro"  # spec 2026-10-15 D15–D20: a Pi conduz a gravação do programa de aprendizagem de voz
 TESTE_PALAVRA = "teste_palavra"  # spec 2026-11-05 §6.4: a Pi confere a palavra de ativação (duas vezes) na instalação
+ANUNCIO = "anuncio"  # spec 2026-11-20: anúncio da casa (campainha + fala) tocando; só a palavra ativa e o botão cortam
 ABERTO = (CONECTANDO, OUVINDO)
 TESTE_SEM_PALAVRA_S = 15.0  # sem nenhuma palavra por tanto tempo: "o microfone está mudo?" (uma vez)
 RECADO_PAUSA_S = 1.5  # v0.3.7: pausa dentro do recado (bot-stopped/started na mesma resposta)
@@ -31,6 +32,7 @@ class Ajustes:
     volta_alarme_s: float = 1.5
     alarme_max_s: float = 300.0
     fila_entrega_max_s: float = 90.0
+    anuncio_max_s: float = 300.0  # spec 2026-11-20: quanto um anúncio pode esperar (contado do pedido ao bot, F6)
     # Spec 2026-10-21 R13: fala contínua (sem pausa) por mais que isto deixa de contar como "alguém falando" e a
     # conversa fecha (`fala_longa`). Música cantada que o VAD confunde com voz não segura o microfone aberto.
     speech_max_s: float = 15.0  # 10/11: 0 desliga o teto (ditado longo no MK1), com ou sem música
@@ -67,6 +69,7 @@ class Maestro:
         # spec 2026-10-12: fora de _zerar, sobrevivem ao fim das conversas
         self._alarme = None  # {"timer", "inicio", "atendido"} do alarme em curso
         self._fila_alarmes, self._fila_entregas = [], []  # timers vencidos esperando; (id, instante) de entregas
+        self._fila_anuncios, self._anuncio = [], None  # (id, instante) de anúncios esperando; id do que está tocando
         self._cadastro = None  # {"nome", "id"} agendado na conversa ou em gravação; fora de _zerar
         self._teste = None  # {"inicio", "fim", "contagem", "avisou"} do teste da palavra; fora de _zerar
         # spec 2026-11-08 (rede): a cadeia de recuperação esgotou; luz de erro fixa em repouso. Fora de _zerar.
@@ -98,7 +101,8 @@ class Maestro:
                 "ultima_abertura": self.ultima_abertura,
                 "alarme": (self._alarme["timer"].get("nome") or "sem nome") if self._alarme else None,
                 "cadastro": self._cadastro["nome"] if self._cadastro else None,
-                "fila_entregas": len(self._fila_entregas), "net_exhausted": self.rede_esgotada}
+                "fila_entregas": len(self._fila_entregas), "fila_anuncios": len(self._fila_anuncios),
+                "net_exhausted": self.rede_esgotada}
 
     def evento(self, nome: str, agora: float, valor=None) -> list:
         acoes = self._trata(nome, agora, valor)
@@ -130,7 +134,7 @@ class Maestro:
         e = self.estado
         if e in (TESTE_PALAVRA, CADASTRO) or self.mudo is not False:
             return False
-        if e == ALARME:  # a palavra encerra o alarme e abre a conversa
+        if e in (ALARME, ANUNCIO):  # a palavra encerra o alarme/anúncio e abre a conversa
             return True
         if self._recado and e in ABERTO:  # v0.3.7/b287504: só a palavra ativa corta o recado
             return True
@@ -145,6 +149,62 @@ class Maestro:
             self._fila_entregas.append((entrega_id, agora))
             return "na_fila", []
         return "vou_abrir", self._filtrar(self._abrir_entrega(agora, entrega_id))
+
+    def anuncio(self, anuncio_id: str, agora: float, ocupado=False, idade_s: float = 0):
+        """POST /announce (spec 2026-11-20): ("calado" | "na_fila" | "vou_tocar" | "expirado", ações). Mesmo contrato da
+        campainha: `ocupado` = o programa espera o veredito da disputa de uma palavra. Fila ordenada: alarmes, entregas,
+        anúncios. `idade_s` = há quanto tempo o bot recebeu o pedido (reenvios incluídos): os 5 min contam de lá."""
+        if self.tem_anuncio(anuncio_id):  # reenvio do mesmo id (o POST do add-on estourou o prazo): já é nosso
+            return "na_fila", []
+        if self.nao_perturbe:
+            return "calado", []
+        idade = max(0.0, float(idade_s or 0))
+        if idade >= self.a.anuncio_max_s:  # chegou velho (reenvio tardio): não toca nem enfileira
+            return "expirado", [("anuncio_apagar", anuncio_id),
+                                ("registrar_anuncio", {"id": anuncio_id, "resultado": "expirado"})]
+        if (ocupado or self.estado != PARADA or self._alarme is not None or self.mudo is None
+                or self._fila_alarmes or self._fila_entregas or self._fila_anuncios):
+            self._fila_anuncios.append((anuncio_id, agora - idade))
+            return "na_fila", []
+        return "vou_tocar", self._filtrar(self._tocar_anuncio(anuncio_id))
+
+    def tem_anuncio(self, anuncio_id: str) -> bool:
+        """O anúncio está na fila ou tocando agora (o arquivo <id>.wav tem dono)."""
+        return anuncio_id == self._anuncio or any(aid == anuncio_id for aid, _ in self._fila_anuncios)
+
+    def _tocar_anuncio(self, anuncio_id):
+        self.estado, self._anuncio = ANUNCIO, anuncio_id
+        return [("volume_alerta", True), ("luz", "falando"), ("anuncio_tocar", anuncio_id)]
+
+    def _proximo_anuncio(self, agora):
+        """Mais antigo primeiro; vencido (anuncio_max_s) ou em não perturbe é descartado e registrado. Com o mudo ainda
+        desconhecido (partida do programa) os anúncios esperam, dentro do prazo."""
+        acoes, espera = [], []
+        for n, (aid, desde) in enumerate(self._fila_anuncios):
+            if agora - desde > self.a.anuncio_max_s:
+                resultado = "expirado"
+            elif self.nao_perturbe:
+                resultado = "calado"
+            elif self.mudo is None:
+                espera.append((aid, desde))
+                continue
+            else:
+                self._fila_anuncios = espera + self._fila_anuncios[n + 1:]
+                return acoes + self._filtrar(self._tocar_anuncio(aid))
+            acoes += [("anuncio_apagar", aid), ("registrar_anuncio", {"id": aid, "resultado": resultado})]
+        self._fila_anuncios = espera
+        return acoes
+
+    def _fim_anuncio(self, agora, anuncio_id):
+        if anuncio_id != self._anuncio:
+            return []  # resto de um anúncio já cortado (palavra/botão)
+        self._anuncio, self.estado = None, PARADA
+        return [("volume_alerta", False), ("luz", self._repouso()), ("anuncio_apagar", anuncio_id)] + \
+            self._proxima_da_fila(agora)
+
+    def _parar_anuncio(self):
+        aid, self._anuncio, self.estado = self._anuncio, None, PARADA
+        return aid
 
     # ---- transições
     def _abrir(self, agora, como, whisper=False, wake_word=None):
@@ -288,7 +348,7 @@ class Maestro:
             eid, desde = self._fila_entregas.pop(0)
             if agora - desde <= self.a.fila_entrega_max_s and not self.nao_perturbe and self.mudo is not None:
                 return self._abrir_entrega(agora, eid)
-        return []
+        return self._proximo_anuncio(agora)
 
     def _cortar(self, agora, motivo):
         self._recado, self._recado_fim = False, None
@@ -321,7 +381,7 @@ class Maestro:
             return "falando"
         if self._ela_falando and self.estado == OUVINDO:
             return "respondendo"
-        return {CONECTANDO: "ouvindo", OUVINDO: "ouvindo", AGUARDANDO: "cerebro", ALARME: "alarme",
+        return {CONECTANDO: "ouvindo", OUVINDO: "ouvindo", AGUARDANDO: "cerebro", ALARME: "alarme", ANUNCIO: "falando",
                 CADASTRO: "ouvindo", TESTE_PALAVRA: "ouvindo"}.get(
             self.estado, self._repouso())
 
@@ -367,7 +427,7 @@ class Maestro:
             som = None
             if mudou:  # spec 2026-10-20: som só quando muda de fato
                 som = "nao_perturbe_ligou" if novo else "nao_perturbe_desligou"
-                if e in (ALARME, CADASTRO, TESTE_PALAVRA):  # não toca por cima do alarme nem na gravação: fica pendente
+                if e in (ALARME, ANUNCIO, CADASTRO, TESTE_PALAVRA):  # não toca por cima do alarme nem na gravação: fica pendente
                     self._som_np, som = som, None
                 elif e != PARADA:  # conversa aberta: toca na hora e este som é o encerramento dela
                     self._sem_fim = True
@@ -408,7 +468,7 @@ class Maestro:
             self._prazo = ("alarme_fala", max(agora, self._alarme["inicio"] + self.a.volta_alarme_s))
             return []
         if nome == "timer_venceu":
-            if self._alarme is not None:
+            if self._alarme is not None or e == ANUNCIO:  # durante um anúncio o timer espera (e toca antes do próximo)
                 self._fila_alarmes.append(valor)
                 return []
             if e == TESTE_PALAVRA:  # o timer tem prioridade; o teste é cancelado
@@ -448,6 +508,18 @@ class Maestro:
         if nome == "cadastro_agendado":
             if e in (CONECTANDO, OUVINDO, CORTADA, AGUARDANDO) and self._cadastro is None:
                 self._cadastro = valor
+            return []
+        if e == ANUNCIO:  # spec 2026-11-20: só o fim, a palavra ativa e o botão mexem; fala da sala não corta
+            if nome == "anuncio_fim":
+                return self._fim_anuncio(agora, valor)
+            if nome == "botao":
+                aid = self._parar_anuncio()
+                return [("anuncio_parar", aid), ("volume_alerta", False), ("luz", self._repouso()),
+                        ("anuncio_apagar", aid)]
+            if nome == "palavra" and self.mudo is False:
+                aid = self._parar_anuncio()
+                return [("anuncio_parar", aid), ("volume_alerta", False), ("anuncio_apagar", aid)] + self._abrir(
+                    agora, "palavra", self._sussurro(valor), self._palavra(valor))
             return []
         if e == ALARME:
             if nome == "botao":

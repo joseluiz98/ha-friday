@@ -100,7 +100,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.p = mock.patch.multiple(fs, CFG=os.path.join(self.d, "config.json"), ID=os.path.join(self.d, "id"),
-                                     TIMERS=os.path.join(self.d, "estado", "timers.json"), SONS=self.d)
+                                     TIMERS=os.path.join(self.d, "estado", "timers.json"), SONS=self.d,
+                                     ANUNCIOS=os.path.join(self.d, "anuncios"))
         self.p.start()
         self.p_placa = mock.patch.object(fs.placa, "ler_placa", return_value="jabra")  # never the host's audio_board
         self.p_placa.start()
@@ -301,6 +302,204 @@ class TestCampainha(Base):
         self.s.evento("conectou")
         self.s.evento("botao")
         self.assertIn(("atendida", {}), F.mensagens)
+
+
+def _wav(caminho, segundos=0.02):
+    import wave
+    with wave.open(caminho, "wb") as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000)
+        w.writeframes(b"\x00\x00\x00\x00" * int(48000 * segundos))
+
+
+class TestAnuncio(Base):
+    """Spec 2026-11-20: o anúncio da casa (campainha do satélite + fala já gravada em ANUNCIOS/<id>.wav)."""
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.pasta = fs.ANUNCIOS
+        os.makedirs(self.pasta, exist_ok=True)
+        self.curto = mock.patch.object(fs.Satelite, "_duracao_wav", staticmethod(lambda c: 0.02))
+        self.curto.start()  # os sons sintéticos duram ~0,3 s: o teste não espera isso
+
+    async def asyncTearDown(self):
+        self.curto.stop()
+        self.s._parar_tarefa_anuncio()
+        await super().asyncTearDown()
+
+    def _fala(self, aid="abcd1234"):
+        _wav(os.path.join(self.pasta, aid + ".wav"))
+        return os.path.join(self.pasta, aid + ".wav")
+
+    async def _acabar(self):
+        t = self.s._anuncio_tarefa
+        if t:
+            await t
+
+    async def test_toca_a_campainha_sintetica_se_a_configurada_faltar_e_depois_a_fala(self):
+        self._fala()
+        self.assertFalse(os.path.exists(os.path.join(self.d, "anuncio_elevenlabs.wav")))
+        self.assertEqual(self.s.anuncio("abcd1234"), "vou_tocar")
+        self.assertEqual(self.s.maestro.estado, "anuncio")
+        self.assertTrue(self.s.volume.em_alerta)
+        await self._acabar()
+        self.assertEqual(F.sons, ["anuncio_a.wav", "abcd1234.wav"])
+
+    async def test_usa_a_campainha_configurada_quando_existe(self):
+        _wav(os.path.join(self.d, "anuncio_elevenlabs.wav"))
+        self._fala()
+        self.s.anuncio("abcd1234")
+        await self._acabar()
+        self.assertEqual(F.sons, ["anuncio_elevenlabs.wav", "abcd1234.wav"])
+
+    async def test_o_fim_devolve_o_maestro_a_parada_e_apaga_o_arquivo(self):
+        arq = self._fala()
+        self.s.anuncio("abcd1234")
+        await self._acabar()
+        self.assertEqual(self.s.maestro.estado, "parada")
+        self.assertFalse(self.s.volume.em_alerta)
+        self.assertFalse(os.path.exists(arq))
+
+    async def test_fala_ausente_nao_prende_o_maestro(self):
+        self.curto.stop()  # duração de verdade: o arquivo que falta é que quebra
+        self.assertEqual(self.s.anuncio("abcd1234"), "vou_tocar")  # nenhum arquivo foi gravado
+        await self._acabar()
+        self.curto.start()
+        self.assertEqual(self.s.maestro.estado, "parada")
+        self.assertEqual(F.sons, [])  # nem a campainha toca sozinha
+
+    async def test_wav_invalido_nao_prende_o_maestro(self):
+        self.curto.stop()
+        with open(os.path.join(self.pasta, "abcd1234.wav"), "wb") as f:
+            f.write(b"RIFF quebrado")
+        self.s.anuncio("abcd1234")
+        await self._acabar()
+        self.curto.start()
+        self.assertEqual(self.s.maestro.estado, "parada")
+        self.assertEqual(F.sons, [])
+
+    async def test_segundo_anuncio_espera_na_fila_e_toca_depois(self):
+        self._fala("abcd1234"); self._fala("efgh5678")
+        self.assertEqual(self.s.anuncio("abcd1234"), "vou_tocar")
+        self.assertEqual(self.s.anuncio("efgh5678"), "na_fila")
+        await self._acabar()
+        await self._acabar()  # o fim do primeiro já iniciou a tarefa do segundo
+        self.assertEqual([x for x in F.sons if x.endswith("5678.wav") or x.endswith("1234.wav")],
+                         ["abcd1234.wav", "efgh5678.wav"])
+        self.assertEqual(self.s.maestro.estado, "parada")
+
+    async def test_botao_corta_para_o_som_e_apaga(self):
+        self.curto.stop()  # duração real: a tarefa fica dormindo enquanto o botão corta
+        self.curto = mock.patch.object(fs.Satelite, "_duracao_wav", staticmethod(lambda c: 30.0))
+        self.curto.start()
+        arq = self._fala()
+        self.s.anuncio("abcd1234")
+        tarefa = self.s._anuncio_tarefa
+        await asyncio.sleep(0)
+        self.s.evento("botao")
+        await asyncio.sleep(0)
+        self.assertTrue(tarefa.cancelled())
+        self.assertGreaterEqual(F.parou_ja, 1)
+        self.assertFalse(os.path.exists(arq))
+        self.assertEqual(self.s.maestro.estado, "parada")
+        self.assertIsNone(self.s._anuncio_tarefa)
+
+    async def test_palavra_ativa_corta_o_anuncio_e_abre_a_conversa(self):
+        """A palavra ativa durante a fala: a tarefa cancela, o som para na hora, o arquivo some e a conversa abre."""
+        self.curto.stop()
+        self.curto = mock.patch.object(fs.Satelite, "_duracao_wav", staticmethod(lambda c: 30.0))
+        self.curto.start()
+        arq = self._fala()
+        self.s.anuncio("abcd1234")
+        tarefa = self.s._anuncio_tarefa
+        await asyncio.sleep(0)
+        parou = F.parou_ja
+        self.s.evento("palavra")
+        await asyncio.sleep(0)
+        self.assertTrue(tarefa.cancelled())
+        self.assertGreater(F.parou_ja, parou)
+        self.assertFalse(os.path.exists(arq))
+        self.assertIsNone(self.s._anuncio_tarefa)
+        self.assertNotEqual(self.s.maestro.estado, "anuncio")
+        self.assertTrue(F.conexoes)  # a conversa normal abriu
+
+    async def test_musica_abaixa_no_anuncio_e_volta_no_fim(self):
+        self._fala()
+        self.s.anuncio("abcd1234")
+        t = time.monotonic()
+        for i in range(10):
+            self.s.duck_tique(t + i * 0.05)
+        self.assertEqual(F.music[-1], 15)
+        await self._acabar()
+        self.assertEqual(self.s.maestro.estado, "parada")
+        for i in range(10, 80):
+            self.s.duck_tique(t + i * 0.05)
+        self.assertEqual(F.music[-1], 100)
+
+    async def test_musica_volta_depois_do_corte(self):
+        self.curto.stop()
+        self.curto = mock.patch.object(fs.Satelite, "_duracao_wav", staticmethod(lambda c: 30.0))
+        self.curto.start()
+        self._fala()
+        self.s.anuncio("abcd1234")
+        t = time.monotonic()
+        for i in range(10):
+            self.s.duck_tique(t + i * 0.05)
+        self.assertEqual(F.music[-1], 15)
+        self.s.evento("botao")
+        for i in range(10, 80):
+            self.s.duck_tique(t + i * 0.05)
+        self.assertEqual(F.music[-1], 100)
+
+    async def test_nao_perturbe_no_recebimento_nao_deixa_o_arquivo(self):
+        self._fala()
+        self.s.maestro.nao_perturbe = True
+        import io, contextlib
+        saida = io.StringIO()
+        with contextlib.redirect_stdout(saida):
+            self.assertEqual(self.s.anuncio("abcd1234"), "calado")
+        self.assertEqual(os.listdir(self.pasta), [])
+        self.assertEqual(F.sons, [])
+        self.assertIn({"anuncio": {"id": "abcd1234", "resultado": "calado"}},
+                      [json.loads(l) for l in saida.getvalue().splitlines()])
+        self.assertIsNone(self.s._anuncio_tarefa)
+
+    async def test_chegou_velho_e_descartado_e_o_arquivo_some(self):
+        """F6: o bot manda a idade (reenvio tardio); com 5 min ou mais não toca, não enfileira e apaga o WAV."""
+        arq = self._fala()
+        import io, contextlib
+        saida = io.StringIO()
+        with contextlib.redirect_stdout(saida):
+            self.assertEqual(self.s.anuncio("abcd1234", idade_s=300), "expirado")
+        self.assertFalse(os.path.exists(arq))
+        self.assertEqual(F.sons, [])
+        self.assertEqual(self.s.maestro.estado, "parada")
+        self.assertIn({"anuncio": {"id": "abcd1234", "resultado": "expirado"}},
+                      [json.loads(l) for l in saida.getvalue().splitlines()])
+
+    async def test_anuncio_apagar_remove_o_arquivo_e_ignora_ausente(self):
+        arq = self._fala()
+        self.s._agir("anuncio_apagar", "abcd1234")
+        self.assertFalse(os.path.exists(arq))
+        self.s._agir("anuncio_apagar", "abcd1234")  # já não existe: sem erro
+
+    async def test_registrar_anuncio_vai_ao_journal(self):
+        import io, contextlib
+        saida = io.StringIO()
+        with contextlib.redirect_stdout(saida):
+            self.s._agir("registrar_anuncio", {"id": "abcd1234", "resultado": "expirado"})
+        self.assertIn({"anuncio": {"id": "abcd1234", "resultado": "expirado"}},
+                      [json.loads(l) for l in saida.getvalue().splitlines()])
+
+    async def test_partida_apaga_wav_e_tmp_que_sobraram(self):
+        for nome in ("velho123.wav", "velho123.tmp", "fica.txt"):
+            with open(os.path.join(self.pasta, nome), "wb") as f:
+                f.write(b"x")
+        fs.Satelite(asyncio.get_running_loop())
+        self.assertEqual(os.listdir(self.pasta), ["fica.txt"])
+
+    async def test_partida_cria_a_pasta(self):
+        shutil.rmtree(self.pasta)
+        fs.Satelite(asyncio.get_running_loop())
+        self.assertTrue(os.path.isdir(self.pasta))
 
 
 class TestVolumeFisico(Base):

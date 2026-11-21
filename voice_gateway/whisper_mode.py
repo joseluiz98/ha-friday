@@ -45,21 +45,21 @@ def _rate_do_mime(mime: str, padrao: int = TTS_RATE) -> int:
 
 
 def _reamostrar(pcm: bytes, de: int, para: int = TTS_RATE) -> bytes:
-    if de == para or not pcm:
-        return pcm
-    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
-    n = max(1, int(round(len(x) * para / de)))
-    y = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
-    return np.clip(y, -32768, 32767).astype(np.int16).tobytes()
+    from anuncios import reamostrar
+    return reamostrar(pcm, de, para)
 
 
-async def stream_whisper_tts(client, model: str, voice: str, text: str):
-    """PCM 24 kHz mono S16LE da frase sussurrada, em pedaços, conforme o TTS entrega (1º áudio em ~0,8 s, P4)."""
+async def stream_whisper_tts(client, tts: dict, text: str):
+    """PCM 24 kHz mono S16LE da frase sussurrada, em pedaços, conforme o TTS entrega (1º áudio em ~0,8 s, P4).
+    `tts` = voice_settings.tts(): voz, modelo e ritmo vêm da fonte única."""
     from google.genai import types
+    import voice_settings
+    voice = tts["voice"]
     stream = await client.aio.models.generate_content_stream(
-        model=model,
+        model=tts["model"],
         contents=types.Content(role="user", parts=[types.Part(
-            text=text, speech_metadata=types.SpeechMetadata(style="whispers"))]),
+            text=voice_settings.tts_texto(text, tts.get("rate", "normal")),
+            speech_metadata=types.SpeechMetadata(style="whispers"))]),
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(voice_config=types.VoiceConfig(

@@ -55,12 +55,41 @@ class TestVoiceSettings(unittest.TestCase):
         self.assertEqual(vs.modelo({}, {"FRIDAY_GEMINI_MODEL": "models/m"}), "models/m")
         self.assertEqual(vs.modelo({}, {}), "models/gemini-3.8-live")
 
+    def test_tts_one_source_for_voice_model_rate(self):
+        self.assertEqual(vs.TTS_MODELO_PADRAO, "models/gemini-3.8-flash-tts")
+        self.assertEqual(vs.tts({}, {}), {"voice": "Charon", "model": vs.TTS_MODELO_PADRAO, "rate": "normal"})
+        self.assertEqual(vs.tts({"voice": "Kore", "speaking_rate": "slow"}, {}),
+                         {"voice": "Kore", "model": vs.TTS_MODELO_PADRAO, "rate": "slow"})
+        self.assertEqual(vs.tts({}, {"FRIDAY_VOICE": "Aoede"})["voice"], "Aoede")
+        env = {"FRIDAY_WHISPER_TTS_MODEL": "models/old", "FRIDAY_TTS_MODEL": "models/new"}
+        self.assertEqual(vs.tts({}, env)["model"], "models/new")  # FRIDAY_TTS_MODEL wins
+        self.assertEqual(vs.tts({}, {"FRIDAY_WHISPER_TTS_MODEL": "models/old"})["model"], "models/old")
+        # the Live model setting (settings file) never leaks into the TTS model
+        self.assertEqual(vs.tts({"model": "models/gemini-3.9-live"}, {})["model"], vs.TTS_MODELO_PADRAO)
+
+    def test_tts_texto_applies_the_pace_by_prefix(self):
+        # ruling 20/11: google-genai 2.34.0 has no pace field (SpeechMetadata = speaker, style), so a prefix carries it
+        self.assertEqual(vs.tts_texto("Oi", "normal"), "Oi")
+        self.assertEqual(vs.tts_texto("Oi", "slow"), "Fale devagar: Oi")
+        self.assertEqual(vs.tts_texto("Oi", "fast"), "Fale rápido: Oi")
+        self.assertEqual(vs.tts_texto("Oi", "warp"), "Oi")
+
+    def test_only_voice_settings_reads_the_tts_env(self):
+        base = os.path.dirname(os.path.abspath(__file__))
+        for nome in os.listdir(base):
+            if nome.endswith(".py") and not nome.startswith("test_") and nome != "voice_settings.py":
+                with open(os.path.join(base, nome), encoding="utf-8") as f:
+                    src = f.read()
+                self.assertNotIn("FRIDAY_WHISPER_TTS_MODEL", src, nome)
+                self.assertNotIn("FRIDAY_TTS_MODEL", src, nome)
+
     def test_bot_reads_the_file_in_the_conversation_setup(self):
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py"), encoding="utf-8") as f:
             src = f.read()
         self.assertIn("vs_cfg.ler(", src)
         self.assertIn('vs_cfg.fatos(', src)
-        self.assertIn("vs_cfg.voz(cfg_voz)", src)  # both the Live session and the whisper TTS
+        self.assertIn("vs_cfg.voz(cfg_voz)", src)  # the Live session
+        self.assertIn("vs_cfg.tts(cfg_voz)", src)  # the whisper TTS
 
 
 if __name__ == "__main__":
