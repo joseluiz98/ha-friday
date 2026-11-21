@@ -1295,6 +1295,11 @@ async def bot(runner_args: RunnerArguments):
             except Exception:
                 logger.exception("vigia do Gemini: falha ao resumir a mensagem")
         await _mensagem_original(message)
+        if speech_cut.turn_complete(message):  # 21/11: the satellite reopens its mic at her stop, not after a 1.5 s wait
+            try:
+                await avisar_pi({"evento": "resposta_completa"})
+            except Exception:
+                logger.exception("resposta_completa: falha ao avisar o satélite")
 
     llm._handle_server_message = _mensagem_vigiada
 
