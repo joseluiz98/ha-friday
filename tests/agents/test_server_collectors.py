@@ -227,3 +227,36 @@ def test_is_busy_falls_back_to_log_and_fails_closed():
     import pytest
     with pytest.raises(OSError):
         c.is_busy(None, 0, lambda: None)
+
+
+def test_alpha_promotion_descriptor():
+    caps = {d["key"]: d for d in c.capabilities(proxmox=True)}
+    d = caps["ota_alpha_promotion"]
+    assert d["platform"] == "sensor" and d["device_class"] == "timestamp" and d["icon"] == "mdi:timer-sand"
+    assert d["category"] == "diagnostic" and d["name"] == "Alpha promotion"
+    assert caps["ota_waiting_server"]["category"] == "diagnostic"  # same shape as its neighbour
+
+
+def test_ota_state_carries_the_alpha_promotion():
+    from friday_server_agent import __main__ as m
+
+    class FakeOrch:
+        def image_status(self):
+            return {"tag": "v1.0.0", "built_at": 1, "status": "ok"}
+
+        def server_entity(self):
+            return {"installed": "v1.0.0"}
+
+        def status(self):
+            return {"server": {"integration_target": "v1.0.0"}}
+
+        def waiting_server(self):
+            return {}
+
+        def alpha_promotion(self):
+            return "2026-11-23T10:00:00+00:00", {"tag": "v1.1.0", "status": "soaking", "alphas": []}
+
+    out = m.ota_entities(FakeOrch())
+    assert out["ota_alpha_promotion"] == "2026-11-23T10:00:00+00:00"
+    assert out["ota_alpha_promotion_attributes"]["tag"] == "v1.1.0"
+    assert out["ota_waiting_server"] == 0 and out["image_latest"] == "v1.0.0"
