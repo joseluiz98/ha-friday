@@ -10,6 +10,14 @@ block the push of a clean one.
 Private list: FRIDAY_SENSITIVE_LIST (default /config/.friday/sensitive.txt), used when present; without it (CI) only
 the generic patterns run. Exceptions: `.sweep-allow` at the repo root, one `<path-glob>:<regex>` per line.
 Output names file, line and category, with the value masked.
+
+Speed (same findings as before, proven by tests/tools/test_sweep_equivalence.py against a frozen copy of the old
+script): the history is read through one `git cat-file --batch`, and a value or pattern that a blob cannot contain
+is dropped before the per-line loop. `--pre-push` also keeps a cache of blobs already proven clean, in
+`<git dir>/sweep-cache/<key>` (one file per key, 0600, only blob shas and paths, never a value). The key hashes this
+script, `inventory_scan.py`, the private list, `.sweep-allow`, the repo path and the Python version, so any change to
+a rule rescans everything; a cache that cannot be read or parsed is ignored. `FRIDAY_SWEEP_NO_CACHE=1` turns it off.
+`--history` (CI) never uses it.
 """
 from __future__ import annotations
 
@@ -66,10 +74,14 @@ def _allowed(path: str, text: str, allow, private: bool = False) -> bool:
 
 
 class _Value(NamedTuple):
-    """A private-list value with its whole-word regex compiled once (`rx` is None for an empty value)."""
+    """A private-list value: `rx` is the exact whole-word test (None for an empty value); `low` is the value
+    lower-cased when it is pure ASCII (the fast whole-blob prefilter, see `_maybe_in`); `loose` is the same value
+    without the word boundaries, for the prefilter of non-ASCII values."""
     cat: str
     val: str
     rx: re.Pattern | None
+    low: str | None
+    loose: re.Pattern | None
 
 
 def _word_rx(val: str) -> re.Pattern:
@@ -77,7 +89,9 @@ def _word_rx(val: str) -> re.Pattern:
 
 
 def _private(private) -> list[_Value]:
-    return [_Value(cat, val, _word_rx(val) if val else None) for cat, val in scan._known_pairs(private)]
+    return [_Value(cat, val, _word_rx(val) if val else None, val.lower() if val and val.isascii() else None,
+                   re.compile(re.escape(val), re.I) if val and not val.isascii() else None)
+            for cat, val in scan._known_pairs(private)]
 
 
 def _as_values(private) -> list[_Value]:
@@ -87,6 +101,40 @@ def _as_values(private) -> list[_Value]:
     return _private([(v.cat, v.val) if isinstance(v, _Value) else v for v in private])
 
 
+def _fold(text: str) -> str:
+    """Lower-case `text` the way `re.I` sees ASCII letters. `re.I` also lets ASCII `s`, `k` and `i` match four other
+    characters (U+017F, U+212A, U+0130, U+0131); folding them first makes `ascii_value.lower() in _fold(text)` a
+    necessary condition of an ASCII value matching `text` under `re.I` (tests brute-force every code point)."""
+    if not text.isascii():
+        text = text.replace("\u017f", "s").replace("\u0131", "i").replace("\u0130", "i")
+    return text.lower()
+
+
+def _maybe_in(v: _Value, content: str, folded: str) -> bool:
+    """False only when `v` cannot match anywhere in `content` (a match in a line is a match in the whole text)."""
+    return v.low in folded if v.low is not None else v.loose.search(content) is not None
+
+
+# A literal that every match of the pattern (given by its source) must contain, so a blob without it cannot match.
+# A pattern that is not listed is always searched, so editing a pattern can only cost speed, never a finding.
+_REQUIRES = {
+    r"\bbot\d{6,}:[A-Za-z0-9_-]{20,}": "bot",
+    r"\bAIza[0-9A-Za-z_-]{35}\b": "AIza",
+    r"\bsk-[A-Za-z0-9_-]{32,}": "sk-",
+    r"\bghp_[A-Za-z0-9]{36}\b": "ghp_",
+    r"\bgithub_pat_[A-Za-z0-9_]{40,}": "github_pat_",
+    r"\bsk_[0-9a-f]{48}\b": "sk_",
+    r"\b192\.168\.\d{1,3}\.\d{1,3}\b": "192.168.",
+    r"\b(?:[0-9A-Fa-f]{2}\\*:){5}[0-9A-Fa-f]{2}\b": ":",
+    r"\b[\w.+-]+@[A-Za-z][\w-]*(?:\.[A-Za-z][\w-]*)*\.[A-Za-z]{2,}\b": "@",
+}
+
+
+def _may_match(pat: re.Pattern, content: str) -> bool:
+    need = _REQUIRES.get(pat.pattern)
+    return (need is None or need in content) and pat.search(content) is not None
+
+
 def _scan_text(path: str, content: str, private, allow, rel: str | None = None) -> list:
     """Private-list values are always reported (in the text and in every folder/file name of `rel`); an allow rule
     only drops the GENERIC matches of its line.
@@ -94,15 +142,16 @@ def _scan_text(path: str, content: str, private, allow, rel: str | None = None) 
     Prefilter: a match inside a line is also a match in the whole text (no pattern has an anchor, and every
     `splitlines` separator is a non-letter, non-word character, so `\\b` and the letter lookarounds see the same
     thing at a line edge). So a value or pattern with no match in the whole text has none in any line and is dropped
-    before the per-line loop; the whole-text search is only ever used to skip work, never to report."""
+    before the per-line loop; the whole-text test is only ever used to skip work, never to report."""
     out = []
     values = [v for v in _as_values(private) if v.rx is not None]
     parts = (rel or os.path.basename(path)).replace(os.sep, "/").split("/")
     for v in values:
         if any(v.rx.search(p) for p in parts):
             out.append(scan.Finding(v.cat, path, None, scan.mask(v.val)))
-    live_values = [v for v in values if v.rx.search(content)]
-    live_pats = [(cat, pat) for cat, pats in GENERIC.items() for pat in pats if pat.search(content)]
+    folded = _fold(content)
+    live_values = [v for v in values if _maybe_in(v, content, folded)]
+    live_pats = [(cat, pat) for cat, pats in GENERIC.items() for pat in pats if _may_match(pat, content)]
     if not live_values and not live_pats:
         return out
     for n, line in enumerate(content.splitlines(), 1):

@@ -204,7 +204,7 @@ def _fragments():
     bearer = "Bearer " + "example" + "q" * 20
     return [
         "Zelda", "zelda", "ZELDA", "Karlinha", "xzelda", "zeldax", "Zeldaé", "éZelda", "1Zelda2", "_Zelda_", "Zel da",
-        "K" + "arlinha", "ſ", "İ", "ß", "é", "a", "bb", "-", "_", ".", " ", "\t", "word", "def f(x):", "    return 1",
+        "K" + "arlinha", "\u212aarlinha", "\u212ai\u017f", "k\u0130S", "\u0131", "\u212a", "kis", "KIS", "ſ", "İ", "ß", "é", "a", "bb", "-", "_", ".", " ", "\t", "word", "def f(x):", "    return 1",
         ip, ip + "9", "x" + ip, mac, mac_esc, "x" + mac, email, "x" + email, phone, "+55 11", "91234-5678", "+55\n", "11 ",
         "+55\x0c11\x1c91234-5678", '"token"', ":", '"' + "t" * 20 + '"', '"token"\n:\n"' + "t" * 20 + '"', bearer,
         "Bearer short", "/home/zelda", "/home/jose", "/home/josefa", "/home/jose_x", "/home/" + "Zelda", "/api/webhook/abcdefgh12",
@@ -218,7 +218,7 @@ def test_prefilter_never_drops_a_line_hit(ref):
     rng = random.Random(20261121)
     frags = _fragments()
     private = [("person_name", "Zelda"), ("person_name", "Karlinha"), ("device_id", "Zel da"), ("person_name", ""),
-               ("person_name", "ſ"), ("person_name", "Zelda")]
+               ("person_name", "ſ"), ("person_name", "Zelda"), ("person_name", "Kis")]
     allow_lines = ["*/docs/*:Bearer example", "*/docs/*:Zelda", "private:*/LICENSE:Zelda", "*:^def", "*/x/*:."]
     a_new, a_ref = sweep.parse_allow(allow_lines), ref.parse_allow(allow_lines)
     pv_new, pv_ref = sweep._private(private), ref._private(private)
@@ -477,3 +477,51 @@ def test_unwritable_cache_never_fails_the_sweep(make_repo, tmp_path):
     blocker = tmp_path / "blocker"
     blocker.write_text("a file where the cache directory should be\n")
     assert sweep.sweep_history(repo, ["Zelda"], [], cache=str(blocker / "k")) == []
+
+
+def test_fold_is_a_necessary_condition_for_every_code_point():
+    """An ASCII value that matches under re.I must be found by `value.lower() in _fold(text)`: brute force over every
+    non-ASCII code point and every ASCII character (the only extra matches today: U+017F, U+212A, U+0130, U+0131)."""
+    big = "".join(map(chr, range(0x80, 0x110000)))
+    extra = {}
+    for i in range(128):
+        a = chr(i)
+        for c in set(re.findall(re.escape(a), big, re.I)):
+            extra.setdefault(a, []).append(c)
+            assert sweep._fold(c) == a.lower(), f"U+{ord(c):04X} matches {a!r} under re.I but folds to {sweep._fold(c)!r}"
+    assert {c for cs in extra.values() for c in cs} == {"ſ", "K", "İ", "ı"}
+    # and the value test itself, on a value that only matches through one of those characters
+    v = sweep._private(["Kasa"])[0]
+    assert v.rx.search("a Kasa") and sweep._maybe_in(v, "a Kasa", sweep._fold("a Kasa"))
+    v = sweep._private(["xis"])[0]
+    assert v.rx.search("XIſ") and sweep._maybe_in(v, "XIſ", sweep._fold("XIſ"))
+
+
+def test_maybe_in_has_no_false_negative_on_random_values_and_texts():
+    import random
+    rng = random.Random(7)
+    alphabet = list("abcxyzKkSsIiéßZ ._-1") + ["ſ", "K", "İ", "ı", "Σ", "ς", "ǅ"]
+    for _ in range(4000):
+        val = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 4)))
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 12)))
+        v = sweep._private([val])[0]
+        if re.search(re.escape(val), text, re.I):
+            assert sweep._maybe_in(v, text, sweep._fold(text)), (val, text)
+
+
+def test_required_literals_hold_for_every_listed_pattern():
+    ip, mac = "192" + ".168.0.1", "02:00:5E:11:22:33"
+    samples = {
+        "bot": "x bot" + "1" * 8 + ":" + "a" * 25, "AIza": "AIza" + "B" * 35, "sk-": "sk-" + "a" * 40,
+        "ghp_": "ghp_" + "c" * 36, "github_pat_": "github_pat_" + "d" * 50, "sk_": "sk_" + "e" * 48, "192.168.": ip,
+        ":": mac, "@": "a.b+c" + "@" + "mail.example.org",
+    }
+    pats = {p.pattern: p for ps in sweep.GENERIC.values() for p in ps}
+    assert set(sweep._REQUIRES) <= set(pats), "a listed source that no pattern has any more is dead weight"
+    assert set(sweep._REQUIRES.values()) == set(samples)
+    for src, lit in sweep._REQUIRES.items():
+        m = pats[src].search(samples[lit])
+        assert m and lit in m.group(0), f"{src}: its match {m and m.group(0)!r} lacks the literal {lit!r}"
+    # an unlisted pattern is always searched
+    other = re.compile(r"Bearer [A-Za-z0-9._-]{20,}")
+    assert sweep._may_match(other, "Bearer " + "z" * 25) and not sweep._may_match(other, "plain text")
