@@ -162,3 +162,30 @@ async def test_concurrent_replies_are_not_interleaved(aiohttp_client):
     got = [await ws.receive_json(timeout=2) for _ in range(20)]
     assert sorted(m["id"] for m in got) == list(range(20))
     assert all(m == {"type": "result", "id": m["id"], "ok": True, "data": {"n": m["id"]}} for m in got)
+
+
+async def test_other_commands_stay_in_arrival_order(aiohttp_client):
+    """Only `announce` runs off the receive loop: two `set` in a row are applied and answered in order, so a slow first
+    one can never be overtaken (settings are read-modify-write)."""
+    order = []
+    release = asyncio.Event()
+
+    async def first(cmd):
+        await release.wait()
+        order.append(cmd["id"])
+        return {"data": {"n": cmd["id"]}}
+
+    async def set_(cmd):
+        if cmd["id"] == 1:
+            return await first(cmd)
+        order.append(cmd["id"])
+        return {"data": {"n": cmd["id"]}}
+
+    _, ws, _ = await _connect(aiohttp_client, _make({"set": set_}))
+    await ws.send_json({"type": "command", "id": 1, "name": "set"})
+    await ws.send_json({"type": "command", "id": 2, "name": "set"})
+    await asyncio.sleep(0.2)
+    assert order == []
+    release.set()
+    got = [await ws.receive_json(timeout=2) for _ in range(2)]
+    assert [m["id"] for m in got] == [1, 2] and order == [1, 2]

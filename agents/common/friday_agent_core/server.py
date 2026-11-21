@@ -10,6 +10,8 @@ import hmac
 import logging
 from typing import Awaitable, Callable
 
+CONCURRENT_COMMANDS = frozenset({"announce"})  # only these leave the receive loop; the rest keep arrival order
+
 from aiohttp import WSMsgType, web
 
 PROTOCOL_VERSION = 1  # keep in sync with custom_components/friday/protocol.py
@@ -81,11 +83,13 @@ class AgentCore:
                 except ValueError:
                     continue
                 if isinstance(data, dict) and data.get("type") == "command":
-                    # each command in its own task: a slow one (announce, up to 25 s) must not hold the receive loop,
-                    # which also answers the websocket pings
-                    task = asyncio.create_task(self._answer(ws, lock, data))
-                    self._tasks.add(task)
-                    task.add_done_callback(self._tasks.discard)
+                    if data.get("name") in CONCURRENT_COMMANDS:
+                        # announce waits up to 25 s: off the receive loop, which also answers the websocket pings
+                        task = asyncio.create_task(self._answer(ws, lock, data))
+                        self._tasks.add(task)
+                        task.add_done_callback(self._tasks.discard)
+                    else:  # everything else in arrival order, as before (settings are read-modify-write)
+                        await self._answer(ws, lock, data)
         finally:
             self._clients.discard(ws)
             self._send_locks.pop(ws, None)
