@@ -84,6 +84,7 @@ def _proxmox_data(user_input: dict[str, Any], old: dict[str, Any]) -> dict[str, 
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
     """The single F.R.I.D.A.Y. entry (no fields)."""
 
