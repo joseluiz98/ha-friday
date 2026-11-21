@@ -131,3 +131,60 @@ def test_pre_push_scans_only_the_pushed_refs(tmp_path):
     # a deletion pushes nothing; the full history of a pushed ref is still scanned, not only the new commits
     assert sweep.pushed_revs(f"(delete) {zero} refs/heads/other {rev('other')}\n") == []
     assert sweep.sweep_history(str(tmp_path), ["Zelda"], []), "--history with no revs keeps scanning every ref"
+
+
+class _CountingGit:
+    """Records every process started through subprocess (run() goes through Popen too) and runs it for real."""
+
+    def __init__(self, monkeypatch):
+        self.calls = []
+        real_popen = subprocess.Popen
+
+        def popen(cmd, *a, **kw):
+            self.calls.append(list(cmd))
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(subprocess, "Popen", popen)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git missing in the python:slim test image; runs in GitHub CI and on HAOS")
+def test_history_spawns_three_git_processes(make_repo, monkeypatch):
+    commits = [{f"f{i}.txt": f"Zelda {i}\n" for i in range(25)}, {f"g{i}.txt": f"line {i}\n" for i in range(25)}]
+    repo = make_repo(commits)
+    git = _CountingGit(monkeypatch)
+    found = sweep.sweep_history(repo, ["Zelda"], [])
+    assert len(found) == 25
+    assert [cmd[3] for cmd in git.calls] == ["rev-list", "cat-file", "cat-file"]
+    assert git.calls[1][4].startswith("--batch-check") and git.calls[2][4] == "--batch"
+
+
+def test_batch_reader_handles_trailing_newline_empty_and_missing():
+    import io
+    a, b, c, d = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
+    stream = io.BytesIO(
+        f"{a} blob 4\n".encode() + b"x\n\n\n" + b"\n"          # content "x\n\n\n", then the framing newline
+        + f"{b} blob 0\n".encode() + b"\n"                      # empty blob
+        + f"{c} missing\n".encode()                             # no body, no trailing newline
+        + f"{d} blob 3\n".encode() + b"\nab" + b"\n")           # content starts with a newline
+    assert list(sweep._parse_batch(stream, [a, b, c, d])) == [(a, b"x\n\n\n"), (b, b""), (c, None), (d, b"\nab")]
+    assert stream.read() == b""
+    with pytest.raises(RuntimeError):
+        list(sweep._parse_batch(io.BytesIO(f"{b} blob 1\nz\n".encode()), [a]))            # header for another sha
+    with pytest.raises(RuntimeError):
+        list(sweep._parse_batch(io.BytesIO(f"{a} blob 9\nshort\n".encode()), [a]))        # truncated body
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git missing in the python:slim test image; runs in GitHub CI and on HAOS")
+def test_batch_history_matches_per_object_reading_on_awkward_blobs(make_repo):
+    repo = make_repo([{"a.txt": "Zelda\n\n\n", "empty.txt": b"", "nl.txt": "\nZelda", "bin.dat": b"\x00Zelda"}])
+    found = sweep.sweep_history(repo, ["Zelda"], [])
+    assert sorted((f.path.split("@")[0], f.line) for f in found) == [("a.txt", 1), ("nl.txt", 2)]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git missing in the python:slim test image; runs in GitHub CI and on HAOS")
+def test_batch_history_does_not_deadlock_on_many_and_large_blobs(make_repo):
+    files = {f"d{i % 7}/f{i}.txt": f"row {i}\n" * 3 for i in range(1500)}
+    files["big.txt"] = "filler line\n" * 40000 + "Zelda\n"
+    repo = make_repo([files])
+    found = sweep.sweep_history(repo, ["Zelda"], [])
+    assert [(f.path.split("@")[0], f.line) for f in found] == [("big.txt", 40001)]

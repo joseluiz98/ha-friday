@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from typing import NamedTuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -128,23 +129,88 @@ def pushed_revs(stdin_text: str) -> list[str]:
     return revs
 
 
-def sweep_history(repo: str, private: list, allow: list[AllowRule], revs: list[str] | None = None) -> list:
-    """Every blob reachable from `revs` (full history, not only new commits); None = every ref (--all)."""
-    if revs == []:
-        return []
-    pv = _private(private)
+def _list_blobs(repo: str, revs: list[str] | None) -> list[tuple[str, str]]:
+    """`(sha, path)` of every unique blob with a path reachable from `revs` (None = --all), in `rev-list` order; an
+    object is seen once, under the first path `rev-list` gives it. Two git processes, whatever the object count."""
     objs = subprocess.run(["git", "-C", repo, "rev-list", "--objects", *(revs or ["--all"])], check=True,
                           capture_output=True, text=True).stdout.splitlines()
-    seen, found = set(), []
+    seen, named = set(), []
     for line in objs:
         sha, _, path = line.partition(" ")
         if not path or sha in seen:
             continue
         seen.add(sha)
-        kind = subprocess.run(["git", "-C", repo, "cat-file", "-t", sha], capture_output=True, text=True).stdout.strip()
-        if kind != "blob":
+        named.append((sha, path))
+    if not named:
+        return []
+    kinds = subprocess.run(["git", "-C", repo, "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+                           input="".join(f"{sha}\n" for sha, _ in named), capture_output=True, text=True).stdout.splitlines()
+    if len(kinds) != len(named):
+        raise RuntimeError("git cat-file --batch-check answered a different number of lines than asked")
+    return [(sha, path) for (sha, path), kind in zip(named, kinds) if kind == f"{sha} blob"]
+
+
+def _parse_batch(fp, shas: list[str]):
+    """Frames of `git cat-file --batch` for `shas` (in order): yields `(sha, data)`, `data` None for `<sha> missing`.
+    A frame is the header `<sha> blob <size>`, exactly `size` bytes, then one newline that is not part of the content."""
+    for sha in shas:
+        header = fp.readline().rstrip(b"\n").decode("ascii", "replace").split(" ")
+        if len(header) == 2 and header[0] == sha and header[1] == "missing":
+            yield sha, None
             continue
-        data = subprocess.run(["git", "-C", repo, "cat-file", "-p", sha], capture_output=True).stdout
+        if len(header) != 3 or header[0] != sha or header[1] != "blob" or not header[2].isdigit():
+            raise RuntimeError("git cat-file --batch framing out of sync")
+        size = int(header[2])
+        data = fp.read(size)
+        if len(data) != size or fp.read(1) != b"\n":
+            raise RuntimeError("git cat-file --batch ended early")
+        yield sha, data
+
+
+def _read_blobs(repo: str, shas: list[str]):
+    """`(sha, data)` for each sha, through one `git cat-file --batch` (a feeder thread keeps both pipes moving)."""
+    if not shas:
+        return
+    proc = subprocess.Popen(["git", "-C", repo, "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL)
+
+    def feed():
+        try:
+            proc.stdin.write("".join(f"{sha}\n" for sha in shas).encode("ascii"))
+        except BrokenPipeError:
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass
+
+    feeder = threading.Thread(target=feed, daemon=True)
+    feeder.start()
+    try:
+        yield from _parse_batch(proc.stdout, shas)
+    finally:
+        proc.stdout.close()
+        feeder.join()
+        proc.wait()
+
+
+def _iter_blobs(repo: str, revs: list[str] | None):
+    """`(sha, path, data)` for each unique blob with a path, in `rev-list` order (a blob git cannot read is skipped)."""
+    named = _list_blobs(repo, revs)
+    paths = dict(named)
+    for sha, data in _read_blobs(repo, [sha for sha, _ in named]):
+        if data is not None:
+            yield sha, paths[sha], data
+
+
+def sweep_history(repo: str, private: list, allow: list[AllowRule], revs: list[str] | None = None) -> list:
+    """Every blob reachable from `revs` (full history, not only new commits); None = every ref (--all)."""
+    if revs == []:
+        return []
+    pv = _private(private)
+    found = []
+    for sha, path, data in _iter_blobs(repo, revs):
         if b"\x00" in data[:8192]:
             continue
         found += [f._replace(path=f"{path}@{sha[:8]}") for f in
