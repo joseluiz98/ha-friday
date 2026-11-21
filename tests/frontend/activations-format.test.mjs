@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { causeText, rowsFromHistory, fmt, activationEntities, satelliteLabel } from "../../custom_components/friday/frontend/activations-format.js";
+import { causeText, rowsFromHistory, fmt, activationEntities, satelliteLabel, playNote } from "../../custom_components/friday/frontend/activations-format.js";
 
 test("rows from history, newest first, old events keep only word/score", () => {
   const resp = { "event.friday_sat_8295e1_activation": [
@@ -34,4 +34,12 @@ test("satelliteLabel prefers name_by_user, then name, then the entity id", () =>
   assert.equal(satelliteLabel(mk({}), id), id);
   assert.equal(satelliteLabel({ entities: {}, devices: {} }, id), id);
   assert.equal(satelliteLabel({}, id), id);
+});
+
+test("playNote names what the proxy answered", () => {
+  assert.equal(playNote(404), "recording not ready");
+  assert.equal(playNote(403), "satellite refused");
+  assert.equal(playNote(502), "satellite offline");
+  assert.equal(playNote(500), "error 500");
+  assert.equal(playNote(200), "");
 });

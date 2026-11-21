@@ -6,6 +6,15 @@ export function causeText(cause) {
   return CAUSES[cause] ?? (cause ? String(cause) : "");
 }
 
+// Note shown on the card for a non-OK answer of the recording proxy ("" when OK).
+export function playNote(status) {
+  if (status >= 200 && status < 300) return "";
+  if (status === 404) return "recording not ready";
+  if (status === 403) return "satellite refused";
+  if (status === 502) return "satellite offline";
+  return `error ${status}`;
+}
+
 export function fmt(x) {
   return x === null || x === undefined || Number.isNaN(Number(x)) ? "—" : Number(x).toFixed(2);
 }

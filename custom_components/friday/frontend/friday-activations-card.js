@@ -1,4 +1,4 @@
-import { causeText, rowsFromHistory, fmt, activationEntities, satelliteLabel } from "./activations-format.js";
+import { causeText, rowsFromHistory, fmt, activationEntities, satelliteLabel, playNote } from "./activations-format.js";
 
 const PERIODS = [[24, "24 h"], [72, "3 d"], [168, "7 d"]];
 const ALL_TYPES = ["conversation", "rejected", "shadow"];
@@ -72,9 +72,7 @@ class FridayActivationsCard extends HTMLElement {
         type: "auth/sign_path", path: `/api/friday/recording/${dev}/${encodeURIComponent(name)}`,
       });
       const res = await fetch(path);
-      if (res.status === 404) this._notes[key] = "recording not ready";
-      else if (res.status === 502) this._notes[key] = "satellite offline";
-      else if (!res.ok) this._notes[key] = `error ${res.status}`;
+      if (!res.ok) this._notes[key] = playNote(res.status);
       else {
         this._src = this._src ?? new Audio();
         this._src.src = URL.createObjectURL(await res.blob());

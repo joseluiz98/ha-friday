@@ -13,9 +13,15 @@ NAME = re.compile(r"^[A-Za-z0-9_-]+\.wav$")
 STAMP = re.compile(r"(\d{8})_(\d{6})\.wav$")
 
 
-def _authorized(request: web.Request, token: str) -> bool:
+def _authorized(request: web.Request, tokens: tuple[str, ...]) -> bool:
     header = request.headers.get("Authorization", "")
-    return header.startswith("Bearer ") and hmac.compare_digest(header[7:].encode(), token.encode())
+    if not header.startswith("Bearer "):
+        return False
+    given = header[7:].encode()
+    ok = False
+    for t in tokens:  # no early exit: compare against every token
+        ok = hmac.compare_digest(given, t.encode()) or ok
+    return ok
 
 
 def _scan(folder: str) -> list[tuple[str, str, int]]:
@@ -36,10 +42,14 @@ def _scan(folder: str) -> list[tuple[str, str, int]]:
     return out
 
 
-def add_routes(app: web.Application, token: str, folder: str) -> None:
+def add_routes(app: web.Application, tokens: tuple[str, ...] | list[str] | str, folder: str) -> None:
+    if isinstance(tokens, str):
+        tokens = (tokens,)
+    tokens = tuple(t for t in tokens if t)  # an empty token never authorizes anyone
+
     def guard(handler):
         async def wrapped(request: web.Request) -> web.StreamResponse:
-            if not _authorized(request, token):
+            if not _authorized(request, tokens):
                 return web.Response(status=401)
             return await handler(request)
         return wrapped

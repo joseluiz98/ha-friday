@@ -16,6 +16,7 @@ class RecAgent(FakeAgent):
         h["device"] = {"id": "sat1", "kind": "satellite", "name": "Sat"}
         super().__init__(h)
         self.seen = []
+        self.rec_status = None  # force the recordings route to answer this status
 
     async def start(self):
         app = web.Application()
@@ -31,6 +32,8 @@ class RecAgent(FakeAgent):
 
     async def rec(self, request):
         self.seen.append(request.headers.get("Authorization"))
+        if self.rec_status is not None:
+            return web.Response(status=self.rec_status)
         if request.match_info["name"] == "missing.wav":
             return web.Response(status=404)
         return web.Response(body=WAV, content_type="audio/wav")
@@ -88,6 +91,40 @@ async def test_view_502_when_agent_down(hass, hass_client):
     await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_view_403_when_agent_refuses(hass, hass_client):
+    agent = RecAgent()
+    entry, dev = await device_id(hass, agent)
+    client = await hass_client()
+    for status in (401, 403):
+        agent.rec_status = status
+        r = await client.get(f"/api/friday/recording/{dev}/20261103_100215.wav")
+        assert r.status == 403, status
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_view_502_on_agent_5xx(hass, hass_client):
+    agent = RecAgent()
+    entry, dev = await device_id(hass, agent)
+    client = await hass_client()
+    agent.rec_status = 500
+    r = await client.get(f"/api/friday/recording/{dev}/20261103_100215.wav")
+    assert r.status == 502
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()
+
+
+async def test_view_502_when_known_but_not_connected(hass, hass_client):
+    agent = RecAgent()
+    entry, dev = await device_id(hass, agent)
+    client = await hass_client()
+    # The device stays in the registry, but no loaded connection has its hello (satellite offline at HA start).
+    await hass.config_entries.async_unload(entry.entry_id)
+    r = await client.get(f"/api/friday/recording/{dev}/20261103_100215.wav")
+    assert r.status == 502
+    await agent.stop()
+
+
 async def test_view_requires_auth(hass, hass_client_no_auth):
     agent = RecAgent()
     entry, dev = await device_id(hass, agent)
@@ -114,3 +151,5 @@ def test_title_from_prefix():
     assert title_for("sombra_sexta_feira_20261102_221000.wav", None) == "22:10:00 · shadow · sexta_feira"
     assert title_for("20261103_100215.wav", None) == "10:02:15 · conversation · friday"
     assert title_for("sexta_feira_quase_20261103_100215.wav", None) == "10:02:15 · near miss"
+    assert title_for("sexta_feira_sem_voz_20261121_185817.wav", None).endswith("rejected (no voice)")
+    assert title_for("sexta_feira_paciencia_20261121_185336.wav", None).endswith("rejected (patience)")

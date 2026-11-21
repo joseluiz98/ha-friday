@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import MappingProxyType
 from typing import Any
 
@@ -81,6 +82,9 @@ def _proxmox_data(user_input: dict[str, Any], old: dict[str, Any]) -> dict[str, 
     return out
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
     """The single F.R.I.D.A.Y. entry (no fields)."""
 
@@ -136,6 +140,12 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
             self.context["title_placeholders"] = {"name": props.get("id", host)}
             return await self.async_step_pair()
         if existing is not None:
+            if (existing.data.get(CONF_HOST), existing.data.get(CONF_PORT)) != (host, port):
+                # 21/11: the satellites have no DHCP reservation; a known one that announces a new address moved
+                _LOGGER.info("Satellite %s moved to %s:%s", sat_id, host, port)
+                self.hass.config_entries.async_update_subentry(
+                    entries[0], existing, data={**existing.data, CONF_HOST: host, CONF_PORT: port})
+                self.hass.config_entries.async_schedule_reload(entries[0].entry_id)
             return self.async_abort(reason="already_configured")
         self._discovered = {CONF_HOST: host, CONF_PORT: port, "id": sat_id}
         self.context["title_placeholders"] = {"name": props.get("id", host)}

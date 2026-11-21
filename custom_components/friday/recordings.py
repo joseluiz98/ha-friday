@@ -24,12 +24,21 @@ def valid_name(name: str) -> bool:
     return bool(NAME_RE.fullmatch(name))
 
 
-def find_connection(hass: HomeAssistant, device_id: str):
-    """HA device-registry id -> the connection of that satellite, if loaded."""
+def device_known(hass: HomeAssistant, device_id: str) -> bool:
+    """True when the registry id is a device of this integration (loaded or not)."""
+    return _sat_id(hass, device_id) is not None
+
+
+def _sat_id(hass: HomeAssistant, device_id: str) -> str | None:
     device = dr.async_get(hass).async_get(device_id)
     if device is None:
         return None
-    sat_id = next((i[1] for i in device.identifiers if i[0] == DOMAIN), None)
+    return next((i[1] for i in device.identifiers if i[0] == DOMAIN), None)
+
+
+def find_connection(hass: HomeAssistant, device_id: str):
+    """HA device-registry id -> the connection of that satellite, if loaded."""
+    sat_id = _sat_id(hass, device_id)
     if sat_id is None:
         return None
     for entry in hass.config_entries.async_loaded_entries(DOMAIN):
@@ -50,17 +59,24 @@ class RecordingView(HomeAssistantView):
         hass = request.app["hass"]
         if not valid_name(name):
             return web.Response(status=404)
+        if not device_known(hass, device_id):
+            return web.Response(status=404)
         conn = find_connection(hass, device_id)
         if conn is None:
-            return web.Response(status=404)
+            return web.Response(status=502)  # known satellite, not connected right now
         try:
             status, body, _ = await conn.agent_get(f"/v1/recordings/{name}")
         except (aiohttp.ClientError, TimeoutError) as err:
             _LOGGER.warning("Satellite recording %s unavailable: %s", name, type(err).__name__)
             return web.Response(status=502)
-        if status != 200:
+        if status == 200:
+            return web.Response(body=body, content_type="audio/wav")
+        if status in (401, 403):
+            _LOGGER.warning("Satellite refused recording %s (%s)", name, status)
+            return web.Response(status=403)
+        if status == 404:
             return web.Response(status=404)
-        return web.Response(body=body, content_type="audio/wav")
+        return web.Response(status=502)
 
 
 _STAMP_RE = re.compile(r"^(?P<prefix>.*?)_?(?P<day>\d{8})_(?P<time>\d{6})\.wav$")
@@ -104,8 +120,10 @@ def title_for(name: str, attrs: dict | None) -> str:
         return " · ".join(parts)
     if prefix == "barrada":
         parts.append("rejected (verifier)")
-    elif prefix == "sem_voz":
+    elif prefix == "sem_voz" or prefix.endswith("_sem_voz"):
         parts.append("rejected (no voice)")
+    elif prefix.endswith("_paciencia"):
+        parts.append("rejected (patience)")
     elif prefix.startswith("sombra_"):
         parts += ["shadow", prefix[len("sombra_"):]]
     elif prefix == "quase" or prefix.endswith("_quase"):

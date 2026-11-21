@@ -761,6 +761,28 @@ class TestRedeEsgotadaLigacao(unittest.TestCase):
         self.assertIn('"net_down"', corpo)
         self.assertIn("self.maestro.rede_esgotada", corpo)
 
+    def _bloco_rejeicao_extra(self):
+        corpo = self.src.split("    def captura(self):", 1)[1]
+        ini = corpo.index('r_ = rej_e.alimentar(')
+        return corpo[ini:].split('if r_ and e["modo"] == "ativa":', 1)[0]
+
+    def test_sem_voz_da_extra_grava_como_a_paciencia(self):
+        # 21/11: a TV no MK2 rejeitava "sexta_feira" sem voz e nada era gravado
+        b = self._bloco_rejeicao_extra()
+        self.assertIn('r_["causa"] in ("paciencia", "sem_voz")', b)
+        self.assertIn("registro_palavra.prefixo_sem_voz_extra(nome_e)", b)
+        self.assertIn("registro_palavra.prefixo_paciencia_extra(nome_e)", b)
+        self.assertIn('registro_palavra.linha(r_["causa"]', b)
+        self.assertIn("palavra=nome_e", b)
+        self.assertIn("trecho_do_episodio(self.contexto, r_[\"quadros\"])", b)
+
+    def test_sem_voz_da_extra_respeita_gravando(self):
+        b = self._bloco_rejeicao_extra()
+        self.assertIn("gravando is None", b)
+        self.assertIn('self.cfg.get("gravar_ativacoes")', b)
+        self.assertIn('r_["gravacao"] is None', b)
+        self.assertIn('e["modo"] == "ativa"', b)
+
     def test_agir_handles_desfazer_mudo(self):
         corpo = self.src.split("    def _agir(self, tipo, arg):", 1)[1].split("\n    def ", 1)[0]
         self.assertIn('tipo == "desfazer_mudo"', corpo)
