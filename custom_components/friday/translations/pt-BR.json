@@ -325,7 +325,8 @@
           "reply_wait": "Close if no reply starts within",
           "follow_up_window": "Follow-up window",
           "no_follow_up_while_music": "No follow-up while music plays",
-          "no_follow_up_after_home_commands": "No follow-up after home commands"
+          "no_follow_up_after_home_commands": "No follow-up after home commands",
+          "only_wake_word_interrupts": "Only the wake word interrupts"
         }
       }
     },
