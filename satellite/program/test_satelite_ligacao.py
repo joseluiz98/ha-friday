@@ -1197,6 +1197,21 @@ class TestPararFala(Base):
         self.s.evento("fala_comecou", None)
         self.assertEqual(F.falas_pessoa, 0)
 
+    async def test_word_in_one_breath_lets_her_next_answer_play(self):  # 21/11, final review I1
+        # "Friday, <request>" said in one breath during a recado: the speech started inside the recado (not
+        # counted), the word cut it, and no new fala_comecou comes before her answer; the end of that speech counts
+        self.s.maestro.mudo = False
+        _, acoes = self.s.maestro.campainha("e1abcdef", 0.0)
+        for tipo, arg in acoes:
+            if tipo in ("conectar", "microfone"):
+                self.s._agir(tipo, arg)
+        self.s.evento("fala_comecou", None)
+        self.assertEqual(F.falas_pessoa, 0)
+        self.s.evento("palavra", None)
+        self.assertFalse(self.s.maestro._recado)
+        self.s.evento("fala_parou", None)
+        self.assertEqual(F.falas_pessoa, 1)
+
     async def test_person_speaking_is_told_to_the_connection(self):
         self.s.maestro.evento("palavra", 0.0)
         self.s._agir("conectar", None)

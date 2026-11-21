@@ -371,7 +371,9 @@ class Satelite:
             resumo = self.medidor_eco.resumo()
             if resumo:
                 print(json.dumps({"eco_rms_db": resumo}), flush=True)
-        if nome == "fala_comecou" and self.conexao and not self.maestro._recado:
+        if nome in ("fala_comecou", "fala_parou") and self.conexao and not self.maestro._recado:
+            # 21/11 (final review I1): "Friday, <request>" in one breath starts inside the recado, so only its end
+            # (after the word cut it) can tell the connection that the person spoke
             # v0.3.7: depois de um corte, a fala nova dela volta a tocar; 19/11 (revisão M2): fala da sala com o
             # microfone fechado (recado) não chegou a ela e não conta
             self.conexao.pessoa_falou()

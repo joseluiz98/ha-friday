@@ -553,7 +553,7 @@ class Maestro:
             if e not in ABERTO:
                 return []
             self._completa = True
-            if self._recado_fim is not None:  # the pause after her stop is already running: no need to wait it out
+            if self._recado_fim is not None and self.a.only_wake_word_interrupts:  # pause running: no need to wait
                 return self._reabrir(self._recado_fim - RECADO_PAUSA_S)
             return []
         if nome == "ferramenta":  # D2
@@ -662,6 +662,9 @@ class Maestro:
         if nome == "ela_parou":
             self._ela_falando = False
             if self._recado and e in ABERTO:  # pausa ou fim do recado: o mic abre se ela não voltar logo (_tique)
+                if not self.a.only_wake_word_interrupts:  # switch off: the recado as before 21/11
+                    self._recado_fim = agora + RECADO_PAUSA_S
+                    return []
                 if self._completa:  # 21/11: Gemini already completed the turn: this is the end, not a pause
                     return self._reabrir(agora)
                 self._recado_fim = agora + RECADO_PAUSA_S

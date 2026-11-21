@@ -1148,6 +1148,18 @@ class TestLuzRespondendo(Base):
 FIM = ("fim_da_resposta", None)
 
 
+class TestDesligadoRecadoComoHoje(TestCerebro):  # 21/11, final review: switch off = today's recado exactly
+    def test_recado_sem_guardar_pausa_nem_atalho(self):
+        self.aguardando()
+        self.m.evento("cerebro_entregando", 40.0)
+        self.m.evento("ela_comecou", 40.5)
+        self.m.evento("resposta_completa", 44.0)
+        acoes = self.m.evento("ela_parou", 45.0)
+        self.assertEqual(acoes, [])
+        self.assertNotIn(("microfone", True), self.m.evento("tique", 46.0))
+        self.assertIn(("microfone", True), self.m.evento("tique", 46.6))
+
+
 class TestSoAPalavraInterrompe(unittest.TestCase):
     """21/11: while she answers no audio goes to Gemini (the answer is a recado); only the wake word cuts her. The mic
     reopens at her stop when Gemini marked the turn complete, else after the 1.5 s pause; `fim_da_resposta` tells the
