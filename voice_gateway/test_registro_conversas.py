@@ -18,7 +18,7 @@ class TestTurnos(unittest.TestCase):
         tr.ferramenta("HassTurnOff", "light.sala")
         tr.ela("Pronto, "); tr.ela("apaguei.")
         r = tr.ela_parou(t(5))
-        self.assertEqual(set(r), CAMPOS)
+        self.assertEqual(set(r), CAMPOS | {"userSpeech"})
         self.assertEqual(r["prompt"], "apaga a luz da sala")
         self.assertEqual(r["response"], "Pronto, apaguei.")
         self.assertEqual(r["tools"], [{"name": "HassTurnOff", "summary": "light.sala"}])
@@ -26,6 +26,28 @@ class TestTurnos(unittest.TestCase):
         self.assertEqual((r["mode"], r["turnNumber"], r["ok"], r["warmState"], r["resumed"]),
                          ("friday", 1, True, None, False))
         self.assertEqual(r["ts"], "2026-10-06T13:00:05.000Z")
+
+    def test_tempo_da_fala_do_usuario(self):
+        # 21/11: a fala da TV colada no fim do pedido chega como trechos de transcrição depois de uma pausa;
+        # quantos trechos, do primeiro ao último, e a maior pausa entre eles ficam no registro
+        tr = rc.Turnos("k", "voz-x", "sat")
+        tr.usuario("Friday muda a TV para Prime Video.", 100.0)
+        tr.usuario(" para", 100.4)
+        tr.usuario("continuar com esse", 102.9)
+        tr.ela("Pronto.")
+        r = tr.ela_parou(104.0)
+        self.assertEqual(r["userSpeech"], {"pieces": 3, "spanMs": 2900, "maxGapMs": 2500})
+        tr.usuario("oi", 110.0); tr.ela("Oi.")
+        self.assertEqual(tr.ela_parou(111.0)["userSpeech"], {"pieces": 1, "spanMs": 0, "maxGapMs": 0})
+
+    def test_entrega_do_cerebro_e_turno_sem_fala_nao_tem_tempo_de_fala(self):
+        tr = rc.Turnos("k", "voz-x", "sat")
+        tr.entrega_do_cerebro("organize a mídia", t(1)); tr.ela("Pronto.")
+        self.assertNotIn("userSpeech", tr.ela_parou(t(2)))
+        tr.ela("Oi!")
+        self.assertNotIn("userSpeech", tr.ela_parou(t(3)))
+        tr.entrega_do_cerebro("x", t(4)); tr.usuario("obrigado", t(6)); tr.ela("De nada.")
+        self.assertEqual(tr.ela_parou(t(7))["userSpeech"], {"pieces": 1, "spanMs": 0, "maxGapMs": 0})
 
     def test_portao_de_fala_vai_para_a_linha_do_turno(self):
         # 12/11: o tempo que o portão segura cada turno fica no registro permanente, não só no log do container
@@ -58,7 +80,7 @@ class TestSussurro(unittest.TestCase):
         tr = rc.Turnos("friday-satelite-sat-1", "voz-w", "sat-1", whisper=True)
         tr.usuario("que horas são?", t(1)); tr.ela("São cinco e dez.")
         r = tr.ela_parou(t(3))
-        self.assertEqual(set(r), CAMPOS | {"whisper"})
+        self.assertEqual(set(r), CAMPOS | {"whisper", "userSpeech"})
         self.assertIs(r["whisper"], True)
 
     def test_conversa_normal_sem_o_campo(self):
@@ -78,7 +100,7 @@ class TestWakeWord(unittest.TestCase):
         tr = rc.Turnos("friday-satelite-sat-1", "voz-p", "sat-1", wake_word="sexta_feira")
         tr.usuario("que horas são?", t(1)); tr.ela("Cinco e dez.")
         r1 = tr.ela_parou(t(2))
-        self.assertEqual(set(r1), CAMPOS | {"wakeWord"})
+        self.assertEqual(set(r1), CAMPOS | {"wakeWord", "userSpeech"})
         self.assertEqual(r1["wakeWord"], "sexta_feira")
         tr.usuario("obrigado", t(3)); tr.ela("De nada.")
         self.assertNotIn("wakeWord", tr.ela_parou(t(4)))
