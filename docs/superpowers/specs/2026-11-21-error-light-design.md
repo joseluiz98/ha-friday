@@ -40,9 +40,10 @@ light **never** lit. And the error beep had no visual feedback at all.
 - The flash leaving the ring stuck in red.
 
 ## Delivery
-The timer unit lives in `/etc/systemd/system` from the image; OTA does not rewrite it. Migration 0008 adds a drop-in
-`friday-netwatch.timer.d/interval.conf` (`OnUnitActiveSec=1min`) and reloads systemd; the repo's unit file changes too
-for new images.
+The OTA package ships `satellite/program/*.timer` and `friday-ota-apply` installs, snapshots and restores units in
+`/etc/systemd/system`, then reloads systemd: the changed `friday-netwatch.timer` (1 min) reaches every satellite and a
+rollback restores the 5-min one together with the old netwatch. No migration (final review I1, 21/11: a drop-in left by a
+migration would survive a rollback and run the old ladder every minute).
 
 ## To confirm on the alpha (MK1)
 Turn the Wi-Fi off at the router for 3 min: red within 2–3 min, off within ~1 min after it returns, no Wi-Fi bounce
