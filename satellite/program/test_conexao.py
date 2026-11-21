@@ -23,6 +23,10 @@ class TestRtvi(unittest.TestCase):
                                         "data": {"evento": "nao_perturbe", "ligado": True}}), ("nao_perturbe", True))
         self.assertIsNone(traduzir_rtvi({"label": "rtvi-ai", "type": "bot-llm-text"}))
 
+    def test_resposta_completa(self):  # 21/11: Gemini marked the answer complete
+        self.assertEqual(traduzir_rtvi({"type": "server-message", "data": {"evento": "resposta_completa"}}),
+                         ("resposta_completa", None))
+
     def test_ferramenta_e_encerrar_com_motivo(self):
         msg = lambda d: {"label": "rtvi-ai", "type": "server-message", "data": d}
         self.assertEqual(traduzir_rtvi(msg({"evento": "ferramenta", "em_andamento": 2})), ("ferramenta", 2))
@@ -136,6 +140,55 @@ class TestQuadros(unittest.IsolatedAsyncioTestCase):
         c.enviar(bytes(2560)); c.enviar_silencio(0.08)
         tamanhos = [c.mic.fila.get_nowait() for _ in range(c.mic.fila.qsize())]
         self.assertEqual([len(t) for t in tamanhos], [640] * 8)
+
+
+class TestSegurarAudio(unittest.IsolatedAsyncioTestCase):
+    """21/11: the audio of the pause after her answer is kept and only goes to Gemini if the mic opens."""
+    def _c(self):
+        from conexao import ConexaoFriday
+        return ConexaoFriday("https://x", {}, lambda *a: None, lambda b: None)
+
+    @staticmethod
+    def _fila(c):
+        return [c.mic.fila.get_nowait() for _ in range(c.mic.fila.qsize())]
+
+    async def test_segurar_audio_guarda_e_solta(self):
+        c = self._c()
+        c.segurar_audio()
+        pedacos = [bytes([n]) * 2560 for n in (1, 2, 3)]
+        for p in pedacos:
+            c.enviar(p)
+        self.assertEqual(c.mic.fila.qsize(), 0)
+        c.soltar_audio(True)
+        quadros = self._fila(c)
+        self.assertEqual([len(q) for q in quadros], [640] * 12)
+        self.assertEqual(b"".join(quadros), b"".join(pedacos))
+
+    async def test_segurar_audio_descarta(self):
+        c = self._c()
+        c.segurar_audio()
+        c.enviar(bytes(2560))
+        c.soltar_audio(False)
+        self.assertEqual(c.mic.fila.qsize(), 0)
+        c.enviar(bytes(2560))  # no longer holding: straight to the queue
+        self.assertEqual(c.mic.fila.qsize(), 4)
+
+    async def test_segurar_audio_limite(self):
+        c = self._c()
+        c.segurar_audio()
+        audio = b"".join(bytes([n % 256, 0]) * 1280 for n in range(25))  # 2 s, every 2560 bytes tells where it came from
+        for i in range(0, len(audio), 2560):
+            c.enviar(audio[i:i + 2560])
+        c.soltar_audio(True)
+        enviado = b"".join(self._fila(c))
+        self.assertEqual(len(enviado), 48000)  # exactly 1.5 s
+        self.assertEqual(enviado, audio[-48000:])  # the last 1.5 s
+
+    async def test_segurar_de_novo_nao_zera_o_guardado(self):
+        c = self._c()
+        c.segurar_audio(); c.enviar(bytes(2560)); c.segurar_audio()
+        c.soltar_audio(True)
+        self.assertEqual(c.mic.fila.qsize(), 4)
 
 
 class TestConexaoVelha(unittest.IsolatedAsyncioTestCase):

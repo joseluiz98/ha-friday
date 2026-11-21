@@ -1,10 +1,12 @@
 """Cliente WebRTC (aiortc) do bot.py, igual à página do navegador, avisando que é o satélite (spec D6, §2)."""
-import asyncio, fractions, json, time, uuid
+import asyncio, collections, fractions, json, time, uuid
 import aiohttp, av, numpy as np
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
+from maestro import RECADO_PAUSA_S
 
 PEDACO_80MS = 2560
 QUADRO_20MS = 640  # 320 amostras S16 a 16 kHz
+BYTES_POR_S = 32000  # 16 kHz S16 mono
 MOTIVOS_ENCERRAR = ("agradecimento",)  # spec 2026-10-15 D6: só motivos conhecidos entram no registro
 
 
@@ -20,6 +22,8 @@ def traduzir_rtvi(msg: dict):
             return ("cerebro_pendente", int(d.get("pendentes", 0)))
         if d.get("evento") == "cerebro_entregando":
             return ("cerebro_entregando", None)
+        if d.get("evento") == "resposta_completa":  # 21/11: Gemini marcou o fim da resposta
+            return ("resposta_completa", None)
         if d.get("evento") == "encerrar":
             m = d.get("motivo")
             return ("encerrar", m if m in MOTIVOS_ENCERRAR else None)
@@ -66,8 +70,38 @@ class ConexaoFriday:
         # Revisão final I2 (08/10): o bot manda áudio sem parar (silêncio inclusive); se parar por este tempo
         # com a conexão de pé, ele morreu (OOM/reinício) e o ICE só desistiria em ~30 s.
         self.silencio_max_s = 5.0  # medido 08/10: maior intervalo 0,22 s com ela calada
+        # 21/11: pausa depois da fala dela (maestro `guardar_pausa`): o áudio fica aqui, no máximo RECADO_PAUSA_S, e só
+        # vai ao Gemini se o microfone abrir (`soltar_audio(True)`); se ela voltar a falar, é descartado
+        self._segurando, self._guardado = False, collections.deque()
+
+    def segurar_audio(self):
+        """Começa a guardar o áudio do microfone em vez de mandá-lo (já guardando: não zera o que há)."""
+        self._segurando = True
+
+    def soltar_audio(self, enviar: bool):
+        """Para de guardar; `enviar` manda o guardado (do mais antigo ao mais novo), senão descarta."""
+        guardado, self._guardado, self._segurando = self._guardado, collections.deque(), False
+        if enviar:
+            for pcm in guardado:
+                self.enviar(pcm)
+
+    def _guardar(self, pcm16k: bytes):
+        self._guardado.append(pcm16k)
+        total = sum(len(p) for p in self._guardado)
+        teto = int(RECADO_PAUSA_S * BYTES_POR_S)
+        while total > teto and self._guardado:  # drop the oldest, trimming the head of the oldest chunk if needed
+            excesso = total - teto
+            velho = self._guardado[0]
+            if len(velho) <= excesso:
+                self._guardado.popleft(); total -= len(velho)
+            else:
+                self._guardado[0] = velho[excesso + (excesso & 1):]  # keep S16 sample alignment
+                total -= excesso + (excesso & 1)
 
     def enviar(self, pcm16k: bytes):
+        if self._segurando:
+            self._guardar(pcm16k)
+            return
         # Quadros de 20 ms = um pacote Opus cada. Com 80 ms o aiortc gera vários pacotes com o mesmo
         # carimbo de tempo e o receptor do bot descarta tudo (medido em 06/10: "No audio frame received").
         for i in range(0, len(pcm16k), QUADRO_20MS):
