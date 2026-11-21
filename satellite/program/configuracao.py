@@ -53,6 +53,8 @@ PADROES = {
     # 04/11: continuação no estilo Alexa. Sem continuação com música tocando nem depois de comando da casa; pausa de fim
     # de fala (s) que o DetectorFala e o VAD do Gemini esperam (0,8 = o de sempre)
     "no_follow_up_while_music": True, "no_follow_up_after_home_commands": True, "end_of_speech_pause_s": 0.8,
+    # 21/11: com ela falando nada vai ao Gemini; só a palavra a interrompe (a resposta vira recado)
+    "only_wake_word_interrupts": True,
     "alarm_ramp_s": 0,  # alarme crescente (0 = desligado): segundos para o alarme subir ao volume de alertas
     "speech_max_s": 15,  # R13: teto de fala contínua (s) antes de a conversa fechar por `fala_longa`
     # spec 2026-10-24 (wakeword-retrain): palavras configuráveis. `modo_friday` e o `modo` de cada extra:
@@ -89,6 +91,7 @@ _REGRAS = {
     "eco_portao_db": ((int, float, type(None)), -90, 0),
     "close_mic_awaiting_reply": ((bool,), None, None), "keep_listening_while_speaking": ((bool,), None, None),
     "no_follow_up_while_music": ((bool,), None, None), "no_follow_up_after_home_commands": ((bool,), None, None),
+    "only_wake_word_interrupts": ((bool,), None, None),
     "end_of_speech_pause_s": ((int, float), 0.5, 2.0),
 }
 

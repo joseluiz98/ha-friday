@@ -325,6 +325,10 @@ class TestContinuacaoEstiloAlexa(unittest.TestCase):
         import configuracao as c
         self.assertIs(c.PADROES["no_follow_up_while_music"], True)
         self.assertIs(c.PADROES["no_follow_up_after_home_commands"], True)
+        self.assertIs(c.PADROES["only_wake_word_interrupts"], True)
+        self.assertIs(c.validar_mudancas(dict(c.PADROES), {"only_wake_word_interrupts": False})["only_wake_word_interrupts"], False)
+        with self.assertRaises(ValueError):
+            c.validar_mudancas(dict(c.PADROES), {"only_wake_word_interrupts": 1})
         self.assertEqual(c.PADROES["end_of_speech_pause_s"], 0.8)
         for v in (0.5, 2.0):
             self.assertEqual(c.validar_mudancas(dict(c.PADROES), {"end_of_speech_pause_s": v})["end_of_speech_pause_s"], v)

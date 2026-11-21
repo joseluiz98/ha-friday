@@ -4,7 +4,7 @@ from maestro import Ajustes, Maestro
 
 
 def tipos(acoes):
-    return [a[0] if a[1] is None else f"{a[0]}:{a[1]}" for a in acoes if a[0] not in ("registrar", "registrar_espera")]
+    return [a[0] if a[1] is None else f"{a[0]}:{a[1]}" for a in acoes if a[0] not in ("registrar", "registrar_espera", "fim_da_resposta")]
 
 
 def registro(acoes):
@@ -888,14 +888,14 @@ class TestContinuacaoEstiloAlexa(unittest.TestCase):
     def test_sem_musica_abre_a_janela(self):
         self.abrir()
         self.m.evento("musica", 4.2, False)
-        self.assertEqual(self.m.evento("ela_parou", 6.0), [("luz", "ouvindo")])
+        self.assertEqual(self.m.evento("ela_parou", 6.0), [("luz", "ouvindo"), ("fim_da_resposta", None)])
         self.assertEqual(self.m.evento("tique", 10.9), [])
         self.assertEqual(registro(self.m.evento("tique", 11.1))["como_fechou"], "silencio")
 
     def test_musica_com_switch_desligado_mantem_a_janela(self):
         self.abrir(no_follow_up_while_music=False)
         self.m.evento("musica", 4.2, True)
-        self.assertEqual(self.m.evento("ela_parou", 6.0), [("luz", "ouvindo")])
+        self.assertEqual(self.m.evento("ela_parou", 6.0), [("luz", "ouvindo"), ("fim_da_resposta", None)])
 
     def test_musica_nao_vaza_para_a_conversa_seguinte(self):
         self.abrir()
@@ -906,7 +906,7 @@ class TestContinuacaoEstiloAlexa(unittest.TestCase):
         self.m.evento("fala_comecou", 21.5)
         self.m.evento("fala_parou", 23.0)
         self.m.evento("ela_comecou", 24.0)
-        self.assertEqual(self.m.evento("ela_parou", 26.0), [("luz", "ouvindo")])
+        self.assertEqual(self.m.evento("ela_parou", 26.0), [("luz", "ouvindo"), ("fim_da_resposta", None)])
         self.assertEqual(self.m.estado, "ouvindo")
 
     def test_comando_casa_fecha(self):
@@ -936,7 +936,7 @@ class TestContinuacaoEstiloAlexa(unittest.TestCase):
         self.m.evento("fala_comecou", 1.5)
         self.m.evento("fala_parou", 3.0)
         self.m.evento("ela_comecou", 4.0)
-        self.assertEqual(self.m.evento("ela_parou", 6.0), [("luz", "ouvindo")])
+        self.assertEqual(self.m.evento("ela_parou", 6.0), [("luz", "ouvindo"), ("fim_da_resposta", None)])
         self.assertEqual(registro(self.m.evento("tique", 6.05))["como_fechou"], "silencio")
 
 
@@ -1143,3 +1143,132 @@ class TestLuzRespondendo(Base):
         self.abrir_e_conectar()
         self.m.evento("botao", 2.0)
         self.assertNotIn("luz:respondendo", tipos(self.m.evento("ela_comecou", 3.0)))
+
+
+FIM = ("fim_da_resposta", None)
+
+
+class TestDesligadoRecadoComoHoje(TestCerebro):  # 21/11, final review: switch off = today's recado exactly
+    def test_recado_sem_guardar_pausa_nem_atalho(self):
+        self.aguardando()
+        self.m.evento("cerebro_entregando", 40.0)
+        self.m.evento("ela_comecou", 40.5)
+        self.m.evento("resposta_completa", 44.0)
+        acoes = self.m.evento("ela_parou", 45.0)
+        self.assertEqual(acoes, [])
+        self.assertNotIn(("microfone", True), self.m.evento("tique", 46.0))
+        self.assertIn(("microfone", True), self.m.evento("tique", 46.6))
+
+
+class TestSoAPalavraInterrompe(unittest.TestCase):
+    """21/11: while she answers no audio goes to Gemini (the answer is a recado); only the wake word cuts her. The mic
+    reopens at her stop when Gemini marked the turn complete, else after the 1.5 s pause; `fim_da_resposta` tells the
+    program the answer ended (beam lock release)."""
+
+    def setUp(self):
+        self.m = Maestro(Ajustes(only_wake_word_interrupts=True))
+        self.abrir()
+
+    def abrir(self, m=None):
+        m = m or self.m
+        m.evento("palavra", 0.0); m.evento("conectou", 1.0)
+        m.evento("fala_comecou", 2.0); m.evento("fala_parou", 3.0)
+
+    def test_resposta_fecha_o_microfone(self):
+        acoes = tipos(self.m.evento("ela_comecou", 4.0))
+        self.assertIn("microfone:False", acoes)
+        self.assertIn("luz:respondendo", acoes)
+        self.assertNotIn("luz:falando", acoes)
+
+    def test_fala_da_sala_durante_a_resposta_nao_conta(self):
+        self.m.evento("ela_comecou", 4.0)
+        self.assertEqual(self.m.evento("fala_comecou", 5.0), [])
+
+    def test_completa_reabre_na_hora(self):
+        self.m.evento("ela_comecou", 4.0)
+        self.assertEqual(self.m.evento("resposta_completa", 5.0), [])
+        acoes = self.m.evento("ela_parou", 6.0)
+        self.assertIn("microfone:True", tipos(acoes))
+        self.assertIn("luz:ouvindo", tipos(acoes))
+        self.assertIn(FIM, acoes)
+        self.assertEqual(self.m.estado, "ouvindo")
+
+    def test_completa_antes_de_ela_comecar(self):
+        self.m.evento("resposta_completa", 4.0)
+        self.m.evento("ela_comecou", 4.1)  # the flag survives her start
+        acoes = self.m.evento("ela_parou", 6.0)
+        self.assertIn("microfone:True", tipos(acoes))
+        self.assertIn(FIM, acoes)
+
+    def test_sem_completa_espera_a_pausa(self):
+        self.m.evento("ela_comecou", 4.0)
+        self.assertEqual(tipos(self.m.evento("ela_parou", 6.0)), ["guardar_pausa:True"])
+        self.assertNotIn("microfone:True", tipos(self.m.evento("tique", 7.0)))
+        acoes = self.m.evento("tique", 7.6)
+        self.assertIn("microfone:True", tipos(acoes))
+        self.assertIn(FIM, acoes)
+
+    def test_pausa_dentro_da_resposta(self):
+        self.m.evento("ela_comecou", 4.0); self.m.evento("ela_parou", 6.0)
+        acoes = tipos(self.m.evento("ela_comecou", 6.5))
+        self.assertIn("guardar_pausa:False", acoes)
+        self.assertNotIn("microfone:True", acoes)
+        self.assertIn("luz:respondendo", acoes)  # still an answer, not a "falando" recado
+        self.assertNotIn("microfone:True", tipos(self.m.evento("tique", 8.5)))
+
+    def test_completa_durante_a_pausa_reabre(self):
+        self.m.evento("ela_comecou", 4.0); self.m.evento("ela_parou", 6.0)
+        acoes = self.m.evento("resposta_completa", 6.3)
+        self.assertIn("microfone:True", tipos(acoes))
+        self.assertIn(FIM, acoes)
+
+    def test_palavra_corta_a_resposta(self):
+        self.m.evento("ela_comecou", 4.0)
+        acoes = self.m.evento("palavra", 5.0)
+        self.assertIn("parar_fala", tipos(acoes))
+        self.assertIn("microfone:True", tipos(acoes))
+        self.assertIn(FIM, acoes)
+
+    def test_palavra_corta_na_pausa(self):
+        self.m.evento("ela_comecou", 4.0); self.m.evento("ela_parou", 6.0)
+        acoes = self.m.evento("palavra", 6.5)
+        self.assertIn("parar_fala", tipos(acoes))
+        self.assertIn("microfone:True", tipos(acoes))
+        self.assertIn(FIM, acoes)
+        self.assertNotIn("microfone:True", tipos(self.m.evento("tique", 8.0)))  # the pause is over
+
+    def test_desligado_como_hoje(self):
+        m = Maestro(Ajustes())
+        self.abrir(m)
+        self.assertEqual(tipos(m.evento("ela_comecou", 4.0)), ["luz:respondendo"])
+        acoes = m.evento("ela_parou", 6.0)
+        self.assertIn("luz:ouvindo", tipos(acoes))
+        self.assertIn(FIM, acoes)
+        self.assertNotIn("guardar_pausa:True", tipos(acoes))
+
+    def test_resposta_do_cerebro_com_completa(self):
+        m = self.m = Maestro(Ajustes(only_wake_word_interrupts=True))  # the steps of TestCerebro.aguardando()
+        m.evento("palavra", 0.0); m.evento("conectou", 1.0)
+        m.evento("fala_comecou", 1.2); m.evento("fala_parou", 2.0)
+        m.evento("cerebro_pendente", 2.5, 1)
+        m.evento("ela_comecou", 3.0); m.evento("ela_parou", 4.0)
+        m.evento("tique", 12.0)
+        self.assertEqual(self.m.estado, "aguardando")
+        self.m.evento("cerebro_entregando", 40.0)
+        self.m.evento("ela_comecou", 40.5)
+        self.m.evento("resposta_completa", 44.0)
+        acoes = self.m.evento("ela_parou", 45.0)
+        self.assertIn("microfone:True", tipos(acoes))
+        self.assertIn("luz:ouvindo", tipos(acoes))
+        self.assertIn(FIM, acoes)
+
+    def test_completa_parada_ignorado(self):
+        self.assertEqual(Maestro(Ajustes(only_wake_word_interrupts=True)).evento("resposta_completa", 0.0), [])
+
+    def test_completa_velha_nao_reabre_no_meio(self):
+        m = Maestro(Ajustes(only_wake_word_interrupts=True))
+        m.evento("palavra", 0.0); m.evento("conectou", 1.0)
+        m.evento("resposta_completa", 3.5)  # a turn she never answered (e.g. a dropped <no speech>)
+        m.evento("fala_comecou", 8.0); m.evento("fala_parou", 9.0)
+        m.evento("ela_comecou", 10.0)
+        self.assertEqual(tipos(m.evento("ela_parou", 11.0)), ["guardar_pausa:True"])

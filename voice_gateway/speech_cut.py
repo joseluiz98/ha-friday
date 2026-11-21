@@ -46,3 +46,9 @@ class SpeechCut:
         resto = [v for k, v in vars(sc).items() if k not in ("model_turn", "output_transcription")]
         resto += [v for k, v in vars(msg).items() if k != "server_content"]
         return all(v is None for v in resto)
+
+
+def turn_complete(msg) -> bool:
+    """Gemini marked the model's turn complete (21/11): the bot tells the satellite so the mic reopens at her stop."""
+    sc = getattr(msg, "server_content", None)
+    return bool(getattr(sc, "turn_complete", None)) if sc is not None else False

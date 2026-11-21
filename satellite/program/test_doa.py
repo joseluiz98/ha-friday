@@ -11,7 +11,8 @@ def rad(g):
 
 class Link:
     def __init__(self, ok=True):
-        self.escritas, self.ok, self.leituras = [], ok, {"AEC_FIXEDBEAMSONOFF": [1]}
+        self.escritas, self.ok = [], ok
+        self.leituras = {"AEC_FIXEDBEAMSONOFF": [1], "AUDIO_MGR_OP_L": [6, 0]}
 
     def write(self, nome, valores):
         self.escritas.append((nome, list(valores)))
@@ -63,17 +64,30 @@ class TestTrava(unittest.TestCase):
         t = doa.TravaFeixe(link, log=lambda m: None, relogio=lambda: 100.0)
         self.assertTrue(t.travar(rad(30)))
         self.assertEqual([e[0] for e in link.escritas],
-                         ["AEC_FIXEDBEAMSAZIMUTH_VALUES", "AEC_FIXEDBEAMSONOFF", "AUDIO_MGR_OP_R"])
+                         ["AEC_FIXEDBEAMSAZIMUTH_VALUES", "AEC_FIXEDBEAMSONOFF", "AUDIO_MGR_OP_R", "AUDIO_MGR_OP_L"])
         self.assertAlmostEqual(link.escritas[0][1][0], rad(30)); self.assertAlmostEqual(link.escritas[0][1][1], rad(30))
         self.assertEqual(link.escritas[1][1], [1]); self.assertEqual(link.escritas[2][1], [7, 0])
+        self.assertEqual(link.escritas[3][1], [6, 0])
         self.assertTrue(t.travado)
+
+    def test_channel0_not_read_back_falls_back(self):
+        for lido in ([8, 0], None):
+            with self.subTest(lido=lido):
+                link, logs = Link(), []
+                link.leituras["AUDIO_MGR_OP_L"] = lido
+                t = doa.TravaFeixe(link, log=logs.append, relogio=lambda: 100.0)
+                self.assertTrue(t.travar(rad(30)))
+                self.assertTrue(t.travado)
+                self.assertEqual(link.escritas[-1], ("AUDIO_MGR_OP_L", [8, 0]))
+                self.assertEqual(sum("canal 0" in m for m in logs), 1)
 
     def test_unlock_sequence(self):
         link = Link()
         t = doa.TravaFeixe(link, log=lambda m: None, relogio=lambda: 100.0)
         t.travar(rad(30)); link.escritas.clear()
         self.assertTrue(t.soltar())
-        self.assertEqual(link.escritas, [("AEC_FIXEDBEAMSONOFF", [0]), ("AUDIO_MGR_OP_R", [7, 3])])
+        self.assertEqual(link.escritas,
+                         [("AEC_FIXEDBEAMSONOFF", [0]), ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])])
         self.assertFalse(t.travado)
 
     def test_failed_lock_unlocks(self):
@@ -81,7 +95,8 @@ class TestTrava(unittest.TestCase):
         t = doa.TravaFeixe(link, log=lambda m: None, relogio=lambda: 100.0)
         self.assertFalse(t.travar(rad(30)))
         self.assertFalse(t.travado)
-        self.assertEqual(link.escritas[-2:], [("AEC_FIXEDBEAMSONOFF", [0]), ("AUDIO_MGR_OP_R", [7, 3])])
+        self.assertEqual(link.escritas[-3:],
+                         [("AEC_FIXEDBEAMSONOFF", [0]), ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])])
 
     def test_ceiling_unlocks(self):
         agora = {"t": 100.0}
@@ -117,13 +132,17 @@ class TestRegra(unittest.TestCase):
         self.assertIsNone(r.palavra(10.0))
         self.assertEqual(self.link.escritas, [])
 
-    def test_releases_when_first_request_ends(self):
+    def test_releases_when_first_answer_ends(self):
         r = doa.Regra(self.d, self.trava, ligada=lambda: True)
         self.assertAlmostEqual(r.palavra(10.0), 45, delta=0.5)  # graus para o anel
-        r.fala_parou()  # o fim da própria palavra, antes do pedido começar: não solta
-        self.assertTrue(self.trava.travado)
-        r.fala_comecou(); r.fala_parou()
+        self.assertTrue(self.trava.travado)  # the request pauses do not release it
+        r.resposta_acabou()
         self.assertFalse(self.trava.travado)
+
+    def test_answer_end_without_lock_writes_nothing(self):
+        r = doa.Regra(self.d, self.trava, ligada=lambda: True)
+        r.resposta_acabou()
+        self.assertEqual(self.link.escritas, [])
 
     def test_conversation_close_releases(self):
         r = doa.Regra(self.d, self.trava, ligada=lambda: True)

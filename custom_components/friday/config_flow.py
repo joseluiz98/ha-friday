@@ -230,7 +230,8 @@ def _select(options: list[str], current: str | None, translation_key: str | None
 
 # the satellite program's own values, used as suggestions when no satellite is connected
 CONVERSATION_DEFAULTS = {"end_of_speech_pause": 0.8, "reply_wait": 8, "follow_up_window": 5,
-                         "no_follow_up_while_music": True, "no_follow_up_after_home_commands": True}
+                         "no_follow_up_while_music": True, "no_follow_up_after_home_commands": True,
+                         "only_wake_word_interrupts": True}
 
 
 class FridayOptionsFlow(OptionsFlow):

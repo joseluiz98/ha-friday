@@ -94,5 +94,27 @@ class TestFiacaoNoBot(unittest.TestCase):
         self.assertIn("InterruptionWorkerFrame()", trecho)
 
 
+class TestTurnComplete(unittest.TestCase):
+    def test_turn_complete_true(self):
+        self.assertTrue(sc.turn_complete(msg(turn_complete=True)))
+
+    def test_turn_complete_false_without_flag(self):
+        self.assertFalse(sc.turn_complete(msg()))
+        self.assertFalse(sc.turn_complete(msg(generation_complete=True)))
+
+    def test_turn_complete_false_without_server_content(self):
+        self.assertFalse(sc.turn_complete(NS(server_content=None)))
+        self.assertFalse(sc.turn_complete(NS()))
+
+    def test_bot_tells_the_satellite_after_the_original_handler(self):
+        import os
+        src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")).read()
+        i = src.index("async def _mensagem_vigiada(message):")
+        trecho = src[i:i + 1100]
+        self.assertLess(trecho.index("await _mensagem_original(message)"),
+                        trecho.index('await avisar_pi({"evento": "resposta_completa"})'))
+        self.assertIn("speech_cut.turn_complete(message)", trecho)
+
+
 if __name__ == "__main__":
     unittest.main()

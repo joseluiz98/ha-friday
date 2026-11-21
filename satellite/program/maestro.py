@@ -48,6 +48,9 @@ class Ajustes:
     # um turno só de comando da casa (o bot avisa com `encerrar comando_casa`)
     no_follow_up_while_music: bool = True
     no_follow_up_after_home_commands: bool = True
+    # 21/11: while she answers no audio goes to Gemini; only the wake word interrupts her (the answer becomes a "recado").
+    # The dataclass default stays False so that tests of other behavior keep today's flow; the program passes the config.
+    only_wake_word_interrupts: bool = False
 
 
 class Maestro:
@@ -83,6 +86,10 @@ class Maestro:
         self.pendentes = 0
         self._recado = False  # v0.3.7: resposta pendente/entrega sendo falada: mic fechado, só a palavra interrompe
         self._recado_fim = None  # v0.3.7: pausa dentro do recado: o mic só abre se ela não voltar em RECADO_PAUSA_S
+        # 21/11: the recado is a normal answer closed by only_wake_word_interrupts (light stays "respondendo")
+        self._resposta_normal = False
+        # 21/11: the bot told us Gemini completed the turn (`resposta_completa`): the mic reopens at her stop
+        self._completa = False
         self.mudo_software = False  # v0.3.7: mudo pela config; o anel leva o bit do mudo, então as luzes podem passar
         self._prazo = None  # (motivo, instante)
         self._alguem_falando = False
@@ -233,7 +240,7 @@ class Maestro:
         return acoes
 
     def _fechar(self, agora, motivo, som="fim"):
-        self._recado, self._recado_fim = False, None
+        self._recado, self._recado_fim, self._resposta_normal = False, None, False
         como = self._abertura["como_abriu"] if self._abertura else None
         acoes = [("som", som)] if som else []
         acoes += [("luz", self._repouso()), ("desconectar", None)]
@@ -351,7 +358,7 @@ class Maestro:
         return self._proximo_anuncio(agora)
 
     def _cortar(self, agora, motivo):
-        self._recado, self._recado_fim = False, None
+        self._recado, self._recado_fim, self._resposta_normal, self._completa = False, None, False, False
         self.estado = CORTADA
         self._motivo_corte = motivo
         self._prazo = ("resposta", agora + self.a.resposta_max_s)
@@ -378,7 +385,7 @@ class Maestro:
 
     def _luz_do_estado(self):
         if self._recado and self.estado in ABERTO:
-            return "falando"
+            return "respondendo" if self._resposta_normal else "falando"
         if self._ela_falando and self.estado == OUVINDO:
             return "respondendo"
         return {CONECTANDO: "ouvindo", OUVINDO: "ouvindo", AGUARDANDO: "cerebro", ALARME: "alarme", ANUNCIO: "falando",
@@ -412,10 +419,8 @@ class Maestro:
         e = self.estado
         if nome == "tique":
             if self._recado_fim is not None and agora >= self._recado_fim:
-                parou = self._recado_fim - RECADO_PAUSA_S  # quando ela de fato parou: os prazos contam dali
-                self._recado, self._recado_fim = False, None  # o recado acabou: abre como antes do v0.3.7
-                return [("microfone", True), ("luz", "ouvindo")] + self._trata("ela_parou", parou, None) + \
-                    self._tique(agora)
+                # parou = quando ela de fato parou: os prazos contam dali
+                return self._reabrir(self._recado_fim - RECADO_PAUSA_S) + self._tique(agora)
             return self._tique(agora)
         if nome == "nao_perturbe_inicial":  # arranque da Pi: aplica o estado gravado, sem som
             self.nao_perturbe = bool(valor)
@@ -541,8 +546,16 @@ class Maestro:
             return self._cancelar(agora) if e in (CONECTANDO, OUVINDO, CORTADA, AGUARDANDO) else []
         if nome == "botao" and e in ABERTO and self._da_conversa("entrega"):
             return [("avisar_bot", "atendida")] + self._cortar(agora, "botao")
-        if nome in ("cerebro_pendente", "ela_comecou", "ela_parou", "ferramenta", "musica") and e == PARADA:
+        if nome in ("cerebro_pendente", "ela_comecou", "ela_parou", "ferramenta", "musica", "resposta_completa") \
+                and e == PARADA:
             return []  # resto de uma conexão já descartada (revisão final I1)
+        if nome == "resposta_completa":  # 21/11: Gemini completed the turn; only open conversations care
+            if e not in ABERTO:
+                return []
+            self._completa = True
+            if self._recado_fim is not None and self.a.only_wake_word_interrupts:  # pause running: no need to wait
+                return self._reabrir(self._recado_fim - RECADO_PAUSA_S)
+            return []
         if nome == "ferramenta":  # D2
             self.ferramentas = max(0, int(valor or 0))
             if e not in ABERTO:
@@ -556,8 +569,8 @@ class Maestro:
             return []
         if nome == "palavra":
             if self._recado and e in ABERTO and self.mudo is False:  # só a palavra ativa corta o recado
-                self._recado, self._recado_fim = False, None
-                return [("parar_fala", None), ("microfone", True), ("luz", "ouvindo")]
+                self._recado, self._recado_fim, self._resposta_normal, self._completa = False, None, False, False
+                return [("parar_fala", None), ("microfone", True), ("luz", "ouvindo"), ("fim_da_resposta", None)]
             if self.mudo is not False or e in ABERTO:
                 return []
             return self._abrir(agora, "palavra" if e == PARADA else self._abertura["como_abriu"],
@@ -588,6 +601,7 @@ class Maestro:
         if nome == "fala_comecou":
             if self._recado and e in ABERTO:  # 19/11 (revisão I2): fala da sala no recado não chega a ela nem conta prazo
                 return []
+            self._completa = False  # a new utterance: a leftover `resposta_completa` must not reopen the next answer
             self._alguem_falando = True
             self._fala_desde = agora
             if self._prazo and self._prazo[0] in ("espera_inicial", "continuacao"):
@@ -613,14 +627,17 @@ class Maestro:
         if nome == "ela_comecou":
             self._ela_falando = True
             reabrir = []
-            self._recado_fim = None  # voltou a falar dentro da pausa: o recado continua
+            pausa, self._recado_fim = self._recado_fim is not None, None  # voltou a falar na pausa: o recado continua
             if e == AGUARDANDO:  # a resposta pendente chegou dentro da janela: é um recado também
                 self._recado = True
             elif e in ABERTO and self._da_conversa("apresentacao"):  # 19/11: na apresentação toda fala dela é recado
                 self._recado = True
+            elif e == OUVINDO and self.a.only_wake_word_interrupts and not self._recado:
+                self._recado, self._resposta_normal = True, True  # 21/11: toda resposta fecha o mic; só a palavra corta
             if self._recado:
                 self._mic_fechado = False
-                reabrir = [("microfone", False), ("luz", "falando")]  # 19/11 (revisão I1): a luz acompanha o mic
+                # 19/11 (revisão I1): a luz acompanha o mic
+                reabrir = [("microfone", False), ("luz", "respondendo" if self._resposta_normal else "falando")]
             elif self._mic_fechado:  # 04/11: ela vai responder: o microfone volta (interrupção e continuação)
                 self._mic_fechado = False
                 reabrir = [("microfone", True), ("luz", "respondendo")]
@@ -638,22 +655,28 @@ class Maestro:
                 return medida + acoes + [a for a in reabrir if a not in acoes]
             if self._prazo:
                 self._prazo = None
-            return medida + reabrir
+            return medida + reabrir + ([("guardar_pausa", False)] if pausa else [])
         if nome == "musica":  # 04/11: resultado da consulta ao Sendspin, feita quando ela começou a responder
             self._musica_tocando = bool(valor)
             return []
         if nome == "ela_parou":
             self._ela_falando = False
             if self._recado and e in ABERTO:  # pausa ou fim do recado: o mic abre se ela não voltar logo (_tique)
+                if not self.a.only_wake_word_interrupts:  # switch off: the recado as before 21/11
+                    self._recado_fim = agora + RECADO_PAUSA_S
+                    return []
+                if self._completa:  # 21/11: Gemini already completed the turn: this is the end, not a pause
+                    return self._reabrir(agora)
                 self._recado_fim = agora + RECADO_PAUSA_S
-                return []
+                return [("guardar_pausa", True)]  # the audio of the wait is kept for when the mic opens
             if self._cadastro is not None and e == OUVINDO:  # D15: a confirmação dela terminou: a Pi assume
                 return self._fechar(agora, "aprendizagem", som=None)
             if e == OUVINDO and self.a.no_follow_up_while_music and self._musica_tocando:
                 return self._fechar(agora, "musica", som="fim")
             if e == OUVINDO:
                 self._prazo = ("continuacao", agora + self.a.continuacao_s)
-                return [("luz", "ouvindo")]
+                self._completa = False
+                return [("luz", "ouvindo"), ("fim_da_resposta", None)]
             if e == CORTADA:
                 return self._apos_resposta_cortada(agora)
             return []
@@ -685,10 +708,19 @@ class Maestro:
             return acoes
         return []
 
+    def _reabrir(self, parou):
+        """End of a recado (21/11): the mic opens as before v0.3.7 and the program learns the answer ended (the beam lock
+        releases). `parou` = when she really stopped: the follow-up deadlines count from there."""
+        self._recado, self._recado_fim, self._resposta_normal, self._completa = False, None, False, False
+        acoes = [("microfone", True), ("luz", "ouvindo")] + self._trata("ela_parou", parou, None)
+        if ("fim_da_resposta", None) not in acoes:
+            acoes.append(("fim_da_resposta", None))
+        return acoes
+
     def _fechar_mic_do_recado(self, acoes):
         """v0.3.7: a resposta pendente sai com o microfone fechado (a palavra segue ouvida pela Pi) e a luz diz que ela
         está falando, não ouvindo (M4): fala no cômodo não é ouvida até o fim do recado."""
-        self._recado = True
+        self._recado, self._resposta_normal = True, False
         troca = (((("microfone", True)), ("microfone", False)), (("luz", "ouvindo"), ("luz", "falando")))
         acoes = [next((novo for velho, novo in troca if a == velho), a) for a in acoes]
         if not any(a[0] == "microfone" for a in acoes):  # 19/11: conectar abre o microfone; o recado já começa fechado

@@ -65,6 +65,8 @@ class Conexao:
     def silenciar(self): F.silenciadas += 1
     def cortar_fala(self): F.cortes += 1
     def pessoa_falou(self): F.falas_pessoa += 1
+    def segurar_audio(self): self.passos = getattr(self, "passos", []) + ["segurar"]
+    def soltar_audio(self, enviar): self.passos = getattr(self, "passos", []) + [f"soltar:{enviar}"]
     async def abrir(self): pass
     async def fechar(self): F.fechadas += 1
 
@@ -1130,6 +1132,47 @@ class TestDisputa(Base):
         self.assertEqual(enviados, list(range(60 - n, 60)))
 
 
+class TestPausaGuardada(Base):
+    """21/11: the audio of the pause after her answer is held in the connection, and the wake word keeps being heard."""
+    def _conversa(self):
+        self.s.maestro.evento("palavra", 0.0)
+        self.s._agir("conectar", None)
+        return F.conexoes[-1]
+
+    async def test_guardar_pausa_holds_without_opening_the_mic(self):
+        c = self._conversa()
+        self.s._agir("microfone", False)
+        self.s._agir("guardar_pausa", True)
+        self.assertEqual(c.passos, ["segurar"])
+        self.assertTrue(self.s.guardando_pausa)
+        self.assertFalse(self.s.microfone_aberto)  # the wake word inference must keep running
+
+    async def test_pause_ends_by_discarding_when_she_goes_on(self):
+        c = self._conversa()
+        self.s._agir("guardar_pausa", True); self.s._agir("guardar_pausa", False)
+        self.assertEqual(c.passos, ["segurar", "soltar:False"])
+        self.assertFalse(self.s.guardando_pausa)
+
+    async def test_microfone_true_flushes_the_pause_first(self):
+        c = self._conversa()
+        self.s._agir("microfone", False); self.s._agir("guardar_pausa", True)
+        self.s._agir("microfone", True)
+        self.assertEqual(c.passos, ["segurar", "soltar:True"])
+        self.assertTrue(self.s.microfone_aberto)
+        self.assertFalse(self.s.guardando_pausa)
+
+    async def test_closing_the_conversation_clears_the_pause(self):
+        self._conversa()
+        self.s._agir("guardar_pausa", True)
+        self.s._agir("desconectar", None)
+        self.assertFalse(self.s.guardando_pausa)
+
+    async def test_ajustes_carry_the_setting_default_on(self):
+        self.assertTrue(self.s._ajustes().only_wake_word_interrupts)
+        self.s.cfg["only_wake_word_interrupts"] = False
+        self.assertFalse(self.s._ajustes().only_wake_word_interrupts)
+
+
 class TestPararFala(Base):
     async def test_parar_fala_cuts_playback_and_the_rest_of_her_speech(self):
         self.s.maestro.evento("palavra", 0.0)
@@ -1153,6 +1196,21 @@ class TestPararFala(Base):
                 self.s._agir(tipo, arg)
         self.s.evento("fala_comecou", None)
         self.assertEqual(F.falas_pessoa, 0)
+
+    async def test_word_in_one_breath_lets_her_next_answer_play(self):  # 21/11, final review I1
+        # "Friday, <request>" said in one breath during a recado: the speech started inside the recado (not
+        # counted), the word cut it, and no new fala_comecou comes before her answer; the end of that speech counts
+        self.s.maestro.mudo = False
+        _, acoes = self.s.maestro.campainha("e1abcdef", 0.0)
+        for tipo, arg in acoes:
+            if tipo in ("conectar", "microfone"):
+                self.s._agir(tipo, arg)
+        self.s.evento("fala_comecou", None)
+        self.assertEqual(F.falas_pessoa, 0)
+        self.s.evento("palavra", None)
+        self.assertFalse(self.s.maestro._recado)
+        self.s.evento("fala_parou", None)
+        self.assertEqual(F.falas_pessoa, 1)
 
     async def test_person_speaking_is_told_to_the_connection(self):
         self.s.maestro.evento("palavra", 0.0)
@@ -1233,16 +1291,18 @@ class TestXvf3800Trava(TestXvf3800):
         self.link.escritas.clear()
         return s
 
-    async def test_wake_word_locks_and_first_request_end_releases(self):
+    async def test_wake_word_locks_and_first_answer_end_releases(self):
         s = self._xvf_com_direcao()
         s._travar_na_palavra()
         self.assertIn(("AEC_FIXEDBEAMSONOFF", [1]), self.link.escritas)
         self.assertAlmostEqual(s.anel._dir_fixa, 45, delta=1)
-        s._doa_evento("fala_parou")  # fim da própria palavra: segue travada
-        self.assertTrue(s.doa_trava.travado)
+        s._doa_evento("fala_parou")  # 21/11: the request pauses no longer release it
         s._doa_evento("fala_comecou"); s._doa_evento("fala_parou")
+        self.assertTrue(s.doa_trava.travado)
+        s._agir("fim_da_resposta", None)  # the first answer ended
         self.assertFalse(s.doa_trava.travado)
         self.assertIn(("AUDIO_MGR_OP_R", [7, 3]), self.link.escritas)
+        self.assertIn(("AUDIO_MGR_OP_L", [8, 0]), self.link.escritas)
 
     async def test_beam_lock_switch_off_never_locks(self):
         s = self._xvf_com_direcao()

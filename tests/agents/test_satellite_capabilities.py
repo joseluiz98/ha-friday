@@ -246,6 +246,7 @@ def test_follow_up_entities_names_and_mapping():
         "follow_up_window": ("number", "Follow-up window", (0, 30, 1)),
         "no_follow_up_while_music": ("switch", "No follow-up while music plays", None),
         "no_follow_up_after_home_commands": ("switch", "No follow-up after home commands", None),
+        "only_wake_word_interrupts": ("switch", "Only the wake word interrupts", None),
         "end_of_speech_pause": ("number", "End-of-speech pause", (0.5, 2.0, 0.1)),
     }
     for k, (plat, name, rng) in spec.items():
@@ -261,6 +262,8 @@ def test_follow_up_entities_names_and_mapping():
     assert st["end_of_speech_pause"] == 1.2
     st = m.state(CFG, WW, None)  # absent = defaults
     assert st["no_follow_up_while_music"] is True and st["no_follow_up_after_home_commands"] is True
+    assert st["only_wake_word_interrupts"] is True
+    assert m.state(dict(CFG, only_wake_word_interrupts=False), WW, None)["only_wake_word_interrupts"] is False
     assert st["end_of_speech_pause"] == 0.8
     assert m.to_program(CFG, "reply_wait", 9) == {"config": {"espera_resposta_s": 9}}
     assert m.to_program(CFG, "follow_up_window", 7.0) == {"config": {"continuacao_s": 7}}
@@ -268,6 +271,7 @@ def test_follow_up_entities_names_and_mapping():
     assert m.to_program(CFG, "no_follow_up_while_music", False) == {"config": {"no_follow_up_while_music": False}}
     assert m.to_program(CFG, "no_follow_up_after_home_commands", True) == {
         "config": {"no_follow_up_after_home_commands": True}}
+    assert m.to_program(CFG, "only_wake_word_interrupts", False) == {"config": {"only_wake_word_interrupts": False}}
     assert m.to_program(CFG, "end_of_speech_pause", 1.2) == {"config": {"end_of_speech_pause_s": 1.2}}
     assert m.to_program(CFG, "follow_up", 9) is None
 
@@ -405,7 +409,7 @@ def test_page_has_only_user_controls():
 def test_engineering_keys_hidden_with_ranges():
     keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
     for k in ("reply_wait", "follow_up_window", "no_follow_up_while_music", "no_follow_up_after_home_commands",
-              "end_of_speech_pause", "continuous_speech_limit", "ducking_restore",
+              "only_wake_word_interrupts", "end_of_speech_pause", "continuous_speech_limit", "ducking_restore",
               "wakeword_friday_mode", "wakeword_friday_sensitivity"):
         assert keys[k].get("hidden") is True, k
     assert (keys["continuous_speech_limit"]["min"], keys["continuous_speech_limit"]["max"],

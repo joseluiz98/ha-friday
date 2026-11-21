@@ -16,6 +16,7 @@ GENERAL_KEYS: tuple[str, ...] = (
     "follow_up_window",
     "no_follow_up_while_music",
     "no_follow_up_after_home_commands",
+    "only_wake_word_interrupts",
 )
 
 GENERAL_SPECS: dict[str, dict[str, Any]] = {
@@ -24,6 +25,7 @@ GENERAL_SPECS: dict[str, dict[str, Any]] = {
     "follow_up_window": {"type": "number", "min": 1, "max": 30, "step": 1},
     "no_follow_up_while_music": {"type": "bool"},
     "no_follow_up_after_home_commands": {"type": "bool"},
+    "only_wake_word_interrupts": {"type": "bool"},
 }
 
 ADVANCED_FIXED: tuple[str, ...] = ("ducking_restore", "continuous_speech_limit",  # ducking + level: device page

@@ -34,6 +34,9 @@ def test_validate_general_ranges():
     assert code(st.validate_general, "end_of_speech_pause", 0.4) == "out_of_range"
     assert code(st.validate_general, "no_follow_up_while_music", "yes") == "bad_type"
     assert st.validate_general("no_follow_up_while_music", False) is False
+    assert st.GENERAL_SPECS["only_wake_word_interrupts"] == {"type": "bool"}
+    assert code(st.validate_general, "only_wake_word_interrupts", "yes") == "bad_type"
+    assert st.validate_general("only_wake_word_interrupts", False) is False
     assert code(st.validate_general, "close_mic_awaiting_reply", True) == "unknown_key"
 
 

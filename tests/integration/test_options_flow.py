@@ -145,7 +145,8 @@ async def open_conversation(hass, entry):
 
 
 VALUES = {"end_of_speech_pause": 1.2, "reply_wait": 9.0, "follow_up_window": 6.0,
-          "no_follow_up_while_music": False, "no_follow_up_after_home_commands": True}
+          "no_follow_up_while_music": False, "no_follow_up_after_home_commands": True,
+          "only_wake_word_interrupts": False}
 
 
 async def test_conversation_works_without_server(hass):
@@ -157,7 +158,8 @@ async def test_conversation_works_without_server(hass):
     assert r["type"] == FlowResultType.CREATE_ENTRY
     general = entry.options["general"]
     assert general == {"end_of_speech_pause": 1.2, "reply_wait": 9, "follow_up_window": 6,
-                       "no_follow_up_while_music": False, "no_follow_up_after_home_commands": True}
+                       "no_follow_up_while_music": False, "no_follow_up_after_home_commands": True,
+                       "only_wake_word_interrupts": False}
     assert isinstance(general["reply_wait"], int)
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
@@ -174,6 +176,7 @@ async def test_conversation_suggests_from_options_then_satellite_then_default(ha
     s = suggested(r)
     assert s["end_of_speech_pause"] == 0.9 and s["reply_wait"] == 11  # from the satellite
     assert s["follow_up_window"] == 5 and s["no_follow_up_while_music"] is True  # program default
+    assert s["only_wake_word_interrupts"] is True  # program default
     hass.config_entries.options.async_abort(r["flow_id"])
     hass.config_entries.async_update_entry(entry, options={"general": {"reply_wait": 4}})
     r = await open_conversation(hass, entry)

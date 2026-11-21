@@ -100,6 +100,9 @@ class Satelite:
         self._modelo_palavra = None  # spec 2026-10-24: o Model atual (a captura o (re)cria); a porta lê os nomes
         self.taxa_captura = TaxaCaptura()  # spec 2026-11-17: o agente vigia a USB do XVF3800 por esta taxa (/status)
         self.microfone_aberto = False
+        # 21/11: pausa depois da fala dela com o microfone fechado: o áudio é guardado na conexão (não vai ao Gemini). Não
+        # reaproveita `microfone_aberto`: com ele a inferência da palavra é pulada, e a palavra tem de ser ouvida na pausa.
+        self.guardando_pausa = False
         self.conversa_sussurrada = False
         self.fala_em_andamento = False
         self.piso_conversa = 0.0  # piso de ruído do trecho da palavra (spec 2026-10-20), usado na conversa sussurrada
@@ -205,7 +208,8 @@ class Satelite:
                        close_mic_awaiting_reply=bool(self.cfg.get("close_mic_awaiting_reply", False)),
                        keep_listening_while_speaking=self.cfg.get("keep_listening_while_speaking", True) is not False,
                        no_follow_up_while_music=self.cfg.get("no_follow_up_while_music", True) is not False,
-                       no_follow_up_after_home_commands=self.cfg.get("no_follow_up_after_home_commands", True) is not False)
+                       no_follow_up_after_home_commands=self.cfg.get("no_follow_up_after_home_commands", True) is not False,
+                       only_wake_word_interrupts=self.cfg.get("only_wake_word_interrupts", True) is not False)
 
     async def _musica_agora(self) -> bool:
         """Há música tocando no Sendspin? Qualquer erro, saída estranha ou demora = não (nunca derruba o programa)."""
@@ -349,10 +353,8 @@ class Satelite:
     def _doa_evento(self, nome):
         if self.doa_regra is None:
             return
-        if nome == "fala_comecou":
-            self.doa_regra.fala_comecou()
-        elif nome == "fala_parou":
-            self.doa_regra.fala_parou()
+        if nome == "fim_da_resposta":  # 21/11: a primeira resposta terminou (mic reabriu ou a palavra a cortou)
+            self.doa_regra.resposta_acabou()
         elif nome == "parada":
             self.doa_regra.conversa_fechou()
         if not self.doa_trava.travado:
@@ -369,7 +371,9 @@ class Satelite:
             resumo = self.medidor_eco.resumo()
             if resumo:
                 print(json.dumps({"eco_rms_db": resumo}), flush=True)
-        if nome == "fala_comecou" and self.conexao and not self.maestro._recado:
+        if nome in ("fala_comecou", "fala_parou") and self.conexao and not self.maestro._recado:
+            # 21/11 (final review I1): "Friday, <request>" in one breath starts inside the recado, so only its end
+            # (after the word cut it) can tell the connection that the person spoke
             # v0.3.7: depois de um corte, a fala nova dela volta a tocar; 19/11 (revisão M2): fala da sala com o
             # microfone fechado (recado) não chegou a ela e não conta
             self.conexao.pessoa_falou()
@@ -384,8 +388,6 @@ class Satelite:
                         print(json.dumps({"mudo_gravar_erro": str(e)}), flush=True)
                     self.emissor.emitir("config", {"mudancas": {"mudo": bool(valor)}, "origem": "botao"})
                 self.anel.set_muted(self._mudo_visivel())
-        if nome in ("fala_comecou", "fala_parou"):  # 17/11: DOA v0 — fim do primeiro pedido solta a trava
-            self._doa_evento(nome)
         if self.doa_trava is not None and self.doa_trava.travado and self.maestro.estado == "parada":
             self._doa_evento("parada")  # a conversa fechou com a trava ainda ligada
 
@@ -430,7 +432,7 @@ class Satelite:
                 n += math.ceil(self._espera_disputa_s / 0.08)  # spec 2026-11-16 §5.5: mais o que se esperou o veredito
                 for pcm in list(self.recentes)[-n:]:
                     self.conexao.enviar(pcm)
-            self.microfone_aberto = True
+            self.microfone_aberto, self.guardando_pausa = True, False
             self.emissor.emitir("conversa", {"estado": "aberta"})
             asyncio.ensure_future(self.conexao.abrir())
         elif tipo == "cortar":
@@ -438,7 +440,21 @@ class Satelite:
                 self.conexao.enviar_silencio(1.5)
             self.microfone_aberto = False
         elif tipo == "microfone":
-            self.microfone_aberto = bool(arg)
+            if arg:  # 21/11: abre o microfone mandando antes o que se guardou na pausa
+                if self.conexao:
+                    self.conexao.soltar_audio(True)
+                self.microfone_aberto, self.guardando_pausa = True, False
+            else:
+                self.microfone_aberto = False  # a pausa guardada (se houver) segue guardada: só `guardar_pausa` a encerra
+        elif tipo == "guardar_pausa":  # 21/11: pausa na fala dela: o áudio fica guardado até o microfone abrir
+            if self.conexao:
+                if arg:
+                    self.conexao.segurar_audio()
+                else:
+                    self.conexao.soltar_audio(False)
+            self.guardando_pausa = bool(arg) and self.conexao is not None
+        elif tipo == "fim_da_resposta":  # 21/11: a primeira resposta terminou: solta a trava de feixe
+            self._doa_evento("fim_da_resposta")
         elif tipo == "parar_fala":  # v0.3.7: a palavra cortou o recado: para o som e descarta o resto da fala dela
             self.alto.parar_ja()
             if self.conexao:
@@ -453,9 +469,9 @@ class Satelite:
                 velha.enviar_mensagem("cancelar", {})
                 asyncio.ensure_future(self._fechar_depois(velha, 0.3))
                 self.emissor.emitir("conversa", {"estado": "fechada"})
-            self.microfone_aberto = False
+            self.microfone_aberto = self.guardando_pausa = False
         elif tipo == "desconectar":
-            self.microfone_aberto = False
+            self.microfone_aberto = self.guardando_pausa = False
             self.conversa_sussurrada = False
             if self.conexao:
                 asyncio.ensure_future(self.conexao.fechar()); self.conexao = None
@@ -1212,15 +1228,16 @@ class Satelite:
                 reg_falas.escrever(registro_palavra.linha_fala(t))
             if fala:
                 self.loop.call_soon_threadsafe(self.evento, fala)
-            if self.microfone_aberto and self.conexao:
+            if self.conexao:
                 # spec 2026-11-04: "ela falando" = escreveu no aplay há menos de 0,3 s. O portão (padrão None = desligado)
                 # só zera o que está abaixo do limiar nesse intervalo; o medidor sempre vê o áudio cru.
                 ult = self.alto.ultimo_envio
                 ela_falando = ult is not None and time.monotonic() - ult < 0.3
                 saida = getattr(cap, "conversa", None) or pcm  # 18/11: XVF = canal 0; Jabra = o canal único
-                if ela_falando:
-                    self.medidor_eco.alimentar(saida)  # mede o que vai ao Gemini
-                self.loop.call_soon_threadsafe(self.conexao.enviar, portao_eco(saida, ela_falando, self.cfg.get("eco_portao_db")))
+                if ela_falando:  # 21/11: o medidor roda também com o microfone fechado (nada vai ao Gemini então)
+                    self.medidor_eco.alimentar(saida)
+                if self.microfone_aberto or self.guardando_pausa:  # a pausa guarda o áudio na conexão
+                    self.loop.call_soon_threadsafe(self.conexao.enviar, portao_eco(saida, ela_falando, self.cfg.get("eco_portao_db")))
 
     def botao(self):
         if self._botao_cls is None:  # XVF3800: o botão da placa corta o microfone em hardware, sem evento aqui
