@@ -154,6 +154,23 @@ def sample_proxmox(header: str) -> dict:
         {"data": _get(f"{PVE}/qemu", header, True).get("data", []) + _get(f"{PVE}/lxc", header, True).get("data", [])})
 
 
+def ota_entities(orch) -> dict:
+    """The server's OTA entities: its update, the integration's target (Task 18 installs it through HACS), the newest
+    provisioning image (state = tag; attributes built_at/status/error/files), the satellites held by the server and
+    the alpha promotion clock (state = promotion time; attributes tag/status/started_at/promotes_at/soaked_hours/
+    newer_stable/alphas)."""
+    img = orch.image_status() or {}
+    promotion, promotion_attrs = orch.alpha_promotion()
+    return {"ota_server": orch.server_entity(),
+            "ota_integration_target": orch.status()["server"].get("integration_target"),
+            "image_latest": img.get("tag"),
+            "ota_waiting_server": len(waiting := orch.waiting_server()),
+            "ota_waiting_server_attributes": {"satellites": waiting},
+            "ota_alpha_promotion": promotion,
+            "ota_alpha_promotion_attributes": promotion_attrs,
+            "image_latest_attributes": {k: img.get(k) for k in ("built_at", "status", "error", "files")}}
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     token = _read(os.environ.get("FRIDAY_AGENT_TOKEN_FILE", f"{SECRETS}/agent_token"))
@@ -204,15 +221,7 @@ async def main() -> None:
                                publisher=publisher)
     state["ota_auto_install"] = ota_store.auto_install
     def ota_state() -> dict:
-        """The server's OTA entities: its update, the integration's target (Task 18 installs it through HACS) and
-        the newest provisioning image (state = tag; attributes built_at/status/error/files)."""
-        img = orch.image_status() or {}
-        return {"ota_server": orch.server_entity(),
-                "ota_integration_target": orch.status()["server"].get("integration_target"),
-                "image_latest": img.get("tag"),
-                "ota_waiting_server": len(waiting := orch.waiting_server()),
-                "ota_waiting_server_attributes": {"satellites": waiting},
-                "image_latest_attributes": {k: img.get(k) for k in ("built_at", "status", "error", "files")}}
+        return ota_entities(orch)
 
     state.update(ota_state())
 
