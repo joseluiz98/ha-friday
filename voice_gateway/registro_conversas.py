@@ -13,7 +13,7 @@ def _iso(agora: float) -> str:
 
 
 def _linha(chave, sessao, alvo, prompt, resposta, ok, erro, dur_ms, ferramentas, turno, agora, whisper=False,
-           wake_word=None, speech_gate=None):
+           wake_word=None, speech_gate=None, user_speech=None):
     r = {"ts": _iso(agora), "prompt": prompt, "response": resposta, "ok": ok, "error": erro,
          "durationMs": dur_ms, "sessionKey": chave, "sessionId": sessao, "speakTarget": alvo,
          "warmState": None, "mode": "friday", "tools": ferramentas, "turnNumber": turno, "resumed": False}
@@ -23,6 +23,8 @@ def _linha(chave, sessao, alvo, prompt, resposta, ok, erro, dur_ms, ferramentas,
         r["wakeWord"] = wake_word
     if speech_gate:  # 12/11: quanto o portão de fala segurou o começo do turno, e se o descartou (<no speech>)
         r["speechGate"] = speech_gate
+    if user_speech:  # 21/11: trechos da transcrição do usuário, do 1º ao último, e a maior pausa (fala da TV no fim)
+        r["userSpeech"] = user_speech
     return r
 
 
@@ -39,10 +41,12 @@ class Turnos:
         self._usuario, self._ela, self._ferramentas, self._t_usuario = [], [], [], None
         self._ids = set()
         self._portao = []
+        self._t_trechos = []  # hora de cada trecho da transcrição do usuário (não conta a entrega do cérebro)
 
     def usuario(self, texto: str, agora: float):
         self._usuario.append(texto)
         self._t_usuario = agora
+        self._t_trechos.append(agora)
 
     def entrega_do_cerebro(self, pedido: str, agora: float):
         self._usuario.append(f"[resposta do cérebro a: {pedido}]")
@@ -62,6 +66,14 @@ class Turnos:
             self._ids.add(chamada_id)
         self._ferramentas.append({"name": nome, "summary": resumo[:200]})
 
+    def _fala_do_usuario(self):
+        ts = self._t_trechos
+        if not ts:
+            return None
+        pausas = [b - a for a, b in zip(ts, ts[1:])]
+        ms = lambda x: int(round(x * 1000))
+        return {"pieces": len(ts), "spanMs": ms(ts[-1] - ts[0]), "maxGapMs": ms(max(pausas, default=0.0))}
+
     def ela_parou(self, agora: float):
         if not self._ela and not self._usuario:
             return None
@@ -69,7 +81,8 @@ class Turnos:
         dur = int(round((agora - self._t_usuario) * 1000)) if self._t_usuario else None
         r = _linha(self.chave, self.sessao, self.alvo, "".join(self._usuario).strip(),
                    "".join(self._ela).strip(), True, None, dur, self._ferramentas, self.numero, agora,
-                   self.whisper, self.wake_word if self.numero == 1 else None, self._portao)
+                   self.whisper, self.wake_word if self.numero == 1 else None, self._portao,
+                   self._fala_do_usuario())
         self._novo()
         return r
 
