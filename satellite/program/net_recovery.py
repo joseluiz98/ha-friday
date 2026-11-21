@@ -2,7 +2,11 @@
 
 `netwatch.py` gathers observations, calls `decide()`, saves the state and runs the action. Nothing here touches the
 network or runs a command; only the state file helpers touch disk. Ladder: bounce_interface -> restart_network_manager
--> reboot, with a cap of MAX_CHAIN_REBOOTS chain-issued reboots per rolling REBOOT_WINDOW_S that survives reboots."""
+-> reboot, with a cap of MAX_CHAIN_REBOOTS chain-issued reboots per rolling REBOOT_WINDOW_S that survives reboots.
+
+Spec 2026-11-21: the timer runs every minute, so the ladder is paced by time (a round counts at most every ROUND_S)
+and the state records `failing_since` (first failed check of the episode) and `last_check` (every run); the program
+turns the ring red from them (`read_net_down`), whatever the fault."""
 import copy, json, os, tempfile
 from dataclasses import dataclass
 
@@ -11,6 +15,9 @@ FAILED_ROUNDS_BEFORE_ACTION = 2
 MAX_CHAIN_REBOOTS = 3
 REBOOT_WINDOW_S = 86400
 BOOT_GRACE_S = 300
+NET_DOWN_LIGHT_S = 120   # the program lights red once the network has been failing this long (spec 2026-11-21)
+NET_STATE_STALE_S = 180  # a state file whose last_check is older than this never keeps the light on
+ROUND_S = 300            # the timer runs every minute; a ladder round counts at most this often
 
 NONE = "none"
 BOUNCE = "bounce_interface"
@@ -37,7 +44,7 @@ class Decision:
 
 def fresh_state() -> dict:
     return {"boot_id": None, "failed_rounds": 0, "step": 0, "exhausted": False, "announced": False,
-            "chain_reboots": []}
+            "chain_reboots": [], "failing_since": None, "last_check": None, "last_round": None}
 
 
 def load_state(path: str = STATE_PATH) -> dict:
@@ -86,7 +93,26 @@ def read_exhausted(path: str = STATE_PATH) -> bool:
         return False
 
 
+def read_net_down(now: float, path: str = STATE_PATH) -> bool:
+    """True when the network has been failing for >= NET_DOWN_LIGHT_S and netwatch checked within NET_STATE_STALE_S.
+    Never raises: a missing, corrupt or odd file means False (never a stuck red light)."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return False
+        since, last = data.get("failing_since"), data.get("last_check")
+        for v in (since, last):
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                return False
+        return now - last <= NET_STATE_STALE_S and now - since >= NET_DOWN_LIGHT_S
+    except (OSError, ValueError):
+        return False
+
+
 def _reset(s: dict) -> None:
+    s["failing_since"] = None
+    s["last_round"] = None
     s["failed_rounds"] = 0
     s["step"] = 0
     s["exhausted"] = False
@@ -95,11 +121,14 @@ def _reset(s: dict) -> None:
 
 def decide(state: dict, obs: Observation, now: float) -> Decision:
     s = copy.deepcopy(state)
+    s["last_check"] = now
     # 1. a new boot restarts the ladder but keeps exhausted/announced/chain_reboots (a boot alone never counts)
     if s.get("boot_id") != obs.boot_id:
         s["boot_id"] = obs.boot_id
         s["failed_rounds"] = 0
         s["step"] = 0
+        s["failing_since"] = None
+        s["last_round"] = None
     # 2. rolling window
     s["chain_reboots"] = [r for r in s.get("chain_reboots", [])
                           if isinstance(r, dict) and isinstance(r.get("ts"), (int, float))  # malformed: dropped
@@ -112,9 +141,16 @@ def decide(state: dict, obs: Observation, now: float) -> Decision:
     if obs.healthy:
         _reset(s)
         return Decision(NONE, s, False)
-    # 5. never act right after boot or during a conversation; nothing counted
+    # 5. the outage clock starts at the first failed check, even in grace or a conversation (those only hold actions)
+    if not isinstance(s.get("failing_since"), (int, float)):
+        s["failing_since"] = now
+    # 5b. never act right after boot or during a conversation; nothing counted
     if obs.uptime_s < BOOT_GRACE_S or obs.conversation_open:
         return Decision(NONE, s, False)
+    # 5c. the timer runs every minute: a round counts at most every ROUND_S
+    if isinstance(s.get("last_round"), (int, float)) and now - s["last_round"] < ROUND_S:
+        return Decision(NONE, s, False)
+    s["last_round"] = now
     # 6. need consecutive failed rounds
     s["failed_rounds"] += 1
     if s["failed_rounds"] < FAILED_ROUNDS_BEFORE_ACTION:

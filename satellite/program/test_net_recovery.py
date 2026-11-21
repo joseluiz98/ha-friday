@@ -14,7 +14,7 @@ def run_rounds(state, n, now=1000.0, **kw):
     """Run n rounds; return (final_state, [Decision...])."""
     out = []
     for i in range(n):
-        d = nr.decide(state, obs(**kw), now + i)
+        d = nr.decide(state, obs(**kw), now + i * nr.ROUND_S)
         state = d.state
         out.append(d)
     return state, out
@@ -39,7 +39,7 @@ class DecideTest(unittest.TestCase):
         st, ds = run_rounds(nr.fresh_state(), 4, now=5000.0)
         self.assertEqual([d.action for d in ds], [nr.NONE, nr.BOUNCE, nr.RESTART_NM, nr.REBOOT])
         self.assertEqual(len(st["chain_reboots"]), 1)
-        self.assertEqual(st["chain_reboots"][0], {"ts": 5003.0, "boot_id": "b1"})
+        self.assertEqual(st["chain_reboots"][0], {"ts": 5000.0 + 3 * nr.ROUND_S, "boot_id": "b1"})
 
     def test_new_boot_restarts_ladder_keeps_cap(self):
         st, _ = run_rounds(nr.fresh_state(), 4)
@@ -104,6 +104,41 @@ class DecideTest(unittest.TestCase):
         nr.decide(st, obs(boot_id="b0"), 1000.0)
         self.assertEqual(st, before)
 
+    def test_failing_since_set_on_first_failure_even_in_grace_or_conversation(self):
+        d = nr.decide(nr.fresh_state(), obs(uptime_s=10), 1000.0)
+        self.assertEqual(d.state["failing_since"], 1000.0)
+        d = nr.decide(nr.fresh_state(), obs(conversation_open=True), 1000.0)
+        self.assertEqual(d.state["failing_since"], 1000.0)
+        d = nr.decide(d.state, obs(conversation_open=True), 1060.0)
+        self.assertEqual(d.state["failing_since"], 1000.0)
+
+    def test_healthy_clears_failing_since(self):
+        st = dict(nr.fresh_state(), boot_id="b1", failing_since=1000.0, last_round=1000.0)
+        d = nr.decide(st, obs(healthy=True), 1100.0)
+        self.assertIsNone(d.state["failing_since"])
+        self.assertIsNone(d.state["last_round"])
+
+    def test_new_boot_clears_failing_since(self):
+        st = dict(nr.fresh_state(), boot_id="b1", failing_since=1.0)
+        d = nr.decide(st, obs(boot_id="b2"), 1000.0)
+        self.assertEqual(d.state["failing_since"], 1000.0)  # cleared, then set by this failed check
+
+    def test_last_check_written_every_run(self):
+        self.assertEqual(nr.decide(nr.fresh_state(), obs(healthy=True), 1234.0).state["last_check"], 1234.0)
+        self.assertEqual(nr.decide(nr.fresh_state(), obs(), 1234.0).state["last_check"], 1234.0)
+        self.assertEqual(nr.decide(nr.fresh_state(), obs(has_profile=False), 1234.0).state["last_check"], 1234.0)
+
+    def test_rounds_count_at_most_every_round_s(self):
+        st, acts = nr.fresh_state(), {}
+        for t in range(0, 601, 60):
+            d = nr.decide(st, obs(), float(t))
+            st = d.state
+            acts[t] = d.action
+        for t, a in acts.items():
+            expected = {300: nr.BOUNCE, 600: nr.RESTART_NM}.get(t, nr.NONE)
+            self.assertEqual(a, expected, t)
+        self.assertEqual(st["failed_rounds"], 3)
+
 
 class StateTest(unittest.TestCase):
     def setUp(self):
@@ -139,6 +174,22 @@ class StateTest(unittest.TestCase):
         self.assertIs(nr.read_exhausted(self.p), True)
         self._write('{"exhausted": false}')
         self.assertIs(nr.read_exhausted(self.p), False)
+
+    def test_read_net_down(self):
+        self._write('{"failing_since": 1000.0, "last_check": 1110.0}')
+        self.assertIs(nr.read_net_down(1119.0, self.p), False)
+        self.assertIs(nr.read_net_down(1120.0, self.p), True)
+
+    def test_read_net_down_stale_file_is_false(self):
+        self._write('{"failing_since": 1000.0, "last_check": 1000.0}')
+        self.assertIs(nr.read_net_down(1181.0, self.p), False)
+        self.assertIs(nr.read_net_down(1180.0, self.p), True)
+
+    def test_read_net_down_missing_corrupt_or_none(self):
+        self.assertIs(nr.read_net_down(2000.0, self.p), False)
+        for bad in ('x', '{"failing_since": null, "last_check": 1.0}', '{"failing_since": "a", "last_check": 1.0}'):
+            self._write(bad)
+            self.assertIs(nr.read_net_down(2000.0, self.p), False)
 
 
 if __name__ == "__main__":
