@@ -75,9 +75,10 @@ class Maestro:
         self._fila_anuncios, self._anuncio = [], None  # (id, instante) de anúncios esperando; id do que está tocando
         self._cadastro = None  # {"nome", "id"} agendado na conversa ou em gravação; fora de _zerar
         self._teste = None  # {"inicio", "fim", "contagem", "avisou"} do teste da palavra; fora de _zerar
-        # spec 2026-11-08 (rede): a cadeia de recuperação esgotou; luz de erro fixa em repouso. Fora de _zerar.
+        # spec 2026-11-08 (rede), 2026-11-21: sem rede há >= 2 min (o netwatch registra o início da queda, com o Pi
+        # em falta ou não); luz de erro fixa em repouso. O nome `rede_esgotada` ficou. Fora de _zerar.
         self.rede_esgotada = False
-        # o mudo foi apertado com a rede esgotada (tocou o som de erro): ao voltar a rede, desfaz o mudo
+        # o mudo foi apertado com a luz de rede acesa (tocou o som de erro): ao voltar a rede, desfaz o mudo
         self._mudo_na_falha = False
         self._zerar()
 
@@ -379,7 +380,7 @@ class Maestro:
         return self._fechar(agora, self._motivo_corte, som=None)
 
     def _repouso(self):
-        if self.rede_esgotada:  # a luz de erro de rede vence o não perturbe
+        if self.rede_esgotada:  # sem rede há >= 2 min (spec 2026-11-21): a luz de erro de rede vence o não perturbe
             return "rede_esgotada"
         return "nao_perturbe" if self.nao_perturbe else "parada"
 
@@ -438,7 +439,7 @@ class Maestro:
                     self._sem_fim = True
             luz = [("luz", self._luz_do_estado())]
             return ([("som", som)] if som else []) + luz
-        if nome == "rede_esgotada":  # spec 2026-11-08: vem do arquivo de estado do netwatch (programa principal)
+        if nome == "rede_esgotada":  # spec 2026-11-08/21: "sem rede há >= 2 min", do arquivo de estado do netwatch
             novo = bool(valor)
             mudou = novo != self.rede_esgotada
             self.rede_esgotada = novo

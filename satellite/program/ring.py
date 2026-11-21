@@ -6,6 +6,8 @@ setup, updating, error, muted, net_error (erro persistente de rede), update_pend
 Composição (spec 2026-11-16-ring-state-priority): o anel guarda CAMADAS (a luz do maestro, os comandos de fora, o erro
 momentâneo, o update pendente) e desenha a de maior prioridade (`PRIORIDADE`); o MUDO é um indicador à parte, por cima
 de qualquer base, nos dois aparelhos. `muted` como estado só existe na prévia (um estado por vez, sem composição).
+O erro momentâneo (só XVF3800) dura ERROR_HOLD_S (10 s) quando vem de fora (`show("error")`) e FLASH_ERROR_S (2 s)
+quando é a piscada do bipe de erro do programa (`flash_error`, spec 2026-11-21); no Jabra a piscada não faz nada.
 O programa nunca cai por causa do anel: falha de driver vira NullRing/registro.
 Módulo puro: usb/vendor só são importados dentro de `default_xvf_transport` / `default_usb_find`."""
 import contextlib, io, math, os, sys, threading
@@ -33,6 +35,7 @@ BRIGHTNESS = 255
 LED_OFFSET = 5     # 17/11 (bancada): índice do LED 0 em relação a 0° do DOA (LED 0 às 7h, USB às 12h)
 LED_SENTIDO = 1    # 17/11 (bancada): sentido horário
 ERROR_HOLD_S = 10.0  # erro no XVF3800 é momentâneo: depois disso volta ao estado anterior
+FLASH_ERROR_S = 2.0  # 21/11: piscada vermelha a cada bipe de erro do programa (flash_error); só o XVF
 COR_BASE_CONVERSA = 0x000010
 COR_PONTEIRO = 0x0000FF
 COR_PONTEIRO_VIZINHO = 0x000060
@@ -130,6 +133,18 @@ class _Composto:
                     self._direcao = direction
             self._redesenhar()
 
+    def flash_error(self, hold_s=FLASH_ERROR_S):
+        """21/11 (spec error-light): o erro momentâneo por `hold_s` s, igual a `show("error")` mas curto; o programa
+        chama a cada bipe de erro. No Jabra o `error` seria persistente e ele não tem vermelho fora do LED do mudo:
+        não faz nada."""
+        if not self.ERRO_MOMENTANEO:
+            return
+        with self._trava:
+            self._cru = None
+            self._comecar_erro(hold_s)
+            self._estado.set_layer("externo", "error")
+            self._redesenhar()
+
     def show_maestro(self, state, direction=None):
         self._validar(state)
         with self._trava:
@@ -179,7 +194,7 @@ class _Composto:
         direcao = self._direcao if self._direcao is not None else self._dir_fixa
         self._draw(base, mudo, direcao if base == "listen" else None)
 
-    def _comecar_erro(self):  # só no driver com erro momentâneo
+    def _comecar_erro(self, hold=ERROR_HOLD_S):  # só no driver com erro momentâneo
         pass
 
     def _fim_do_erro(self, devolver=False):
@@ -293,12 +308,12 @@ class Xvf3800Ring(_Composto):
         return t
 
     # ---- erro momentâneo
-    def _comecar_erro(self):
+    def _comecar_erro(self, hold=ERROR_HOLD_S):
         if self._timer is not None:
             self._timer.cancel()  # erro repetido: a volta continua sendo a de antes do primeiro
         else:
             self._volta = self._estado._camadas["externo"]
-        self._timer = self._agendar_proprio(ERROR_HOLD_S, self._voltar, "_timer")
+        self._timer = self._agendar_proprio(hold, self._voltar, "_timer")
 
     def _fim_do_erro(self, devolver=False):
         if self._timer is not None:

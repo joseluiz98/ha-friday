@@ -1,7 +1,7 @@
 """Satellite network recovery runner (spec 2026-11-08, replaces the notice-only netwatch of 2026-11-05).
 
-Runs every 5 min from friday-netwatch.timer. Gathers observations, asks `net_recovery.decide()` what to do, saves the
-persistent state (before acting, so a reboot keeps the record) and runs the action: bounce the interface, restart
+Runs every minute from friday-netwatch.timer (the ladder counts a round at most every 5 min; spec 2026-11-21).
+Gathers observations, asks `net_recovery.decide()` what to do, saves the persistent state (before acting, so a reboot keeps the record) and runs the action: bounce the interface, restart
 NetworkManager, or reboot. It speaks `no_wifi.wav` at most once per episode and only with do-not-disturb off. It
 depends on nothing but the Pi itself (no network, HA or brain)."""
 import argparse, json, os, subprocess, sys, time, urllib.request
@@ -233,7 +233,8 @@ def passo(run=subprocess.run, now=time.time, state_path=STATE_PATH, cfg_path=CFG
     st = decision.state
     result = {"interface": dev, "healthy": ok, "pi_at_fault": fault, "action": action,
               "exhausted": st["exhausted"], "spoke": spoke, "failed_rounds": st["failed_rounds"],
-              "chain_reboots_24h": len(st["chain_reboots"]), "dry_run": dry_run}
+              "chain_reboots_24h": len(st["chain_reboots"]), "dry_run": dry_run,
+              "failing_since": st["failing_since"]}
     print(json.dumps(result), flush=True)
     return result
 

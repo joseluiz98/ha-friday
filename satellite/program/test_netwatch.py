@@ -67,6 +67,7 @@ class Base(unittest.TestCase):
         self.set_uptime(10_000)
         self.sys_root = j("sys")
         self.t = [1000.0]
+        self.rounds = 0
         self.conv = {"estado": "parada"}
         self.http_calls = []
 
@@ -83,6 +84,10 @@ class Base(unittest.TestCase):
         return self.conv
 
     def step(self, fake, **kw):
+        # each call after the first is a new round: the ladder counts a round at most every ROUND_S
+        if self.rounds:
+            self.t[0] += nr.ROUND_S
+        self.rounds += 1
         args = dict(run=fake, now=lambda: self.t[0], state_path=self.state_path, cfg_path=self.cfg,
                     sons=os.path.join(self.d, "sons"), sleep=lambda s: None, http_get=self.http_get,
                     boot_path=self.boot_path, uptime_path=self.up_path, sys_root=self.sys_root)
@@ -107,7 +112,7 @@ class PassoTest(Base):
         self.assertEqual(f.played(), [])
         self.assertEqual(json.loads(self.out.strip().splitlines()[-1]), res)
         for k in ("interface", "healthy", "pi_at_fault", "action", "exhausted", "spoke", "failed_rounds",
-                  "chain_reboots_24h", "dry_run"):
+                  "chain_reboots_24h", "dry_run", "failing_since"):
             self.assertIn(k, res)
 
     def test_second_failed_round_bounces_and_speaks_with_dnd_off(self):
