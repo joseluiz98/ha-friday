@@ -44,10 +44,7 @@ def validar(corpo, satelites: dict) -> tuple[str, list[str]]:
         ids = sorted(satelites)
     elif not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids):
         raise ValueError("satellites é uma lista de ids")
-    ids = list(dict.fromkeys(ids))
-    desconhecidos = [i for i in ids if i not in satelites]
-    if desconhecidos:
-        raise ValueError("satélite desconhecido")
+    ids = list(dict.fromkeys(ids))  # um id fora do cadastro não cala os outros: responde sem_satelite (anunciar)
     if not ids:
         raise ValueError("nenhum satélite cadastrado")
     return texto, ids
@@ -211,7 +208,11 @@ async def _reenviar(deps, sid: str, anuncio_id: str, wav: bytes, t0: float, prim
 
 
 async def anunciar(corpo, deps) -> dict:
-    texto, ids = validar(corpo, deps.satelites)  # ValueError → 400, sem TTS
+    texto, pedidos = validar(corpo, deps.satelites)  # ValueError → 400, sem TTS
+    ids = [i for i in pedidos if i in deps.satelites]
+    sem = {i: "sem_satelite" for i in pedidos if i not in deps.satelites}
+    if not ids:
+        return {"id": None, "satelites": sem, "cache": None}
     inicio = time.monotonic()
     t0 = deps.agora()
     anuncio_id = secrets.token_hex(6)
@@ -231,7 +232,7 @@ async def anunciar(corpo, deps) -> dict:
             linha.update(tts_erro=type(e).__name__, tts_ms=round((time.monotonic() - t_tts) * 1000),
                          satelites={sid: "erro" for sid in ids})
             deps.registrar(linha)
-            return {"id": anuncio_id, "satelites": linha["satelites"], "cache": "miss"}
+            return {"id": anuncio_id, "satelites": {**linha["satelites"], **sem}, "cache": "miss"}
         linha["tts_ms"] = round((time.monotonic() - t_tts) * 1000)
         try:
             deps.registrar_uso(anuncio_id, ajustes["model"], uso)
@@ -259,6 +260,7 @@ async def anunciar(corpo, deps) -> dict:
             t.add_done_callback(_em_curso.discard)
         else:
             resultado[sid] = _resposta_valida(r)
+    resultado.update(sem)
     linha["satelites"] = resultado
     deps.registrar(linha)
     return {"id": anuncio_id, "satelites": resultado, "cache": linha["cache"]}

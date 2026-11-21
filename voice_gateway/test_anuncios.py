@@ -107,7 +107,7 @@ class TestValidar(unittest.TestCase):
 
     def test_recusas(self):
         for corpo in (None, [], {"text": "   "}, {"text": "x" * 501}, {"text": 5}, {},
-                      {"text": "Oi", "satellites": ["sat-ffffff"]}, {"text": "Oi", "satellites": "sat-0a1b2c"},
+                      {"text": "Oi", "satellites": "sat-0a1b2c"},
                       {"text": "Oi", "satellites": []}):
             with self.assertRaises(ValueError, msg=repr(corpo)):
                 an.validar(corpo, SATS)
@@ -170,6 +170,18 @@ class TestAnunciar(Base):
         linha = self.deps.registros[0]
         self.assertEqual((linha["tipo"], linha["id"], linha["cache"]), ("anuncio", r["id"], "miss"))
         self.assertNotIn("jantar", json.dumps(linha))  # o texto não vai para o log
+
+    async def test_satelite_desconhecido_nao_cala_os_outros(self):
+        """Um id que o HA conhece e o satellites.json não (aposentado, renomeado): só ele responde sem_satelite."""
+        self.ok("192.0.2.15")
+        r = await self.anunciar({"text": "O jantar está pronto", "satellites": ["sat-0a1b2c", "sat-ffffff"]})
+        self.assertEqual(r["satelites"], {"sat-0a1b2c": "vou_tocar", "sat-ffffff": "sem_satelite"})
+        self.assertEqual(len(self.deps.tts_chamadas), 1)
+
+    async def test_so_desconhecidos_nao_chama_o_tts(self):
+        r = await self.anunciar({"text": "Oi", "satellites": ["sat-ffffff"]})
+        self.assertEqual(r["satelites"], {"sat-ffffff": "sem_satelite"})
+        self.assertEqual(self.deps.tts_chamadas, [])
 
     async def test_cache_hit_nao_chama_o_tts(self):
         self.ok("192.0.2.15"); self.ok("192.0.2.16")
