@@ -466,7 +466,9 @@ async def main() -> None:
     app = local.make_app(token, on_event, core.app())
     if pairable:
         pairing.add_routes(app, session, sat_id, on_paired)
-    recordings.add_routes(app, token, RECORDINGS)
+    # 21/11: satellites adopted with the spoken code are called by HA with ha_token; legacy ones (hand-paired)
+    # present the local password. Both open the recordings routes.
+    recordings.add_routes(app, (ha_token, token), RECORDINGS)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()

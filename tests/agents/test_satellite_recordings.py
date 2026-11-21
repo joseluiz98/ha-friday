@@ -62,3 +62,49 @@ async def test_rejects_bad_names(client):
     for n in ("notes.txt", "..%2F20261103_100215.wav", "%2e%2e%2fsecret.wav", "escape_20261103_000000.wav",
               "nope_20261103_000001.wav"):
         assert (await client.get("/v1/recordings/" + n, headers=H)).status == 404, n
+
+
+URLS = ("/v1/recordings/days", "/v1/recordings?date=20261103", "/v1/recordings/" + NAMES[0])
+
+
+@pytest.fixture
+def make_client(aiohttp_client, tmp_path):
+    async def build(tokens):
+        folder = tmp_path / "ativacoes2"
+        folder.mkdir(exist_ok=True)
+        (folder / NAMES[0]).write_bytes(b"RIFF" + NAMES[0].encode())
+        app = web.Application()
+        recordings.add_routes(app, tokens, str(folder))
+        return await aiohttp_client(app)
+    return build
+
+
+async def test_ha_token_serves(make_client):
+    c = await make_client(("ha", "local"))
+    r = await c.get(URLS[2], headers={"Authorization": "Bearer ha"})
+    assert r.status == 200
+
+
+async def test_local_token_serves(make_client):
+    c = await make_client(("ha", "local"))
+    r = await c.get(URLS[2], headers={"Authorization": "Bearer local"})
+    assert r.status == 200
+
+
+async def test_wrong_token_401(make_client):
+    c = await make_client(("ha", "local"))
+    for url in URLS:
+        assert (await c.get(url)).status == 401
+        assert (await c.get(url, headers={"Authorization": "Bearer other"})).status == 401
+        assert (await c.get(url, headers={"Authorization": "Bearer "})).status == 401
+
+
+async def test_same_token_twice_is_fine(make_client):
+    c = await make_client(("tok", "tok"))
+    assert (await c.get(URLS[2], headers={"Authorization": "Bearer tok"})).status == 200
+
+
+async def test_empty_token_in_set_never_matches(make_client):
+    c = await make_client(("", "local"))
+    assert (await c.get(URLS[2], headers={"Authorization": "Bearer "})).status == 401
+    assert (await c.get(URLS[2], headers={"Authorization": "Bearer local"})).status == 200
