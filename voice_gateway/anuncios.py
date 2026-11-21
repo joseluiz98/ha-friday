@@ -101,11 +101,21 @@ def chave(tts: dict, texto: str) -> str:
     return hashlib.sha256(f"{tts['voice']}\n{tts['model']}\n{tts.get('rate', 'normal')}\n{texto}".encode()).hexdigest()
 
 
+def reamostrar(pcm: bytes, de: int, para: int) -> bytes:
+    """Reamostra PCM S16LE mono por interpolação linear (sem pipecat: o CI importa este módulo)."""
+    import numpy as np
+    if de == para or not pcm:
+        return pcm
+    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+    n = max(1, int(round(len(x) * para / de)))
+    y = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
+    return np.clip(y, -32768, 32767).astype(np.int16).tobytes()
+
+
 def wav_48k_estereo(pcm24_mono: bytes) -> bytes:
     import numpy as np
-    from whisper_mode import _reamostrar
     pcm = pcm24_mono[:len(pcm24_mono) // 2 * 2]
-    mono = np.frombuffer(_reamostrar(pcm, 24000, 48000), dtype=np.int16)
+    mono = np.frombuffer(reamostrar(pcm, 24000, 48000), dtype=np.int16)
     estereo = np.repeat(mono[:, None], 2, axis=1)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:

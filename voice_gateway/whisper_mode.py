@@ -45,12 +45,8 @@ def _rate_do_mime(mime: str, padrao: int = TTS_RATE) -> int:
 
 
 def _reamostrar(pcm: bytes, de: int, para: int = TTS_RATE) -> bytes:
-    if de == para or not pcm:
-        return pcm
-    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
-    n = max(1, int(round(len(x) * para / de)))
-    y = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
-    return np.clip(y, -32768, 32767).astype(np.int16).tobytes()
+    from anuncios import reamostrar
+    return reamostrar(pcm, de, para)
 
 
 async def stream_whisper_tts(client, tts: dict, text: str):
