@@ -79,6 +79,18 @@ def test_reference_matches_current_on_fixture_repo(new, ref, repo, branch):
     assert new.sweep([repo], [], []) == ref.sweep([repo], [], [])
 
 
+def test_cached_runs_match_the_reference_cold_warm_and_after_new_commits(new, ref, repo, make_repo, branch, tmp_path):
+    P, A, a = PRIVATE, new.parse_allow(ALLOW_LINES), ref.parse_allow(ALLOW_LINES)
+    cache = str(tmp_path / "cache" / "k")
+    expect = ref.sweep_history(repo, P, a)
+    assert new.sweep_history(repo, P, A, cache=cache) == expect            # cold
+    assert new.sweep_history(repo, P, A, cache=cache) == expect            # warm
+    sha = branch(repo, "more", {"x.txt": "fresh Zelda\n", "y.txt": "clean\n"})
+    assert new.sweep_history(repo, P, A, cache=cache) == ref.sweep_history(repo, P, a)
+    assert new.sweep_history(repo, P, A, [sha], cache=cache) == ref.sweep_history(repo, P, a, [sha])
+    assert new.sweep_history(repo, P + ["fresh"], A, cache=cache + "2") == ref.sweep_history(repo, P + ["fresh"], a)
+
+
 def test_reference_matches_current_on_staged_tree(new, ref, make_repo):
     repo = make_repo([{"base.txt": "ok\n"}])
     files = _history_files()[0]

@@ -14,6 +14,7 @@ Output names file, line and category, with the value masked.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import importlib.util
 import os
 import re
@@ -216,17 +217,96 @@ def _iter_blobs(repo: str, revs: list[str] | None):
             yield sha, paths[sha], data
 
 
-def sweep_history(repo: str, private: list, allow: list[AllowRule], revs: list[str] | None = None) -> list:
-    """Every blob reachable from `revs` (full history, not only new commits); None = every ref (--all)."""
+CACHE_MAGIC = "# friday sweep clean-blob cache v1"
+
+
+def rules_key(repo: str, list_path: str | None, allow_path: str | None = None) -> str:
+    """Hash of everything that can change a verdict on a blob: this script, the pattern module, the private list (or
+    "none"), the `.sweep-allow` file (or "none"), the repo's absolute path (allow globs match absolute paths) and the
+    Python version (the `re` engine). Any change gives a different key, so every blob is scanned again."""
+    def blob(path):
+        if not path or not os.path.exists(path):
+            return b"<none>"
+        with open(path, "rb") as f:
+            return f.read()
+
+    h = hashlib.sha256()
+    for part in (CACHE_MAGIC.encode(), blob(__file__), blob(os.path.join(HERE, "inventory_scan.py")),
+                 blob(list_path), blob(allow_path if allow_path is not None else os.path.join(REPO, ".sweep-allow")),
+                 os.path.abspath(repo).encode("utf-8", "surrogateescape"), sys.version.encode()):
+        h.update(len(part).to_bytes(8, "big") + part)
+    return h.hexdigest()
+
+
+def _load_cache(path: str) -> set[tuple[str, str]]:
+    """Clean `(blob sha, path)` pairs from a cache file; a file that cannot be read or parsed entirely is ignored."""
+    try:
+        with open(path, "rb") as f:
+            lines = f.read().decode("utf-8").split("\n")
+        if lines.pop() != "" or lines[:1] != [CACHE_MAGIC] or not lines[-1].startswith("# end "):
+            return set()
+        end = lines.pop()
+        pairs = set()
+        for line in lines[1:]:
+            sha, sep, rel = line.partition(" ")
+            if not sep or not rel or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha):
+                return set()
+            pairs.add((sha, rel))
+        return pairs if end == f"# end {len(pairs)}" and len(lines) - 1 == len(pairs) else set()
+    except (OSError, UnicodeError, IndexError):
+        return set()
+
+
+def _save_cache(path: str, pairs: set[tuple[str, str]]) -> None:
+    """Write the cache atomically (0600, in a 0700 directory) and drop the files of other keys. Never raises: the
+    cache only saves work, so a failure to store it must not fail a sweep."""
+    try:
+        d = os.path.dirname(path)
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        body = "".join(f"{sha} {rel}\n" for sha, rel in sorted(pairs))
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(f"{CACHE_MAGIC}\n{body}# end {len(pairs)}\n")
+        os.replace(tmp, path)
+        for name in os.listdir(d):
+            if os.path.join(d, name) != path:
+                try:
+                    os.unlink(os.path.join(d, name))
+                except OSError:
+                    pass
+    except (OSError, UnicodeError):
+        pass
+
+
+def sweep_history(repo: str, private: list, allow: list[AllowRule], revs: list[str] | None = None,
+                  cache: str | None = None) -> list:
+    """Every blob reachable from `revs` (full history, not only new commits); None = every ref (--all).
+
+    `cache` is a file of `(blob sha, path)` pairs already proven clean; it skips the read and scan of those pairs and
+    adds the clean ones of this run. It is only valid for one set of rules (private list, allow rules, scripts, repo
+    path): the caller names it after `rules_key`."""
     if revs == []:
         return []
     pv = _private(private)
-    found = []
-    for sha, path, data in _iter_blobs(repo, revs):
-        if b"\x00" in data[:8192]:
+    named = _list_blobs(repo, revs)
+    clean = _load_cache(cache) if cache else set()
+    todo = [(sha, path) for sha, path in named if (sha, path) not in clean]
+    paths = dict(todo)
+    found, proven = [], set()
+    for sha, data in _read_blobs(repo, [sha for sha, _ in todo]):
+        if data is None:
             continue
-        found += [f._replace(path=f"{path}@{sha[:8]}") for f in
-                  _scan_text(os.path.join(repo, path), data.decode("utf-8", "replace"), pv, allow, path)]
+        path = paths[sha]
+        hits = [] if b"\x00" in data[:8192] else [
+            f._replace(path=f"{path}@{sha[:8]}") for f in
+            _scan_text(os.path.join(repo, path), data.decode("utf-8", "replace"), pv, allow, path)]
+        if hits:
+            found += hits
+        else:
+            proven.add((sha, path))
+    if cache and (proven - clean or not os.path.exists(cache)):
+        _save_cache(cache, clean | proven)
     return found
 
 
@@ -243,6 +323,18 @@ def sweep_staged(repo: str, private: list, allow: list[AllowRule]) -> list:
     return found
 
 
+def _cache_file(repo: str, list_path: str | None, allow_path: str) -> str | None:
+    """`<git dir>/sweep-cache/<rules key>` of `repo`, or None when the cache is off or cannot be placed."""
+    if os.environ.get("FRIDAY_SWEEP_NO_CACHE") == "1":
+        return None
+    try:
+        out = subprocess.run(["git", "-C", repo, "rev-parse", "--git-path", "sweep-cache"], capture_output=True,
+                             text=True, check=True).stdout.strip()
+        return os.path.join(repo, out, rules_key(repo, list_path, allow_path)) if out else None
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
 def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     pre_push = "--pre-push" in args
@@ -253,8 +345,12 @@ def main(argv=None) -> int:
     allow_file = os.path.join(REPO, ".sweep-allow")
     allow = parse_allow(open(allow_file, encoding="utf-8")) if os.path.exists(allow_file) else []
     revs = pushed_revs(sys.stdin.read()) if pre_push else None
-    found = (sweep_history(args[0], private, allow, revs) if history else
-             sweep_staged(args[0], private, allow) if staged else sweep(args, private, allow))
+    if history:
+        # The clean-blob cache is for the pre-push hook only (CI's --history always scans everything).
+        cache = _cache_file(args[0], lst if private else None, allow_file) if pre_push and revs != [] else None
+        found = sweep_history(args[0], private, allow, revs, cache)
+    else:
+        found = sweep_staged(args[0], private, allow) if staged else sweep(args, private, allow)
     mode = "private list + generic" if private else "generic only"
     if found:
         print(f"❌ {len(found)} finding(s) ({mode}):")

@@ -277,3 +277,203 @@ def test_no_anchor_in_patterns():
             i += 1
         assert not (pat.flags & re.M), src
         assert "(?m" not in src and "(?s" not in src and "(?a" not in src
+
+
+# --- clean-blob cache for --pre-push (plan 2026-11-21-sweep-speed, Task 4) -----------------------------------------
+
+needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git missing in the python:slim test image; runs in GitHub CI and on HAOS")
+
+
+def _head(repo):
+    return subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _batch_reads(git):
+    return [c for c in git.calls if c[3:5] == ["cat-file", "--batch"]]
+
+
+@pytest.fixture
+def pre_push(monkeypatch, tmp_path):
+    """pre_push(repo, private_values=(), allow_lines=None) -> (exit code, output): the real `main --pre-push`, with the
+    private list and `.sweep-allow` taken from a scratch directory instead of this repo's."""
+    import io
+
+    def run(repo, private=(), allow_lines=None, capsys=None):
+        cfg = tmp_path / "cfg"
+        cfg.mkdir(exist_ok=True)
+        lst = cfg / "private.txt"
+        lst.write_text("".join(f"{v}\n" for v in private))
+        if not private:
+            lst.unlink()
+        allow = cfg / ".sweep-allow"
+        allow.unlink(missing_ok=True)
+        if allow_lines is not None:
+            allow.write_text("".join(f"{x}\n" for x in allow_lines))
+        monkeypatch.setenv("FRIDAY_SENSITIVE_LIST", str(lst))
+        monkeypatch.setattr(sweep, "REPO", str(cfg))
+        monkeypatch.setattr("sys.stdin", io.StringIO(f"refs/heads/main {_head(repo)} refs/heads/main {'0' * 40}\n"))
+        rc = sweep.main(["--pre-push", repo])
+        return rc, capsys.readouterr().out if capsys else ""
+    return run
+
+
+def _cache_dir(repo):
+    return pathlib.Path(repo) / ".git" / "sweep-cache"
+
+
+@needs_git
+def test_cache_skips_clean_blobs_on_second_run(make_repo, monkeypatch, tmp_path):
+    repo = make_repo([{f"f{i}.txt": f"row {i}\n" for i in range(30)}, {"bad.txt": "Zelda\n"}])
+    cache = str(tmp_path / "cache" / "k")
+    git = _CountingGit(monkeypatch)
+    first = sweep.sweep_history(repo, ["Zelda"], [], cache=cache)
+    assert len(_batch_reads(git)) == 1 and len(first) == 1
+    git.calls.clear()
+    assert sweep.sweep_history(repo, ["Zelda"], [], cache=cache) == first
+    # only the dirty blob is read again; with no dirty blob nothing is read at all
+    assert len(_batch_reads(git)) == 1
+    clean_repo = make_repo([{f"f{i}.txt": f"row {i}\n" for i in range(30)}], name="clean")
+    cache2 = str(tmp_path / "cache" / "k2")
+    assert sweep.sweep_history(clean_repo, ["Zelda"], [], cache=cache2) == []
+    git.calls.clear()
+    assert sweep.sweep_history(clean_repo, ["Zelda"], [], cache=cache2) == []
+    assert _batch_reads(git) == []
+
+
+@needs_git
+def test_cache_never_stores_a_blob_with_findings(make_repo, tmp_path):
+    repo = make_repo([{"ok.txt": "fine\n", "bad.txt": "Zelda\n", "bad2.txt": "x " + "192" + ".168.1.5\n"}])
+    cache = tmp_path / "cache" / "k"
+    runs = [sweep.sweep_history(repo, ["Zelda"], [], cache=str(cache)) for _ in range(3)]
+    assert len(runs[0]) == 2 and runs[0] == runs[1] == runs[2]
+    stored = cache.read_text().splitlines()
+    assert [l.split(" ", 1)[1] for l in stored if not l.startswith("#")] == ["ok.txt"]
+
+
+@needs_git
+def test_new_private_value_invalidates_cache(make_repo, pre_push, capsys):
+    repo = make_repo([{"a.txt": "something about Karlinha\n", "b.txt": "plain\n"}])
+    assert pre_push(repo, ["Zelda"]) [0] == 0
+    assert any(_cache_dir(repo).iterdir())
+    assert pre_push(repo, ["Zelda"])[0] == 0, "warm run"
+    rc, out = pre_push(repo, ["Zelda", "Karlinha"], capsys=capsys)
+    assert rc == 1 and "a.txt" in out
+
+
+@needs_git
+def test_allow_change_invalidates_cache(make_repo, pre_push, capsys):
+    repo = make_repo([{"a.txt": "ip " + "192" + ".168.3.4\n"}])
+    assert pre_push(repo, allow_lines=["*/a.txt:192"])[0] == 0
+    assert pre_push(repo, allow_lines=["*/a.txt:192"])[0] == 0
+    assert pre_push(repo, allow_lines=[])[0] == 1
+    assert pre_push(repo, allow_lines=None)[0] == 1
+
+
+def test_script_change_invalidates_cache(tmp_path):
+    """Editing sweep.py or inventory_scan.py (a new pattern, a fixed bug) must rescan everything."""
+    def key():
+        spec = importlib.util.spec_from_file_location("sweep_copy", tmp_path / "scripts" / "sweep.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.rules_key(str(tmp_path), None, str(tmp_path / "none"))
+
+    (tmp_path / "scripts").mkdir()
+    for name in ("sweep.py", "inventory_scan.py"):
+        shutil.copy(ROOT / "scripts" / name, tmp_path / "scripts" / name)
+    base = key()
+    assert key() == base
+    with open(tmp_path / "scripts" / "inventory_scan.py", "a") as f:
+        f.write("\n# a new pattern would go here\n")
+    changed = key()
+    assert changed != base
+    with open(tmp_path / "scripts" / "sweep.py", "a") as f:
+        f.write("\n# a bug fix would go here\n")
+    assert key() not in (base, changed)
+
+
+def test_rules_key_changes_with_list_allow_and_repo(tmp_path):
+    base = sweep.rules_key(str(tmp_path), None, str(tmp_path / "none"))
+    assert sweep.rules_key(str(tmp_path), None, str(tmp_path / "none")) == base
+    (tmp_path / "lst").write_text("Zelda\n")
+    assert sweep.rules_key(str(tmp_path), str(tmp_path / "lst"), str(tmp_path / "none")) != base
+    (tmp_path / "allow").write_text("*:x\n")
+    assert sweep.rules_key(str(tmp_path), None, str(tmp_path / "allow")) != base
+    other = tmp_path / "other"; other.mkdir()
+    assert sweep.rules_key(str(other), None, str(tmp_path / "none")) != base, "the repo path is part of the key"
+
+
+@needs_git
+@pytest.mark.parametrize("junk", [b"\xff\xfe\x00garbage", b"", b"# friday sweep clean-blob cache v1\nnot-a-sha x.txt\n# end 1\n",
+                                  b"# friday sweep clean-blob cache v1\n" + b"a" * 40 + b" ok.txt\n"])   # no end marker (truncated)
+def test_corrupt_cache_means_full_scan(make_repo, tmp_path, monkeypatch, junk):
+    repo = make_repo([{"ok.txt": "fine\n", "bad.txt": "Zelda\n"}])
+    cache = tmp_path / "cache" / "k"
+    cache.parent.mkdir()
+    cache.write_bytes(junk)
+    git = _CountingGit(monkeypatch)
+    found = sweep.sweep_history(repo, ["Zelda"], [], cache=str(cache))
+    assert [f.path.split("@")[0] for f in found] == ["bad.txt"]
+    assert len(_batch_reads(git)) == 1
+    assert sweep._load_cache(str(cache)), "a valid cache is written back"
+    assert sweep.sweep_history(repo, ["Zelda"], [], cache=str(cache)) == found
+
+
+@needs_git
+def test_cache_is_keyed_by_path(make_repo, branch, tmp_path):
+    repo = make_repo([{"ok.txt": "same content\n"}])
+    cache = str(tmp_path / "cache" / "k")
+    assert sweep.sweep_history(repo, ["Zelda"], [], revs=["main"], cache=cache) == []
+    # the same blob, first seen at a path named after a resident, on another history
+    root = subprocess.run(["git", "-C", repo, "rev-list", "--max-parents=0", "HEAD"], check=True, capture_output=True,
+                          text=True).stdout.strip()
+    sha = branch(repo, "other", {"Zelda/ok.txt": "same content\n", "ok.txt": None}, base=root)
+    found = sweep.sweep_history(repo, ["Zelda"], [], revs=[sha], cache=cache)
+    assert [(f.path.split("@")[0], f.line) for f in found] == [("Zelda/ok.txt", None)]
+
+
+@needs_git
+def test_ci_history_mode_never_uses_cache(make_repo, monkeypatch, capsys):
+    repo = make_repo([{"ok.txt": "fine\n"}])
+    monkeypatch.setenv("FRIDAY_SENSITIVE_LIST", "/nonexistent/none")
+    git = _CountingGit(monkeypatch)
+    for _ in range(2):
+        assert sweep.main(["--history", repo]) == 0
+    assert len(_batch_reads(git)) == 2
+    assert not _cache_dir(repo).exists()
+
+
+@needs_git
+def test_no_cache_env_disables_the_cache(make_repo, pre_push, monkeypatch):
+    repo = make_repo([{"ok.txt": "fine\n"}])
+    monkeypatch.setenv("FRIDAY_SWEEP_NO_CACHE", "1")
+    assert pre_push(repo)[0] == 0
+    assert not _cache_dir(repo).exists()
+
+
+@needs_git
+def test_cache_file_mode_0600_and_has_no_values(make_repo, pre_push, tmp_path):
+    secret = "Zeldinha-" + "q" * 8
+    repo = make_repo([{"dir/ok.txt": "clean text\n", "bad.txt": secret + "\n"}])
+    assert pre_push(repo, [secret])[0] == 1
+    files = list(_cache_dir(repo).iterdir())
+    assert len(files) == 1
+    assert (files[0].stat().st_mode & 0o777) == 0o600 and (_cache_dir(repo).stat().st_mode & 0o777) == 0o700
+    text = files[0].read_text()
+    assert secret not in text and "clean text" not in text and "dir/ok.txt" in text and "bad.txt" not in text
+    assert all(len(l.split(" ", 1)[0]) == 40 for l in text.splitlines() if not l.startswith("#"))
+
+
+@needs_git
+def test_cache_keeps_one_generation(make_repo, pre_push):
+    repo = make_repo([{"ok.txt": "fine\n"}])
+    assert pre_push(repo, ["Zelda"])[0] == 0
+    assert pre_push(repo, ["Zelda", "Karlinha"])[0] == 0
+    assert len(list(_cache_dir(repo).iterdir())) == 1
+
+
+@needs_git
+def test_unwritable_cache_never_fails_the_sweep(make_repo, tmp_path):
+    repo = make_repo([{"ok.txt": "fine\n"}])
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file where the cache directory should be\n")
+    assert sweep.sweep_history(repo, ["Zelda"], [], cache=str(blocker / "k")) == []
