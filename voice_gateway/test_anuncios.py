@@ -1,5 +1,5 @@
 """cd voice_gateway && python3 -m unittest test_anuncios -v   (spec 2026-11-20 satellite announcements, Flow 4)"""
-import asyncio, io, json, os, tempfile, time, unittest, wave
+import asyncio, hashlib, io, json, os, struct, tempfile, time, types, unittest, wave
 
 import anuncios as an
 import canal_casa as cc
@@ -123,6 +123,77 @@ class TestWav(unittest.TestCase):
         self.assertEqual(w.getnframes(), 2 * len(PCM) // 2)
         dados = w.readframes(w.getnframes())
         self.assertEqual(dados[0:2], dados[2:4])  # canais iguais
+
+
+def _wav(frames: bytes, rate: int, canais: int, extra: bytes = b"") -> bytes:
+    """A complete WAV file as the TTS returns it: RIFF header, data chunk and optionally a trailing chunk."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(canais)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(frames)
+    b = buf.getvalue() + extra
+    return b[:4] + struct.pack("<I", len(b) - 8) + b[8:]
+
+
+LIST_CHUNK = b"LIST" + struct.pack("<I", 12) + b"INFOISFTabcd"
+
+
+class BlobTest(unittest.TestCase):
+    def test_blob_wav_drops_trailing_chunk(self):
+        amostras = struct.pack("<100h", *[100, -100] * 50)
+        blob = _wav(amostras, 24000, 1, LIST_CHUNK)
+        pcm, rate = an.pcm_do_blob(blob, "audio/wav")
+        self.assertEqual(rate, 24000)
+        self.assertEqual(pcm, amostras)  # first sample is audio (not "RIFF"), nothing from the LIST chunk
+
+    def test_blob_raw_unchanged(self):
+        self.assertEqual(an.pcm_do_blob(PCM + b"\x07", "audio/L16;codec=pcm;rate=24000"), (PCM, 24000))
+
+    def test_blob_wav_stereo_48k(self):
+        blob = _wav(struct.pack("<20h", *[200, 0] * 10), 48000, 2)
+        pcm, rate = an.pcm_do_blob(blob, "audio/wav")
+        self.assertEqual(rate, 48000)
+        self.assertEqual(pcm, struct.pack("<10h", *[100] * 10))
+
+    def test_blob_wav_invalid_raises(self):
+        with self.assertRaises(RuntimeError):
+            an.pcm_do_blob(b"RIFF" + b"\x00" * 10, "audio/wav")
+
+    def test_blob_wav_not_16_bit_raises(self):
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(1)
+            w.setframerate(24000)
+            w.writeframes(b"\x80" * 10)
+        with self.assertRaises(RuntimeError):
+            an.pcm_do_blob(buf.getvalue(), "audio/wav")
+
+    def test_chave_has_version(self):
+        t = vs.tts({}, ambiente={})
+        antiga = hashlib.sha256(f"{t['voice']}\n{t['model']}\nnormal\noi".encode()).hexdigest()
+        self.assertNotEqual(an.chave(t, "oi"), antiga)
+        self.assertEqual(an.chave(t, "oi"), an.chave(dict(t), "oi"))
+
+
+class TestFalarUnwrapsWav(unittest.IsolatedAsyncioTestCase):
+    @unittest.skipUnless(__import__("importlib").util.find_spec("pipecat"), "falar() imports whisper_mode (pipecat)")
+    async def test_falar_unwraps_wav(self):
+        amostras = struct.pack("<100h", *[100, -100] * 50)
+        blob = _wav(amostras, 24000, 1, LIST_CHUNK)
+        part = types.SimpleNamespace(inline_data=types.SimpleNamespace(data=blob, mime_type="audio/wav"))
+        resp = types.SimpleNamespace(candidates=[types.SimpleNamespace(content=types.SimpleNamespace(parts=[part]))],
+                                     usage_metadata=None)
+
+        async def gerar(**kw):
+            return resp
+
+        client = types.SimpleNamespace(aio=types.SimpleNamespace(models=types.SimpleNamespace(generate_content=gerar)))
+        pcm, _ = await an.falar(client, vs.tts({}, ambiente={}), "oi")
+        self.assertEqual(pcm, amostras)
+        self.assertNotIn(b"RIFF", pcm)
 
 
 class TestCache(unittest.TestCase):
