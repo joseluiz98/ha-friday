@@ -9,6 +9,7 @@ import hashlib
 import io
 import logging
 import os
+import re
 import secrets
 import tempfile
 import time
@@ -19,7 +20,7 @@ TTS_TIMEOUT_S = 15.0
 RETRY_CADA_S = 15.0
 RETRY_ATE_S = 300.0
 PRIMEIRA_RODADA_S = 18.0  # a resposta sai até aqui (a integração espera 30 s); o que faltar segue em segundo plano
-CACHE_LIMITE = 200
+CACHE_LIMITE = 100
 CACHE_VERSAO = "v2"  # v1 entries hold WAV headers played as audio (click/hiss); never served again
 RESPOSTAS_DA_PI = ("vou_tocar", "na_fila", "calado", "expirado")
 
@@ -151,8 +152,8 @@ def pcm_do_blob(dados: bytes, mime: str) -> tuple[bytes, int]:
     chunk), which must not be played as samples; a blob without RIFF is raw PCM at the mime's rate."""
     import numpy as np
     if dados[:4] != b"RIFF":
-        from whisper_mode import _rate_do_mime
-        return dados[:len(dados) // 2 * 2], _rate_do_mime(mime)
+        m = re.search(r"rate=(\d+)", mime or "")  # same rule as whisper_mode._rate_do_mime, without pipecat
+        return dados[:len(dados) // 2 * 2], int(m.group(1)) if m else 24000
     try:
         with wave.open(io.BytesIO(dados), "rb") as w:
             canais, largura, rate = w.getnchannels(), w.getsampwidth(), w.getframerate()

@@ -12,7 +12,7 @@ The chime file is clean; the satellite plays what it receives.
 - `falar()` returns only the audio samples: a blob starting with `RIFF` is opened with the `wave` module, its
   frames are taken at the header's rate, stereo is mixed down to mono, then the existing path (24 kHz, then 48 kHz
   stereo) runs. A raw PCM blob is unchanged. A `RIFF` blob that `wave` cannot read raises (never played as noise).
-- The cache key gets a version so the noisy cached files are never served again; the existing size limit (200)
+- The cache key gets a version so the noisy cached files are never served again; the size limit (lowered to 100 by the owner, 22/11)
   evicts them over time. No manual change on the VM.
 
 ## Non-goals
