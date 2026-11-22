@@ -70,6 +70,7 @@ class FridayConnection:
         self._host = self._hosts[0]  # the address in use (or last tried)
         self._port = port
         self._watch_task: asyncio.Task | None = None
+        self._reader: asyncio.Task | None = None
         self._wake = asyncio.Event()
         self._announced_host: str | None = None
         self._token = token
@@ -145,6 +146,17 @@ class FridayConnection:
         """The address the connection uses (the one last tried while it is down)."""
         return self._host
 
+    def _end_session(self) -> None:
+        """Make the running session finish; it closes its own websocket (one closer, never two at once) and the loop
+        reconnects on the current address list."""
+        if self._reader is not None:
+            self._reader.cancel()
+
+    @property
+    def hosts(self) -> list[str]:
+        """The addresses in order of preference."""
+        return list(self._hosts)
+
     def set_hosts(self, hosts: list[str], port: int) -> None:
         """New addresses from discovery: never reloads the entry. A session on a still-listed address is kept; one on
         a removed address (or port) is closed and the loop reconnects on the new list."""
@@ -154,7 +166,7 @@ class FridayConnection:
         self._hosts, in_use_port, self._port = hosts, self._port, port
         if self.connected and self._ws is not None and not self._ws.closed:
             if self._host not in hosts or in_use_port != port:
-                self.hass.async_create_task(_close_ws(self._ws))
+                self._end_session()
         else:
             self._wake.set()  # down and waiting out a backoff: try the new list now
 
@@ -263,22 +275,33 @@ class FridayConnection:
                 self._watch_task = self.hass.async_create_background_task(
                     self._cable_watch(ws), f"friday cable watch {self._subentry_id}"
                 )
+            reader = self.hass.async_create_background_task(
+                self._read(ws), f"friday reader {self._subentry_id}"
+            )
+            self._reader = reader
             try:
-                async for raw in ws:
-                    if raw.type == aiohttp.WSMsgType.TEXT:
-                        try:
-                            self._dispatch(parse_message(raw.data))
-                        except ProtocolError as err:
-                            _LOGGER.debug("Bad agent message: %s", err)
-                    elif raw.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
-                        break
+                await asyncio.wait({reader})
+                if reader.done() and not reader.cancelled():
+                    reader.result()  # an unexpected error in the loop surfaces here
             finally:
+                self._reader = None
+                reader.cancel()
                 task, self._watch_task = self._watch_task, None
                 if task is not None and task is not asyncio.current_task():
                     task.cancel()
         finally:
             await _close_ws(ws)  # also cancels the heartbeat timer the peer's close frame can re-arm
         return True
+
+    async def _read(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        async for raw in ws:
+            if raw.type == aiohttp.WSMsgType.TEXT:
+                try:
+                    self._dispatch(parse_message(raw.data))
+                except ProtocolError as err:
+                    _LOGGER.debug("Bad agent message: %s", err)
+            elif raw.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
+                break
 
     async def _probe(self, host: str, port: int) -> bool:
         """Does `host` accept a TCP connection on the agent's port?"""
@@ -307,7 +330,7 @@ class FridayConnection:
                     ok_since = now
                 if now - ok_since >= CABLE_STABLE_S:
                     _LOGGER.info("Agent %s: %s answers again, moving back", self._subentry_id, preferred)
-                    await _close_ws(ws)
+                    self._end_session()
                     return
             else:
                 ok_since = None

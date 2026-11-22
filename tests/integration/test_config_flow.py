@@ -130,7 +130,7 @@ async def test_zeroconf_discovery_offers_satellite(hass, monkeypatch):
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
 
 
-def _sat_info(ip="10.0.0.9", port=8701, state=None):
+def _sat_info(ip="10.0.0.9", port=8701, state=None, wired=None, wifi=None):
     from ipaddress import ip_address
 
     from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
@@ -138,6 +138,10 @@ def _sat_info(ip="10.0.0.9", port=8701, state=None):
     props = {"id": "sat-1", "kind": "satellite", "port": str(port)}
     if state:
         props["state"] = state
+    if wired:
+        props["wired"] = wired
+    if wifi:
+        props["wifi"] = wifi
     return ZeroconfServiceInfo(
         ip_address=ip_address(ip), ip_addresses=[ip_address(ip)], port=port,
         hostname="sat.local.", type="_friday._tcp.local.", name="sat-1._friday._tcp.local.",
@@ -145,58 +149,143 @@ def _sat_info(ip="10.0.0.9", port=8701, state=None):
     )
 
 
-async def _known_satellite(hass, monkeypatch):
-    """A configured entry with satellite sat-1 at 10.0.0.9:8701 (adopted through the zeroconf flow)."""
+async def _known_satellite(hass, monkeypatch, info=None):
+    """A configured entry with satellite sat-1 (default: old agent at 10.0.0.9:8701), adopted through the zeroconf flow."""
     entry = await _entry_with_noop(hass, monkeypatch)
     r = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": "zeroconf"}, data=_sat_info())
+        DOMAIN, context={"source": "zeroconf"}, data=info or _sat_info())
     await hass.config_entries.flow.async_configure(r["flow_id"], {"token": "t0k"})
     await hass.async_block_till_done()
     return entry, next(iter(entry.subentries.values()))
 
 
+class _Spy:
+    """Counts entry reloads and records what reaches the live connection. An address change must never reload."""
+
+    def __init__(self, reload, schedule, set_hosts):
+        self.reload, self.schedule, self.set_hosts = reload, schedule, set_hosts
+
+    @property
+    def reloads(self):
+        return self.reload.call_count + self.schedule.call_count
+
+
 async def _announce(hass, info):
     from unittest.mock import patch
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    from custom_components.friday import connection as c
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as schedule, \
+            patch.object(hass.config_entries, "async_reload") as reload, \
+            patch.object(c.FridayConnection, "set_hosts") as set_hosts:
         r = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": "zeroconf"}, data=info)
         await hass.async_block_till_done()
-    return r, reload
+    return r, _Spy(reload, schedule, set_hosts)
 
 
 async def test_zeroconf_new_address_updates_host(hass, monkeypatch):
+    """Old agent (no wired/wifi properties): the answer's address is the host, and nothing reloads."""
     entry, sub = await _known_satellite(hass, monkeypatch)
-    r, reload = await _announce(hass, _sat_info(ip="10.0.0.10"))
+    r, spy = await _announce(hass, _sat_info(ip="10.0.0.10"))
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
     sub = entry.subentries[sub.subentry_id]
     assert sub.data["host"] == "10.0.0.10" and sub.data["port"] == 8701
     assert sub.data["token"] == "t0k"  # the rest of the data is kept
-    reload.assert_called_once_with(entry.entry_id)
+    assert spy.reloads == 0
+
+
+async def test_zeroconf_old_agent_moves_without_reload(hass, monkeypatch):
+    entry, sub = await _known_satellite(hass, monkeypatch)
+    r, spy = await _announce(hass, _sat_info(ip="10.0.0.10"))
+    assert entry.subentries[sub.subentry_id].data["host"] == "10.0.0.10"
+    assert spy.reloads == 0
+    spy.set_hosts.assert_called_with(["10.0.0.10"], 8701)
 
 
 async def test_zeroconf_same_address_does_nothing(hass, monkeypatch):
     entry, sub = await _known_satellite(hass, monkeypatch)
-    r, reload = await _announce(hass, _sat_info())
+    r, spy = await _announce(hass, _sat_info())
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
     assert entry.subentries[sub.subentry_id].data["host"] == "10.0.0.9"
-    reload.assert_not_called()
+    assert spy.reloads == 0 and spy.set_hosts.call_count == 0
 
 
 async def test_zeroconf_new_port_updates(hass, monkeypatch):
     entry, sub = await _known_satellite(hass, monkeypatch)
-    r, reload = await _announce(hass, _sat_info(port=8702))
+    r, spy = await _announce(hass, _sat_info(port=8702))
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
     assert entry.subentries[sub.subentry_id].data["port"] == 8702
-    reload.assert_called_once_with(entry.entry_id)
+    assert spy.reloads == 0
+    spy.set_hosts.assert_called_with(["10.0.0.9"], 8702)
+
+
+async def test_zeroconf_adoption_stores_declared_addresses(hass, monkeypatch):
+    entry, sub = await _known_satellite(
+        hass, monkeypatch, _sat_info(ip="10.0.0.6", wired="10.0.0.5", wifi="10.0.0.6"))
+    assert sub.data["host_wired"] == "10.0.0.5" and sub.data["host_wifi"] == "10.0.0.6"
+    assert sub.data["host"] == "10.0.0.5"  # the preferred address (older code paths read `host`)
+
+
+async def test_zeroconf_ignores_answer_ip_with_props(hass, monkeypatch):
+    """avahi answers the same announcement from either interface: the IP of the answer is not the satellite's address."""
+    both = dict(wired="10.0.0.5", wifi="10.0.0.6")
+    entry, sub = await _known_satellite(hass, monkeypatch, _sat_info(ip="10.0.0.5", **both))
+    before = dict(sub.data)
+    r, spy = await _announce(hass, _sat_info(ip="10.0.0.6", **both))
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "already_configured"
+    assert dict(entry.subentries[sub.subentry_id].data) == before
+    assert spy.reloads == 0 and spy.set_hosts.call_count == 0
+
+
+async def test_zeroconf_new_wired_updates_hosts(hass, monkeypatch):
+    entry, sub = await _known_satellite(
+        hass, monkeypatch, _sat_info(ip="10.0.0.5", wired="10.0.0.5", wifi="10.0.0.6"))
+    r, spy = await _announce(hass, _sat_info(ip="10.0.0.7", wired="10.0.0.7", wifi="10.0.0.6"))
+    data = entry.subentries[sub.subentry_id].data
+    assert data["host"] == data["host_wired"] == "10.0.0.7" and data["host_wifi"] == "10.0.0.6"
+    assert data["token"] == "t0k"
+    spy.set_hosts.assert_called_with(["10.0.0.7", "10.0.0.6"], 8701)
+    assert spy.reloads == 0
+
+
+async def test_zeroconf_wifi_only_stable(hass, monkeypatch):
+    """MK1 (Wi-Fi only, no `wired`): the same announcement again changes nothing and logs no move."""
+    entry, sub = await _known_satellite(hass, monkeypatch, _sat_info(ip="10.0.0.6", wifi="10.0.0.6"))
+    assert "host_wired" not in sub.data
+    before = dict(sub.data)
+    r, spy = await _announce(hass, _sat_info(ip="10.0.0.6", wifi="10.0.0.6"))
+    assert dict(entry.subentries[sub.subentry_id].data) == before
+    assert spy.reloads == 0 and spy.set_hosts.call_count == 0
+
+
+async def test_zeroconf_cable_unplugged_drops_the_wired_address(hass, monkeypatch):
+    entry, sub = await _known_satellite(
+        hass, monkeypatch, _sat_info(ip="10.0.0.5", wired="10.0.0.5", wifi="10.0.0.6"))
+    r, spy = await _announce(hass, _sat_info(ip="10.0.0.6", wifi="10.0.0.6"))
+    data = entry.subentries[sub.subentry_id].data
+    assert "host_wired" not in data and data["host_wifi"] == data["host"] == "10.0.0.6"
+    spy.set_hosts.assert_called_with(["10.0.0.6"], 8701)
+    assert spy.reloads == 0
+
+
+async def test_zeroconf_move_never_reloads(hass, monkeypatch):
+    entry, sub = await _known_satellite(
+        hass, monkeypatch, _sat_info(ip="10.0.0.5", wired="10.0.0.5", wifi="10.0.0.6"))
+    r1, spy1 = await _announce(hass, _sat_info(ip="10.0.0.7", wired="10.0.0.7", wifi="10.0.0.8"))
+    r2, spy2 = await _announce(hass, _sat_info(ip="10.0.0.9", wired="10.0.0.9", wifi="10.0.0.10"))
+    assert spy1.reloads == 0 and spy2.reloads == 0
+    spy2.set_hosts.assert_called_with(["10.0.0.9", "10.0.0.10"], 8701)
+    data = entry.subentries[sub.subentry_id].data
+    assert data["host_wired"] == "10.0.0.9" and data["host_wifi"] == "10.0.0.10"
 
 
 async def test_zeroconf_pairable_does_not_move_host(hass, monkeypatch):
     entry, sub = await _known_satellite(hass, monkeypatch)
-    r, reload = await _announce(hass, _sat_info(ip="10.0.0.10", state="pairable"))
+    r, spy = await _announce(hass, _sat_info(ip="10.0.0.10", state="pairable"))
     assert r["type"] == FlowResultType.FORM and r["step_id"] == "pair"
     assert entry.subentries[sub.subentry_id].data["host"] == "10.0.0.9"
-    reload.assert_not_called()
+    assert spy.reloads == 0
 
 
 async def test_second_user_flow_aborts_single_instance(hass, monkeypatch):

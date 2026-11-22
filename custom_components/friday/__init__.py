@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -20,7 +22,7 @@ from . import image_view, provisioning, self_update
 from .recordings import RecordingView
 from .services import async_register_services
 from .const import (
-    CONF_AREA_ID, CONF_HOST, CONF_PORT, CONF_TOKEN, DEVICE_KIND_SATELLITE, DEVICE_KIND_SERVER, DOMAIN, EVENT_CHANGE,
+    CONF_AREA_ID, CONF_HOST, CONF_HOST_WIFI, CONF_HOST_WIRED, CONF_PORT, CONF_TOKEN, DEVICE_KIND_SATELLITE, DEVICE_KIND_SERVER, DOMAIN, EVENT_CHANGE,
     ORIGIN_HA, READ_ONLY_PLATFORMS,
 )
 
@@ -104,11 +106,27 @@ def _remove_retired_entities(hass: HomeAssistant, entry: FridayConfigEntry) -> N
             reg.async_remove(entity.entity_id)
 
 
+# Where a satellite is reached: changing these never reloads the entry, the live connection follows (21/11)
+_ADDRESS_KEYS = (CONF_HOST, CONF_HOST_WIRED, CONF_HOST_WIFI, CONF_PORT)
+
+
+def hosts_from(data: Mapping[str, Any]) -> list[str]:
+    """Addresses of a subentry in order of preference: the cable, then the Wi-Fi; old subentries have only `host`."""
+    hosts: list[str] = []
+    for key in (CONF_HOST_WIRED, CONF_HOST_WIFI):
+        host = data.get(key)
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts or [data[CONF_HOST]]
+
+
 def _reload_fingerprint(entry: ConfigEntry) -> str:
-    """What a reload depends on: entry data and the subentries. Options (general settings) are left out."""
+    """What a reload depends on: entry data and the subentries, minus where each is reached (see _ADDRESS_KEYS).
+    Options (general settings) are left out."""
     return json.dumps({
         "data": dict(entry.data),
-        "subentries": {sid: [sub.subentry_id, sub.subentry_type, sub.title, dict(sub.data)]
+        "subentries": {sid: [sub.subentry_id, sub.subentry_type, sub.title,
+                             {k: v for k, v in sub.data.items() if k not in _ADDRESS_KEYS}]
                        for sid, sub in entry.subentries.items()},
     }, sort_keys=True, default=str)
 
@@ -150,7 +168,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: FridayConfigEntry) -> bo
     for subentry_id, subentry in entry.subentries.items():
         data = subentry.data
         connections[subentry_id] = FridayConnection(
-            hass, data[CONF_HOST], data[CONF_PORT], data[CONF_TOKEN], subentry_id
+            hass, hosts_from(data), data[CONF_PORT], data[CONF_TOKEN], subentry_id
         )
     entry.runtime_data = connections
 
@@ -465,6 +483,11 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     """Subentry added, removed or edited: reload. Options-only changes (general settings) do not reload."""
     fingerprints = hass.data.setdefault(DOMAIN, {}).setdefault("fingerprints", {})
     if fingerprints.get(entry.entry_id) == _reload_fingerprint(entry):
+        # at most the addresses changed (discovery, or an edit): the live connections follow, no reload
+        for subentry_id, connection in (getattr(entry, "runtime_data", None) or {}).items():
+            subentry = entry.subentries.get(subentry_id)
+            if subentry is not None:
+                connection.set_hosts(hosts_from(subentry.data), subentry.data[CONF_PORT])
         return
     await hass.config_entries.async_reload(entry.entry_id)
 

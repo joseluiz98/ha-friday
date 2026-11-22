@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
@@ -38,7 +39,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
-    CONF_AREA_ID, CONF_HOST, CONF_PORT, CONF_PROXMOX_NODE, CONF_PROXMOX_TOKEN_ID,
+    CONF_AREA_ID, CONF_HOST, CONF_HOST_WIFI, CONF_HOST_WIRED, CONF_PORT, CONF_PROXMOX_NODE, CONF_PROXMOX_TOKEN_ID,
     CONF_PROXMOX_TOKEN_SECRET, CONF_PROXMOX_URL, CONF_PROXMOX_VMID, CONF_TOKEN,
     DEFAULT_PORT_SATELLITE, DEFAULT_PORT_SERVER, DEFAULT_PROXMOX_NODE, DEFAULT_PROXMOX_URL, DOMAIN,
 )
@@ -85,6 +86,23 @@ def _proxmox_data(user_input: dict[str, Any], old: dict[str, Any]) -> dict[str, 
 _LOGGER = logging.getLogger(__name__)
 
 
+def _declared_addresses(props: Mapping[str, Any]) -> dict[str, str]:
+    """The `wired`/`wifi` addresses a satellite announces (a missing key = no IPv4 on that interface)."""
+    return {k: str(props[k]) for k in ("wired", "wifi") if props.get(k)}
+
+
+def _address_data(declared: Mapping[str, str]) -> dict[str, str]:
+    """Subentry keys for declared addresses; `host` always holds the preferred one (cable, else Wi-Fi)."""
+    out = {}
+    if "wired" in declared:
+        out[CONF_HOST_WIRED] = declared["wired"]
+    if "wifi" in declared:
+        out[CONF_HOST_WIFI] = declared["wifi"]
+    if out:
+        out[CONF_HOST] = declared.get("wired") or declared["wifi"]
+    return out
+
+
 class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
     """The single F.R.I.D.A.Y. entry (no fields)."""
 
@@ -129,6 +147,7 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
         except ValueError:
             port = DEFAULT_PORT_SATELLITE
         host = str(discovery_info.ip_address)
+        declared = _declared_addresses(props)  # 21/11: the satellite says its own addresses (cable, Wi-Fi)
         sat_id = props.get("id") or f"{host}:{port}"
         await self.async_set_unique_id(f"satellite:{sat_id}")
         state = props.get("state")
@@ -136,20 +155,39 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
                          if sub.unique_id in (sat_id, f"{host}:{port}")), None)
         if state == "pairable":
             # a pairable satellite is adoptable even if we know it: it forgot its home (reset) and needs a new token
-            self._discovered = {CONF_HOST: host, CONF_PORT: port, "id": sat_id, "existing": existing}
+            self._discovered = {CONF_HOST: host, CONF_PORT: port, "id": sat_id, "existing": existing,
+                                "addrs": declared}
             self.context["title_placeholders"] = {"name": props.get("id", host)}
             return await self.async_step_pair()
         if existing is not None:
-            if (existing.data.get(CONF_HOST), existing.data.get(CONF_PORT)) != (host, port):
-                # 21/11: the satellites have no DHCP reservation; a known one that announces a new address moved
-                _LOGGER.info("Satellite %s moved to %s:%s", sat_id, host, port)
-                self.hass.config_entries.async_update_subentry(
-                    entries[0], existing, data={**existing.data, CONF_HOST: host, CONF_PORT: port})
-                self.hass.config_entries.async_schedule_reload(entries[0].entry_id)
+            self._follow_addresses(entries[0], existing, sat_id, host, port, declared)
             return self.async_abort(reason="already_configured")
-        self._discovered = {CONF_HOST: host, CONF_PORT: port, "id": sat_id}
+        self._discovered = {CONF_HOST: host, CONF_PORT: port, "id": sat_id, "addrs": declared}
         self.context["title_placeholders"] = {"name": props.get("id", host)}
         return await self.async_step_zeroconf_confirm()
+
+    def _follow_addresses(self, entry, existing, sat_id: str, host: str, port: int, declared: dict[str, str]) -> None:
+        """A known satellite announced itself. The satellites have no DHCP reservation, so addresses change: store
+        them and let the live connection follow (the entry's update listener does), never reload (21/11: two reloads
+        at once left entities registered twice).
+
+        An announcement with `wired`/`wifi` is authoritative and the IP the zeroconf answer came from is ignored (avahi
+        answers from either interface). An old agent has no properties: the answer's IP is its only address."""
+        data = {k: v for k, v in existing.data.items() if k not in (CONF_HOST_WIRED, CONF_HOST_WIFI)}
+        data[CONF_PORT] = port
+        if declared:
+            data.update(_address_data(declared))
+            current = (existing.data.get(CONF_HOST_WIRED), existing.data.get(CONF_HOST_WIFI), existing.data.get(CONF_PORT))
+            if current == (declared.get("wired"), declared.get("wifi"), port):
+                return
+            _LOGGER.info("Satellite %s addresses: wired=%s wifi=%s", sat_id, declared.get("wired"), declared.get("wifi"))
+        else:
+            data[CONF_HOST] = host
+            if (existing.data.get(CONF_HOST), existing.data.get(CONF_PORT)) == (host, port) \
+                    and CONF_HOST_WIRED not in existing.data and CONF_HOST_WIFI not in existing.data:
+                return
+            _LOGGER.info("Satellite %s moved to %s:%s", sat_id, host, port)
+        self.hass.config_entries.async_update_subentry(entry, existing, data=data)
 
     async def async_step_pair(
         self, user_input: dict[str, Any] | None = None
@@ -184,10 +222,13 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
         existing = self._discovered.get("existing")
         if existing is not None:  # readoption: keep the subentry (and its area), new token, provisioning from the start
             await provisioning.forget_steps(self.hass, sat_id)
+            kept = {k: v for k, v in existing.data.items() if k not in (CONF_HOST_WIRED, CONF_HOST_WIFI)}
             self.hass.config_entries.async_update_subentry(entry, existing, data={
-                **existing.data, CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token, CONF_PROVISIONED: False})
+                **kept, CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token, CONF_PROVISIONED: False,
+                **_address_data(self._discovered.get("addrs") or {})})
             return self.async_abort(reason="reauth_successful")
-        data = {CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token, CONF_PROVISIONED: False}
+        data = {CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token, CONF_PROVISIONED: False,
+                **_address_data(self._discovered.get("addrs") or {})}
         if area_id:
             data[CONF_AREA_ID] = area_id
         self.hass.config_entries.async_add_subentry(
@@ -203,7 +244,8 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             entry = self.hass.config_entries.async_entries(DOMAIN)[0]
             host, port = self._discovered[CONF_HOST], self._discovered[CONF_PORT]
-            data = {CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: user_input[CONF_TOKEN]}
+            data = {CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: user_input[CONF_TOKEN],
+                    **_address_data(self._discovered.get("addrs") or {})}
             if user_input.get(CONF_AREA_ID):
                 data[CONF_AREA_ID] = user_input[CONF_AREA_ID]
             self.hass.config_entries.async_add_subentry(
