@@ -256,7 +256,18 @@ def test_ota_state_carries_the_alpha_promotion():
         def alpha_promotion(self):
             return "2026-11-23T10:00:00+00:00", {"tag": "v1.1.0", "status": "soaking", "alphas": []}
 
+        def promotion_allowed(self):
+            return True
+
     out = m.ota_entities(FakeOrch())
     assert out["ota_alpha_promotion"] == "2026-11-23T10:00:00+00:00"
     assert out["ota_alpha_promotion_attributes"]["tag"] == "v1.1.0"
     assert out["ota_waiting_server"] == 0 and out["image_latest"] == "v1.0.0"
+
+
+def test_descriptor_alpha_promotion_switch():
+    caps = {d["key"]: d for d in c.capabilities(proxmox=True)}
+    d = caps["ota_alpha_promotion_allowed"]
+    assert d["name"] == "Alpha promotion" and d["platform"] == "switch" and d["category"] == "config"
+    assert d["icon"] == "mdi:rocket-launch"
+    assert caps["ota_alpha_promotion"]["platform"] == "sensor"  # the clock sensor keeps the same name, as a sensor
