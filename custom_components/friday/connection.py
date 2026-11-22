@@ -71,6 +71,7 @@ class FridayConnection:
         self._port = port
         self._watch_task: asyncio.Task | None = None
         self._reader: asyncio.Task | None = None
+        self._hello_seen = False  # a host answered with a hello during the current connect round
         self._wake = asyncio.Event()
         self._announced_host: str | None = None
         self._token = token
@@ -117,6 +118,10 @@ class FridayConnection:
         if task:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        for extra in (self._watch_task, self._reader):
+            if extra is not None:
+                extra.cancel()
+        self._watch_task = self._reader = None
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()
         self._ws = None
@@ -146,6 +151,19 @@ class FridayConnection:
         """The address the connection uses (the one last tried while it is down)."""
         return self._host
 
+    def _ensure_cable_watch(self) -> None:
+        """Start the cable watch if the session is on a fallback address and none is running."""
+        ws = self._ws
+        if (
+            not self.connected or ws is None or ws.closed
+            or len(self._hosts) < 2 or self._host == self._hosts[0]
+            or (self._watch_task is not None and not self._watch_task.done())
+        ):
+            return
+        self._watch_task = self.hass.async_create_background_task(
+            self._cable_watch(ws), f"friday cable watch {self._subentry_id}"
+        )
+
     def _end_session(self) -> None:
         """Make the running session finish; it closes its own websocket (one closer, never two at once) and the loop
         reconnects on the current address list."""
@@ -167,6 +185,8 @@ class FridayConnection:
         if self.connected and self._ws is not None and not self._ws.closed:
             if self._host not in hosts or in_use_port != port:
                 self._end_session()
+            else:
+                self._ensure_cable_watch()  # the cable may just have appeared (or become preferred again)
         else:
             self._wake.set()  # down and waiting out a backoff: try the new list now
 
@@ -206,12 +226,11 @@ class FridayConnection:
     async def _run(self) -> None:
         backoff = BACKOFF_START
         while True:
-            connected_once = False
+            self._hello_seen = False
             for host in list(self._hosts):
                 self._host = host
                 try:
-                    connected_once = await self._session(host)
-                    backoff = BACKOFF_START
+                    await self._session(host)
                     break  # the session ended: start over from the preferred address
                 except asyncio.CancelledError:
                     raise
@@ -223,6 +242,8 @@ class FridayConnection:
                 self._ws = None
             self._set_connected(False)
             self._ws = None
+            if self._hello_seen:
+                backoff = BACKOFF_START  # an agent answered this round, whatever happened to it afterwards
             if self._mismatch:
                 self._mismatch = False
                 backoff = BACKOFF_MAX * 5  # incompatible agent: retry rarely
@@ -231,7 +252,7 @@ class FridayConnection:
                 await asyncio.wait_for(self._wake.wait(), backoff)
             except TimeoutError:
                 pass
-            if not connected_once:
+            if not self._hello_seen:
                 backoff = min(backoff * 2, BACKOFF_MAX)
 
     async def _session(self, host: str) -> bool:
@@ -260,6 +281,7 @@ class FridayConnection:
                 self._protocol_mismatch()
                 return False
             hello = parse_hello(msg)
+            self._hello_seen = True
             ir.async_delete_issue(self.hass, DOMAIN, f"protocol_{self._subentry_id}")
             previous, self.hello = self.hello, hello
             self.state = dict(hello.state)
@@ -271,10 +293,7 @@ class FridayConnection:
                 # the agent came back with a different capability list (no "capabilities" message): rebuild entities
                 for cb in list(self._capabilities_listeners):
                     cb()
-            if len(self._hosts) > 1 and host != self._hosts[0]:
-                self._watch_task = self.hass.async_create_background_task(
-                    self._cable_watch(ws), f"friday cable watch {self._subentry_id}"
-                )
+            self._ensure_cable_watch()
             reader = self.hass.async_create_background_task(
                 self._read(ws), f"friday reader {self._subentry_id}"
             )
@@ -310,6 +329,10 @@ class FridayConnection:
         except (OSError, TimeoutError):
             return False
         writer.close()
+        try:
+            await asyncio.wait_for(writer.wait_closed(), 1.0)
+        except (OSError, TimeoutError):
+            pass
         return True
 
     async def _cable_watch(self, ws: aiohttp.ClientWebSocketResponse) -> None:

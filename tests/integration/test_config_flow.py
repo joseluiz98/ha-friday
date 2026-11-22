@@ -436,3 +436,24 @@ async def test_readoption_forgets_the_finished_provisioning_steps(hass):
     await store.async_save({"sat-1": {"steps": {"info": "done"}, "failed": {}}, "sat-2": {"steps": {"info": "done"}, "failed": {}}})
     await pv.forget_steps(hass, "sat-1")
     assert set(await Store(hass, 1, pv.STORE_KEY).async_load()) == {"sat-2"}
+
+
+async def test_pairing_dials_the_declared_preferred_address_not_the_answer_ip(hass, monkeypatch, fake_satellite):
+    """Review 21/11: avahi may answer from the Wi-Fi; the satellite declares `wired`, so pairing goes there and the
+    subentry stores both addresses."""
+    server, session, received = fake_satellite
+    entry = await _entry_with_noop(hass, monkeypatch)
+    from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
+
+    info = ZeroconfServiceInfo(
+        ip_address=ip_address("10.0.0.6"), ip_addresses=[ip_address("10.0.0.6")], port=server.port,
+        hostname="sat.local.", type="_friday._tcp.local.", name="sat-abc123._friday._tcp.local.",
+        properties={"id": "sat-abc123", "kind": "satellite", "port": str(server.port), "state": "pairable",
+                    "wired": server.host, "wifi": "10.0.0.6"})  # 10.0.0.6 is not reachable from the test
+    r = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "zeroconf"}, data=info)
+    assert r["step_id"] == "pair"
+    r = await hass.config_entries.flow.async_configure(r["flow_id"], {"code": "4821"})
+    assert r["type"] == FlowResultType.ABORT and r["reason"] == "satellite_added"
+    await hass.async_block_till_done()
+    sub = next(iter(entry.subentries.values()))
+    assert sub.data["host"] == sub.data["host_wired"] == server.host and sub.data["host_wifi"] == "10.0.0.6"

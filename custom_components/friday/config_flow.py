@@ -148,6 +148,7 @@ class FridayConfigFlow(ConfigFlow, domain=DOMAIN):
             port = DEFAULT_PORT_SATELLITE
         host = str(discovery_info.ip_address)
         declared = _declared_addresses(props)  # 21/11: the satellite says its own addresses (cable, Wi-Fi)
+        host = _address_data(declared).get(CONF_HOST, host)  # dial the preferred one, not the answer's IP
         sat_id = props.get("id") or f"{host}:{port}"
         await self.async_set_unique_id(f"satellite:{sat_id}")
         state = props.get("state")

@@ -420,3 +420,84 @@ async def test_set_hosts_same_in_use_keeps_session(hass, monkeypatch):
     assert c.connected and live.connections == 1 and c.host == LIVE
     await c.stop()
     await live.stop()
+
+
+async def test_set_hosts_starts_cable_watch_when_cable_appears(hass, monkeypatch):
+    """Review 21/11: a satellite that started Wi-Fi-only has no watch; the cable showing up in a later announcement
+    (set_hosts keeps the session on the Wi-Fi) must start one, and the connection moves to the cable."""
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    monkeypatch.setattr(conn_mod, "CABLE_STABLE_S", 0.1)
+    calls = []
+    script_probe(monkeypatch, [True], calls)
+    live = FakeAgent()
+    await live.start()
+    cable = await second_agent(live)
+    c = FridayConnection(hass, [LIVE], live.port, TOKEN, "sub1")  # Wi-Fi only so far
+    await c.start()
+    await wait_for(lambda: c.connected and c.host == LIVE)
+    assert c._watch_task is None and calls == []
+    c.set_hosts([DEAD, LIVE], live.port)  # the cable appears
+    await wait_for(lambda: c.connected and c.host == DEAD, timeout=3)
+    assert cable.connections == 1 and calls
+    await c.stop()
+    await cable.stop()
+    await live.stop()
+
+
+async def test_set_hosts_restarts_a_watch_that_already_returned(hass, monkeypatch):
+    """The watch ends when the preferred address is the one in use; a later change of the preferred address needs a
+    new one."""
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    monkeypatch.setattr(conn_mod, "CABLE_STABLE_S", 0.1)
+    results = [False]
+    script_probe(monkeypatch, results, [])
+    live = FakeAgent()
+    await live.start()
+    c = FridayConnection(hass, [DEAD, LIVE], live.port, TOKEN, "sub1")  # the cable is down at first
+    await c.start()
+    await wait_for(lambda: c.connected and c.host == LIVE)
+    await wait_for(lambda: c._watch_task is not None)
+    cable = await second_agent(live)  # and comes back later
+    c.set_hosts([LIVE, DEAD], live.port)  # the address in use becomes the preferred one: the watch finishes
+    await wait_for(lambda: c._watch_task is None or c._watch_task.done())
+    results[:] = [True]
+    c.set_hosts([DEAD, LIVE], live.port)  # and now the cable is preferred again
+    await wait_for(lambda: c.connected and c.host == DEAD, timeout=3)
+    await c.stop()
+    await cable.stop()
+    await live.stop()
+
+
+async def test_backoff_resets_when_a_host_got_a_hello_even_if_the_round_then_fails(hass, monkeypatch):
+    """Review 21/11: a host that answered with a hello this round resets the backoff, whatever happens next."""
+    monkeypatch.setattr(conn_mod, "BACKOFF_START", 0.1)
+    monkeypatch.setattr(conn_mod, "BACKOFF_MAX", 1.0)
+    attempts = []
+
+    async def flaky(self, host):
+        attempts.append((host, hass.loop.time()))
+        if host == "10.0.0.5":
+            self._hello_seen = True  # got the hello, then the link broke with an error
+        raise OSError("down")
+
+    monkeypatch.setattr(FridayConnection, "_session", flaky)
+    c = FridayConnection(hass, ["10.0.0.5", "10.0.0.6"], 8701, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: len(attempts) >= 8)
+    await c.stop()
+    rounds = [attempts[i][1] for i in range(0, 8, 2)]
+    gaps = [b - a for a, b in zip(rounds, rounds[1:])]
+    assert max(gaps) < 0.3  # never grew past the first backoff (a growing one would be 0.2, 0.4, 0.8)
+
+
+async def test_stop_leaves_no_watch_or_reader(hass, monkeypatch):
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    script_probe(monkeypatch, [False], [])
+    live = FakeAgent()
+    await live.start()
+    c = FridayConnection(hass, [DEAD, LIVE], live.port, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: c.connected and c._watch_task is not None)
+    await c.stop()
+    assert c._watch_task is None and c._reader is None
+    await live.stop()
