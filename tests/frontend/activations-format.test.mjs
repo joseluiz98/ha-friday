@@ -11,6 +11,17 @@ test("rows from history, newest first, old events keep only word/score", () => {
   assert.equal(rows[0].type, "rejected"); assert.equal(rows[0].recording, "sem_voz_20261103_094322.wav");
   assert.equal(rows[1].voice, null); assert.equal(fmt(rows[1].voice), "—");
 });
+test("a state restored after unavailable (entry reload, HA restart) is the same event: one row", () => {
+  const ev = { s: "2026-11-22T07:18:40.906+00:00", a: { event_type: "conversation", word: "friday", score: 0.7 } };
+  const resp = { "event.friday_sat_8295e1_activation": [
+    { ...ev, lu: 1 }, { s: "unavailable", a: {}, lu: 2 }, { ...ev, lu: 3 }, { s: "unavailable", a: {}, lu: 4 },
+    { ...ev, lu: 5 },
+    { s: "2026-11-22T08:00:00.000+00:00", a: { event_type: "rejected", score: 0.4 }, lu: 6 } ],
+    "event.friday_sat_173bbf_activation": [{ ...ev, lu: 7 }] };
+  const rows = rowsFromHistory(resp, ["event.friday_sat_8295e1_activation", "event.friday_sat_173bbf_activation"]);
+  assert.equal(rows.length, 3);  // two events of MK1, one of MK2 at the same instant is another satellite's event
+  assert.equal(rows.filter((r) => r.entityId === "event.friday_sat_8295e1_activation").length, 2);
+});
 test("cause words", () => { assert.equal(causeText("no_voice"), "no human voice"); assert.equal(causeText(undefined), ""); });
 test("skips non-timestamp states", () => {
   const rows = rowsFromHistory({ e: [{ s: "unknown", a: {}, lu: 1 }] }, ["e"]);

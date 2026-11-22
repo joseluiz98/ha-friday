@@ -39,9 +39,13 @@ const num = (v) => (typeof v === "number" ? v : null);
 export function rowsFromHistory(resp, entityIds) {
   const rows = [];
   for (const entityId of entityIds) {
+    // 22/11: an event entity's state is the event's timestamp. Every entry reload or HA restart passes through
+    // `unavailable` and restores the same state, which the history records again: same state = same event.
+    const seen = new Set();
     for (const st of resp?.[entityId] ?? []) {
       const when = new Date(st.s);
-      if (typeof st.s !== "string" || Number.isNaN(when.getTime())) continue;
+      if (typeof st.s !== "string" || Number.isNaN(when.getTime()) || seen.has(st.s)) continue;
+      seen.add(st.s);
       const a = st.a ?? {};
       rows.push({
         entityId,
