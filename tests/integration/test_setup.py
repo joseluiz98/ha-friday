@@ -365,3 +365,41 @@ async def test_server_settings_are_left_alone(hass):
     assert ar.async_get(hass).async_get_area_by_name("Ajustes do Mark") is None
     await hass.config_entries.async_unload(entry.entry_id)
     await agent.stop()
+
+
+# --- address changes never reload the entry (spec 2026-11-21-satellite-lan-first) ---
+
+def test_hosts_from_prefers_the_cable_without_empties_or_duplicates():
+    from custom_components.friday import hosts_from
+
+    assert hosts_from({"host": "10.0.0.5", "host_wired": "10.0.0.5", "host_wifi": "10.0.0.6"}) == ["10.0.0.5", "10.0.0.6"]
+    assert hosts_from({"host": "10.0.0.6", "host_wifi": "10.0.0.6"}) == ["10.0.0.6"]
+    assert hosts_from({"host": "10.0.0.5", "host_wired": "10.0.0.5", "host_wifi": "10.0.0.5"}) == ["10.0.0.5"]
+    assert hosts_from({"host": "10.0.0.9"}) == ["10.0.0.9"]  # old subentries and old agents
+    assert hosts_from({"host": "10.0.0.9", "host_wired": "", "host_wifi": None}) == ["10.0.0.9"]
+
+
+async def test_update_listener_ignores_host_change(hass):
+    from unittest.mock import patch
+
+    agent = FakeAgent(hello(CAPS, STATE))
+    entry = await setup(hass, agent)
+    await entities(hass, 3)
+    conn = entry.runtime_data["sub1"]
+    sub = entry.subentries["sub1"]
+    with patch.object(hass.config_entries, "async_reload") as reload:
+        hass.config_entries.async_update_subentry(
+            entry, sub, data={**sub.data, "host": "127.0.0.1", "host_wired": "127.0.0.1", "host_wifi": "127.0.0.2"})
+        await hass.async_block_till_done()
+        assert reload.call_count == 0
+        assert entry.runtime_data["sub1"] is conn and conn.hosts == ["127.0.0.1", "127.0.0.2"]  # the live one follows
+        sub = entry.subentries["sub1"]
+        hass.config_entries.async_update_subentry(entry, sub, data={**sub.data, "port": agent.port + 1})
+        await hass.async_block_till_done()
+        assert reload.call_count == 0  # the port is part of the address too
+        sub = entry.subentries["sub1"]
+        hass.config_entries.async_update_subentry(entry, sub, data={**sub.data, "token": "other"})
+        await hass.async_block_till_done()
+        assert reload.call_count == 1  # a new token still needs the full reload
+    await hass.config_entries.async_unload(entry.entry_id)
+    await agent.stop()

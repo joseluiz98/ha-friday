@@ -6,6 +6,8 @@ DOMAIN = "friday"
 
 CONF_HOST = "host"
 CONF_PORT = "port"
+CONF_HOST_WIRED = "host_wired"  # the satellite's cable address (preferred), when it declares one
+CONF_HOST_WIFI = "host_wifi"  # its Wi-Fi address; CONF_HOST always holds the preferred one
 CONF_TOKEN = "token"
 CONF_AREA_ID = "area_id"
 

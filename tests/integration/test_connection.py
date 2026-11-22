@@ -4,6 +4,7 @@ import asyncio
 
 from aiohttp import WSMsgType, web
 import pytest
+from pytest_socket import socket_allow_hosts
 
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
@@ -34,6 +35,7 @@ class FakeAgent:
         self.auth = []
         self.runner = None
         self.port = None
+        self.host = "127.0.0.1"
 
     async def handle(self, request):
         self.auth.append(request.headers.get("Authorization"))
@@ -54,12 +56,19 @@ class FakeAgent:
         app.router.add_get("/v1/ws", self.handle)
         self.runner = web.AppRunner(app)
         await self.runner.setup()
-        site = web.TCPSite(self.runner, "127.0.0.1", self.port or 0)
+        site = web.TCPSite(self.runner, self.host, self.port or 0)
         await site.start()
         self.port = site._server.sockets[0].getsockname()[1]
 
     async def stop(self):
         await self.runner.cleanup()
+
+
+@pytest.fixture(autouse=True)
+def loopback_hosts():
+    """The cable-first tests use 127.0.0.2 as a second address; the HA plugin allows 127.0.0.1 only."""
+    socket_allow_hosts(["127.0.0.1", "127.0.0.2"])
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -257,3 +266,238 @@ async def test_stop_survives_a_failing_availability_listener(hass):
     assert avail[-1] is False and not c.connected
     await agent.stop()
 
+
+
+# --- cable first (spec 2026-11-21-satellite-lan-first): two hosts, the cable first ---
+# 127.0.0.1 and 127.0.0.2 are both loopback; each fake agent listens on one of them only, so "the other host is down"
+# is a real refused connection.
+
+DEAD, LIVE = "127.0.0.2", "127.0.0.1"
+
+
+async def second_agent(first):
+    """A second fake agent on DEAD at the same port as `first` (which listens on LIVE)."""
+    other = FakeAgent()
+    other.host, other.port = DEAD, first.port
+    await other.start()
+    return other
+
+
+async def test_connects_on_first_host(hass):
+    agent = FakeAgent()
+    await agent.start()
+    c = FridayConnection(hass, [LIVE, DEAD], agent.port, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: c.connected)
+    assert c.host == LIVE
+    await c.stop()
+    await agent.stop()
+
+
+async def test_falls_back_to_second_host_without_backoff(hass, monkeypatch):
+    monkeypatch.setattr(conn_mod, "BACKOFF_START", 30.0)  # a backoff between the two hosts would blow the wait
+    agent = FakeAgent()
+    await agent.start()
+    c = FridayConnection(hass, [DEAD, LIVE], agent.port, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: c.connected, timeout=2)
+    assert c.host == LIVE
+    await c.stop()
+    await agent.stop()
+
+
+async def test_backoff_starts_only_after_every_host_failed(hass, monkeypatch):
+    monkeypatch.setattr(conn_mod, "BACKOFF_START", 0.3)
+    monkeypatch.setattr(conn_mod, "BACKOFF_MAX", 0.3)
+    attempts = []
+
+    async def failing(self, host):
+        attempts.append((host, hass.loop.time()))
+        raise OSError("down")
+
+    monkeypatch.setattr(FridayConnection, "_session", failing)
+    c = FridayConnection(hass, ["10.0.0.5", "10.0.0.6"], 8701, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: len(attempts) >= 4)
+    await c.stop()
+    assert [a[0] for a in attempts[:4]] == ["10.0.0.5", "10.0.0.6", "10.0.0.5", "10.0.0.6"]
+    assert attempts[1][1] - attempts[0][1] < 0.15  # next host at once
+    assert attempts[2][1] - attempts[1][1] >= 0.25  # the backoff came after the second failure
+
+
+def script_probe(monkeypatch, results, calls):
+    """Replace the cable probe: `results` is consumed in order, the last value repeats."""
+    async def probe(self, host, port):
+        calls.append((host, hass_time()))
+        return results.pop(0) if len(results) > 1 else results[0]
+
+    monkeypatch.setattr(FridayConnection, "_probe", probe)
+
+
+def hass_time():
+    return asyncio.get_running_loop().time()
+
+
+async def test_returns_only_after_60s_stable(hass, monkeypatch):
+    """Scaled down: probe 0.02 s, stable 0.2 s. A streak shorter than the stable time, a failure, then answers again:
+    the switch happens a full stable time after the first answer following the failure."""
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    monkeypatch.setattr(conn_mod, "CABLE_STABLE_S", 0.2)
+    calls = []
+    script_probe(monkeypatch, [True] * 8 + [False, True], calls)
+    live = FakeAgent()
+    await live.start()
+    c = FridayConnection(hass, [DEAD, LIVE], live.port, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: c.connected and c.host == LIVE)
+    cable = await second_agent(live)  # the cable is back: a real reconnect can now land there
+    await wait_for(lambda: c.host == DEAD, timeout=3)
+    t_first_ok_after_fail = calls[9][1]  # call 0-7 true, 8 false, 9 = first true after the failure
+    assert c.host == DEAD and cable.connections == 1
+    assert live.sockets[0].closed
+    # the last probe before the switch is at least one stable time after that first answer
+    assert calls[-1][1] - t_first_ok_after_fail >= 0.2 - 0.03
+    await c.stop()
+    await cable.stop()
+    await live.stop()
+
+
+async def test_single_host_no_probe(hass, monkeypatch):
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    calls = []
+    script_probe(monkeypatch, [True], calls)
+    agent = FakeAgent()
+    await agent.start()
+    c = FridayConnection(hass, LIVE, agent.port, TOKEN, "sub1")  # a bare str = one host
+    await c.start()
+    await wait_for(lambda: c.connected)
+    await asyncio.sleep(0.2)
+    assert calls == [] and c._watch_task is None
+    await c.stop()
+    await agent.stop()
+
+
+async def test_no_probe_while_on_the_first_host(hass, monkeypatch):
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    calls = []
+    script_probe(monkeypatch, [True], calls)
+    agent = FakeAgent()
+    await agent.start()
+    c = FridayConnection(hass, [LIVE, DEAD], agent.port, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: c.connected)
+    await asyncio.sleep(0.2)
+    assert calls == [] and agent.connections == 1
+    await c.stop()
+    await agent.stop()
+
+
+async def test_set_hosts_reconnects_when_host_in_use_removed(hass):
+    live = FakeAgent()
+    await live.start()
+    other = await second_agent(live)
+    c = FridayConnection(hass, [LIVE], live.port, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: c.connected and c.host == LIVE)
+    c.set_hosts([DEAD], live.port)
+    await wait_for(lambda: c.connected and c.host == DEAD, timeout=3)
+    assert other.connections == 1 and live.connections == 1
+    await c.stop()
+    await other.stop()
+    await live.stop()
+
+
+async def test_set_hosts_same_in_use_keeps_session(hass, monkeypatch):
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    script_probe(monkeypatch, [False], [])
+    live = FakeAgent()
+    await live.start()
+    c = FridayConnection(hass, [LIVE], live.port, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: c.connected)
+    c.set_hosts([DEAD, LIVE], live.port)  # the host in use is still in the list (now second)
+    await asyncio.sleep(0.3)
+    assert c.connected and live.connections == 1 and c.host == LIVE
+    await c.stop()
+    await live.stop()
+
+
+async def test_set_hosts_starts_cable_watch_when_cable_appears(hass, monkeypatch):
+    """Review 21/11: a satellite that started Wi-Fi-only has no watch; the cable showing up in a later announcement
+    (set_hosts keeps the session on the Wi-Fi) must start one, and the connection moves to the cable."""
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    monkeypatch.setattr(conn_mod, "CABLE_STABLE_S", 0.1)
+    calls = []
+    script_probe(monkeypatch, [True], calls)
+    live = FakeAgent()
+    await live.start()
+    cable = await second_agent(live)
+    c = FridayConnection(hass, [LIVE], live.port, TOKEN, "sub1")  # Wi-Fi only so far
+    await c.start()
+    await wait_for(lambda: c.connected and c.host == LIVE)
+    assert c._watch_task is None and calls == []
+    c.set_hosts([DEAD, LIVE], live.port)  # the cable appears
+    await wait_for(lambda: c.connected and c.host == DEAD, timeout=3)
+    assert cable.connections == 1 and calls
+    await c.stop()
+    await cable.stop()
+    await live.stop()
+
+
+async def test_set_hosts_restarts_a_watch_that_already_returned(hass, monkeypatch):
+    """The watch ends when the preferred address is the one in use; a later change of the preferred address needs a
+    new one."""
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    monkeypatch.setattr(conn_mod, "CABLE_STABLE_S", 0.1)
+    results = [False]
+    script_probe(monkeypatch, results, [])
+    live = FakeAgent()
+    await live.start()
+    c = FridayConnection(hass, [DEAD, LIVE], live.port, TOKEN, "sub1")  # the cable is down at first
+    await c.start()
+    await wait_for(lambda: c.connected and c.host == LIVE)
+    await wait_for(lambda: c._watch_task is not None)
+    cable = await second_agent(live)  # and comes back later
+    c.set_hosts([LIVE, DEAD], live.port)  # the address in use becomes the preferred one: the watch finishes
+    await wait_for(lambda: c._watch_task is None or c._watch_task.done())
+    results[:] = [True]
+    c.set_hosts([DEAD, LIVE], live.port)  # and now the cable is preferred again
+    await wait_for(lambda: c.connected and c.host == DEAD, timeout=3)
+    await c.stop()
+    await cable.stop()
+    await live.stop()
+
+
+async def test_backoff_resets_when_a_host_got_a_hello_even_if_the_round_then_fails(hass, monkeypatch):
+    """Review 21/11: a host that answered with a hello this round resets the backoff, whatever happens next."""
+    monkeypatch.setattr(conn_mod, "BACKOFF_START", 0.1)
+    monkeypatch.setattr(conn_mod, "BACKOFF_MAX", 1.0)
+    attempts = []
+
+    async def flaky(self, host):
+        attempts.append((host, hass.loop.time()))
+        if host == "10.0.0.5":
+            self._hello_seen = True  # got the hello, then the link broke with an error
+        raise OSError("down")
+
+    monkeypatch.setattr(FridayConnection, "_session", flaky)
+    c = FridayConnection(hass, ["10.0.0.5", "10.0.0.6"], 8701, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: len(attempts) >= 8)
+    await c.stop()
+    rounds = [attempts[i][1] for i in range(0, 8, 2)]
+    gaps = [b - a for a, b in zip(rounds, rounds[1:])]
+    assert max(gaps) < 0.3  # never grew past the first backoff (a growing one would be 0.2, 0.4, 0.8)
+
+
+async def test_stop_leaves_no_watch_or_reader(hass, monkeypatch):
+    monkeypatch.setattr(conn_mod, "CABLE_PROBE_S", 0.02)
+    script_probe(monkeypatch, [False], [])
+    live = FakeAgent()
+    await live.start()
+    c = FridayConnection(hass, [DEAD, LIVE], live.port, TOKEN, "sub1")
+    await c.start()
+    await wait_for(lambda: c.connected and c._watch_task is not None)
+    await c.stop()
+    assert c._watch_task is None and c._reader is None
+    await live.stop()
