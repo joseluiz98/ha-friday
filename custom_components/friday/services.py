@@ -180,6 +180,29 @@ async def _build_image(call: ServiceCall) -> None:
         raise ServiceValidationError(IMAGE_ERRORS.get(code, f"The server refused the build ({code}).")) from err
 
 
+SERVICE_SET_ALPHA_PROMOTION = "set_alpha_promotion"
+SET_ALPHA_PROMOTION_SCHEMA = vol.Schema({vol.Optional("tag"): cv.string, vol.Required("allowed"): cv.boolean})
+PROMOTION_ERRORS = {
+    "no_alpha": "There is no alpha in soak.",
+    "unknown_tag": "Unknown alpha.",
+    "failed": "This alpha failed its soak on its own (rollback or exhausted retries); it cannot be allowed.",
+    "promoted": "This release is already stable.",
+    "value": "Invalid value.",
+}
+
+
+async def _set_alpha_promotion(call: ServiceCall) -> None:
+    """Block or allow the promotion of an alpha to stable (the tracked alpha unless a tag is given)."""
+    tag = normalize_version(call.data.get("tag"))
+    connection = find_server(call.hass)
+    fields = {"allowed": call.data["allowed"], **({"tag": tag} if tag else {})}
+    try:
+        await connection.send("alpha_promotion", **fields)
+    except HomeAssistantError as err:
+        code = str(err)
+        raise ServiceValidationError(PROMOTION_ERRORS.get(code, f"The server refused the change ({code}).")) from err
+
+
 SERVICE_ANNOUNCE = "announce"
 MESSAGE_MAX = 500
 ANNOUNCE_SCHEMA = vol.Schema({
@@ -261,6 +284,9 @@ def async_register_services(hass: HomeAssistant) -> None:
         hass.services.async_register(DOMAIN, SERVICE_RETRY, _retry_provisioning, schema=RETRY_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_BUILD_IMAGE):
         hass.services.async_register(DOMAIN, SERVICE_BUILD_IMAGE, _build_image, schema=BUILD_IMAGE_SCHEMA)
+    if not hass.services.has_service(DOMAIN, SERVICE_SET_ALPHA_PROMOTION):
+        hass.services.async_register(DOMAIN, SERVICE_SET_ALPHA_PROMOTION, _set_alpha_promotion,
+                                     schema=SET_ALPHA_PROMOTION_SCHEMA)
     if not hass.services.has_service(DOMAIN, SERVICE_ANNOUNCE):
         hass.services.async_register(
             DOMAIN, SERVICE_ANNOUNCE, _announce, schema=ANNOUNCE_SCHEMA, supports_response=SupportsResponse.OPTIONAL)
