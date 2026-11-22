@@ -975,3 +975,132 @@ def test_alpha_promotion_empty_store(tmp_path):
     state, attrs = w.orch.alpha_promotion()
     assert state is None and set(attrs) == ALPHA_KEYS and attrs["alphas"] == []
     assert all(attrs[k] is None for k in ALPHA_KEYS - {"alphas", "newer_stable"}) and attrs["newer_stable"] is False
+
+
+# ---- block an alpha's promotion by hand (plan 2026-11-22)
+def _alpha_world(tmp_path, publisher=None):
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True)])
+    w.orch.publisher = publisher
+    return w
+
+
+def _events(w):
+    return [json.loads(line) for line in (Path(w.store.events_path).read_text().splitlines())]
+
+
+def test_store_old_soak_rows_unblocked(tmp_path):
+    path, events = tmp_path / "state.json", tmp_path / "events.ndjson"
+    path.write_text(json.dumps({"soak": {"v1.1.0": {"started_at": 5.0, "failed": False}}}))
+    store = st.OtaStore(str(path), str(events))
+    rec = store.soak()["v1.1.0"]
+    assert rec.started_at == 5.0 and rec.failed is False and rec.blocked is False
+
+
+def test_block_stops_promotion(tmp_path):
+    pub = FakePublisher()
+    w = _alpha_world(tmp_path, pub)
+    w.store.soak_start("v1.1.0", w.now)
+    assert w.orch.set_promotion(None, False) == {"ok": True, "tag": "v1.1.0"}
+    w.now += 49 * 3600
+    w.orch._promote_step()
+    assert pub.calls == []
+
+
+def test_allow_after_soak_promotes_next_step(tmp_path):
+    pub = FakePublisher()
+    w = _alpha_world(tmp_path, pub)
+    w.store.soak_start("v1.1.0", w.now)
+    w.orch.set_promotion(None, False)
+    w.now += 49 * 3600
+    w.orch._promote_step()
+    assert pub.calls == []
+    assert w.orch.set_promotion(None, True) == {"ok": True, "tag": "v1.1.0"}
+    w.orch._promote_step()
+    assert pub.calls == ["v1.1.0"]
+
+
+def test_allow_keeps_failed(tmp_path):
+    w = _alpha_world(tmp_path)
+    w.store.soak_start("v1.1.0", w.now)
+    w.store.soak_fail("v1.1.0")
+    assert w.orch.set_promotion("v1.1.0", True) == {"ok": False, "error": "failed"}
+    assert w.store.data["soak"]["v1.1.0"]["failed"] is True
+    # blocking a failed tag is allowed: it only sets the flag
+    assert w.orch.set_promotion("v1.1.0", False) == {"ok": True, "tag": "v1.1.0"}
+    assert w.store.data["soak"]["v1.1.0"]["blocked"] is True and w.store.data["soak"]["v1.1.0"]["failed"] is True
+
+
+def test_block_persists(tmp_path):
+    w = _alpha_world(tmp_path)
+    w.store.soak_start("v1.1.0", w.now)
+    w.orch.set_promotion(None, False)
+    again = st.OtaStore(str(tmp_path / "state.json"), str(tmp_path / "events.ndjson"))
+    assert again.soak()["v1.1.0"].blocked is True
+
+
+def test_set_promotion_default_tag_is_tracked(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True), rel("v1.2.0", pre=True)])
+    assert w.orch.set_promotion(None, False) == {"ok": True, "tag": "v1.2.0"}
+    assert w.store.data["soak"]["v1.2.0"]["blocked"] is True and "v1.1.0" not in w.store.data["soak"]
+    assert w.orch.set_promotion("v1.1.0", False) == {"ok": True, "tag": "v1.1.0"}  # another alpha, by tag
+
+
+def test_set_promotion_no_alpha_and_unknown_tag(tmp_path):
+    w = _promo_world(tmp_path, [rel("v1.0.0")])
+    assert w.orch.set_promotion(None, False) == {"ok": False, "error": "no_alpha"}
+    assert w.orch.set_promotion("v9.9.9", False) == {"ok": False, "error": "unknown_tag"}
+    assert w.orch.set_promotion("v1.0.0", False) == {"ok": False, "error": "unknown_tag"}  # stable: nothing to block
+    assert w.orch.set_promotion(None, "yes") == {"ok": False, "error": "value"}
+
+
+def test_set_promotion_already_promoted(tmp_path):
+    w = _alpha_world(tmp_path)
+    w.store.data["promotions"]["v1.1.0"] = {"at": w.now, "result": "promoted"}
+    assert w.orch.set_promotion("v1.1.0", False) == {"ok": False, "error": "promoted"}
+    assert "blocked" not in w.store.data["soak"].get("v1.1.0", {})
+
+
+def test_alpha_promotion_status_blocked(tmp_path):
+    w = _alpha_world(tmp_path)
+    t0 = w.now
+    w.store.soak_start("v1.1.0", t0)
+    w.orch.set_promotion(None, False)
+    w.now = t0 + 3600
+    state, attrs = w.orch.alpha_promotion()
+    assert state is None and attrs["status"] == "blocked" and attrs["promotes_at"] is None
+    assert attrs["alphas"] == [{"tag": "v1.1.0", "status": "blocked", "promotes_at": None}]
+    w.store.soak_fail("v1.1.0")  # failed wins over blocked
+    assert w.orch.alpha_promotion()[1]["status"] == "failed"
+
+
+def test_promotion_allowed_values(tmp_path):
+    w = _alpha_world(tmp_path)
+    assert w.orch.promotion_allowed() is True  # waiting_install: allowed until blocked
+    w.orch.set_promotion(None, False)
+    assert w.orch.promotion_allowed() is False
+    w.orch.set_promotion(None, True)
+    assert w.orch.promotion_allowed() is True
+    w.store.soak_fail("v1.1.0")
+    assert w.orch.promotion_allowed() is None
+    (tmp_path / "b").mkdir()
+    assert _promo_world(tmp_path / "b", [rel("v1.0.0")]).orch.promotion_allowed() is None
+
+
+def test_block_writes_event(tmp_path):
+    w = _alpha_world(tmp_path)
+    w.orch.set_promotion(None, False)
+    w.orch.set_promotion(None, True)
+    got = [(e["device"], e["tag"], e["event"]) for e in _events(w)]
+    assert ("server", "v1.1.0", "promotion_blocked") in got and ("server", "v1.1.0", "promotion_allowed") in got
+
+
+def test_failure_on_a_blocked_tag_past_the_soak_still_counts(tmp_path):
+    # a blocked tag was never promoted, so a rollback after 48 h is still evidence against it
+    w = World(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True)])
+    w.orch.poll()
+    w.offer("alpha", installed="v1.0.0", sat="sat-0000a1")
+    w.orch.report({"sat_id": "sat-0000a1", "tag": "v1.1.0", "result": "installed", "stage": "", "error": ""})
+    w.orch.set_promotion(None, False)
+    w.now += SOAK_S + 60
+    w.orch.report({"sat_id": "sat-0000a1", "tag": "v1.1.0", "result": "rolled_back", "stage": "health", "error": "x"})
+    assert w.store.data["soak"]["v1.1.0"]["failed"] is True

@@ -602,17 +602,23 @@ class Orchestrator:
                 rec = soak.get(tag)
                 return (rec.started_at, rec.failed) if rec is not None else (None, False)
 
+            def blocked(tag: str) -> bool:
+                rec = soak.get(tag)
+                return rec is not None and rec.blocked
+
             def status(tag: str) -> str:
                 started, failed = clock(tag)
                 if failed:
                     return "failed"
+                if blocked(tag):
+                    return "blocked"
                 if started is None:
                     return "waiting_install"
                 return "ready" if now - started >= SOAK_S else "soaking"
 
             def promotes_at(tag: str) -> float | None:
                 started, failed = clock(tag)
-                return None if started is None or failed else started + SOAK_S
+                return None if started is None or failed or blocked(tag) else started + SOAK_S
 
             rows = [{"tag": r.tag, "status": status(r.tag), "promotes_at": iso(promotes_at(r.tag))} for r in alphas]
             attrs: dict = {"tag": None, "status": None, "started_at": None, "promotes_at": None,
@@ -644,6 +650,42 @@ class Orchestrator:
                 if started is not None:
                     attrs["soaked_hours"] = round(max(end - started, 0.0) / 3600, 1)
         return attrs["promotes_at"], attrs
+
+    def promotion_allowed(self) -> bool | None:
+        """Value of the switch `ota_alpha_promotion_allowed`: True = the tracked alpha will be promoted, False = blocked
+        by the owner, None (unavailable) = no tracked alpha or it failed on its own (nothing to allow)."""
+        _state, attrs = self.alpha_promotion()
+        status = attrs["status"]
+        if status == "blocked":
+            return False
+        return True if status in ("waiting_install", "soaking", "ready") else None
+
+    def set_promotion(self, tag: str | None, allowed: bool) -> dict:
+        """The owner blocks (allowed=False) or allows the promotion of an alpha; `tag` None = the tracked alpha.
+        Allowing clears only the hand block, never `failed`. Reply: {"ok": True, "tag"} or {"ok": False, "error"}
+        with error in no_alpha | unknown_tag | failed | promoted | value."""
+        if not isinstance(allowed, bool):
+            return {"ok": False, "error": "value"}
+        with self.store.lock:
+            if tag is None:
+                _state, attrs = self.alpha_promotion()
+                if attrs["status"] not in ("waiting_install", "soaking", "ready", "blocked", "failed"):
+                    return {"ok": False, "error": "no_alpha"}
+                tag = attrs["tag"]
+            elif not any(r.tag == tag and r.prerelease for r in self._eligible()):
+                return {"ok": False, "error": "unknown_tag"}
+            if tag in self.store.data.setdefault("promotions", {}):  # promoted or superseded: already decided
+                return {"ok": False, "error": "promoted"}
+            rec = self.store.soak().get(tag)
+            if allowed and rec is not None and rec.failed:
+                return {"ok": False, "error": "failed"}
+            self.store.soak_block(tag, not allowed)
+            try:
+                self.store.event("server", tag, "promotion_allowed" if allowed else "promotion_blocked")
+            except OSError as err:
+                LOG.warning("OTA: event log failed: %s", type(err).__name__)
+            self.store.save()
+        return {"ok": True, "tag": tag}
 
     def waiting_server(self) -> dict:
         """{sat_id: {tag, since, why}} for satellites held by the server for at least WAITING_PUSH_AFTER_S."""
@@ -757,7 +799,7 @@ class Orchestrator:
 
     def _promoted(self, tag: str, now: float) -> bool:
         s = self.store.soak().get(tag)
-        return bool(s and s.started_at is not None and not s.failed and now - s.started_at >= SOAK_S)
+        return bool(s and s.started_at is not None and not s.failed and not s.blocked and now - s.started_at >= SOAK_S)
 
     def install(self, sat_id: str) -> str | None:
         """Manual (HA button or voice): zero the attempts and ask the satellite to install on its next poll."""

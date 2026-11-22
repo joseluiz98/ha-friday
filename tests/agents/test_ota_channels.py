@@ -40,3 +40,11 @@ def test_unknown_channel_is_stable():
 def test_server_follows_alpha_when_any_satellite_is_alpha():
     assert c.server_channel(["stable", "alpha"]) == "alpha" and c.server_channel(["stable"]) == "stable"
     assert c.server_channel([]) == "stable"
+
+
+def test_promoted_false_when_blocked():
+    rel = R("v0.3.0", pre=True)
+    soak = {"v0.3.0": c.SoakRecord(1000.0, False, blocked=True)}
+    assert c.promoted(rel, soak, now=1000 + 10 * SOAK_S) is False
+    soak = {"v0.3.0": c.SoakRecord(1000.0, False)}  # blocked defaults to False
+    assert c.promoted(rel, soak, now=1000 + SOAK_S) is True
