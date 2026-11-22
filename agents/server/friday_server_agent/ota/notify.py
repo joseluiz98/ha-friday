@@ -33,6 +33,11 @@ def format_promoted(tag: str) -> str:
     return f"F.R.I.D.A.Y. {tag} passou na prova do alpha e agora é a versão stable."
 
 
+def format_block_too_late(tag: str) -> str:
+    return (f"F.R.I.D.A.Y. {tag}: o bloqueio da promoção chegou tarde demais; a versão já estava sendo promovida "
+            "e agora é a stable.")
+
+
 class Notifier:
     def __init__(self, chat: str, run=subprocess.run, clock=time.time, tz=None):
         if not chat or not chat.strip():

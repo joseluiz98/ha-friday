@@ -242,6 +242,20 @@
         }
       }
     },
+    "set_alpha_promotion": {
+      "name": "Set alpha promotion",
+      "description": "Blocks or allows the promotion of an alpha release to stable once its soak ends. A block survives restarts; allowing again clears only the manual block, never a failure the soak recorded on its own. Without a version it acts on the alpha shown by the Alpha promotion sensor.",
+      "fields": {
+        "tag": {
+          "name": "Version",
+          "description": "Alpha to change, with or without the v (for example 0.4.3). Empty = the alpha in soak."
+        },
+        "allowed": {
+          "name": "Allowed",
+          "description": "On = it may be promoted when the soak ends; off = blocked by hand."
+        }
+      }
+    },
     "announce": {
       "name": "Announce on satellites",
       "description": "Speaks a text on the satellites. The server turns it into speech once and every chosen satellite plays it, with a chime first; the answer lists how each satellite took it.",

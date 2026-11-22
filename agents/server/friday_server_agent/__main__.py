@@ -158,7 +158,8 @@ def ota_entities(orch) -> dict:
     """The server's OTA entities: its update, the integration's target (Task 18 installs it through HACS), the newest
     provisioning image (state = tag; attributes built_at/status/error/files), the satellites held by the server and
     the alpha promotion clock (state = promotion time; attributes tag/status/started_at/promotes_at/soaked_hours/
-    newer_stable/alphas)."""
+    newer_stable/alphas) and its switch (`ota_alpha_promotion_allowed`: True allowed, False blocked by the owner,
+    None when there is nothing to allow)."""
     img = orch.image_status() or {}
     promotion, promotion_attrs = orch.alpha_promotion()
     return {"ota_server": orch.server_entity(),
@@ -168,7 +169,46 @@ def ota_entities(orch) -> dict:
             "ota_waiting_server_attributes": {"satellites": waiting},
             "ota_alpha_promotion": promotion,
             "ota_alpha_promotion_attributes": promotion_attrs,
+            "ota_alpha_promotion_allowed": orch.promotion_allowed(),
             "image_latest_attributes": {k: img.get(k) for k in ("built_at", "status", "error", "files")}}
+
+
+def make_alpha_promotion_handler(orch, ota_state_push, push_log):
+    """`alpha_promotion` command and the Alpha promotion switch: the owner blocks or allows an alpha's promotion.
+    Returns async (cmd) -> {"ok": True, "tag"} | {"ok": False, "error"}; `tag` absent = the tracked alpha."""
+    async def handler(cmd: dict) -> dict:
+        tag, allowed = cmd.get("tag"), cmd.get("allowed")
+        if not isinstance(allowed, bool):
+            return {"ok": False, "error": "value"}
+        if tag is not None and not isinstance(tag, str):
+            return {"ok": False, "error": "unknown_tag"}
+        out = await asyncio.to_thread(orch.set_promotion, tag, allowed)
+        if out.get("ok"):
+            await ota_state_push()
+            await push_log(f"Alpha promotion of {out['tag']} {'allowed' if allowed else 'blocked'} by the owner",
+                           {"tag": out["tag"]})
+        return out
+    return handler
+
+
+def make_set_dispatch(orch, state: dict, push_state, ota_state_push, push_log, fallback):
+    """The `set` command: the OTA switches, then `fallback` (budget / voice)."""
+    promotion = make_alpha_promotion_handler(orch, ota_state_push, push_log)
+
+    async def set_dispatch(cmd: dict) -> dict:
+        if cmd.get("key") == "ota_auto_install":
+            value = cmd.get("value")
+            if not isinstance(value, bool):
+                return {"ok": False, "error": "value"}
+            await asyncio.to_thread(orch.set_auto, value)
+            state["ota_auto_install"] = value
+            await push_state({"ota_auto_install": value}, "ha")
+            return {"ok": True}
+        if cmd.get("key") == "ota_alpha_promotion_allowed":
+            out = await promotion({"tag": None, "allowed": cmd.get("value")})
+            return {"ok": True} if out.get("ok") else out
+        return await fallback(cmd)
+    return set_dispatch
 
 
 async def main() -> None:
@@ -239,18 +279,14 @@ async def main() -> None:
     ota_kick = otaloop.Kick()
     kick = ota_kick.kick
 
-    async def set_dispatch(cmd: dict) -> dict:
-        if cmd.get("key") == "ota_auto_install":
-            value = cmd.get("value")
-            if not isinstance(value, bool):
-                return {"ok": False, "error": "value"}
-            await asyncio.to_thread(orch.set_auto, value)
-            state["ota_auto_install"] = value
-            await core.push_state({"ota_auto_install": value}, "ha")
-            return {"ok": True}
+    async def other_set(cmd: dict) -> dict:
         if cmd.get("key") == "budget_brl" and budget_set:
             return await budget_set(cmd)
         return await voice_set(cmd)
+
+    promotion_log = lambda msg, data: core.push_log(msg, data)  # noqa: E731 - core is built below
+    set_dispatch = make_set_dispatch(orch, state, lambda ch, origin: core.push_state(ch, origin), ota_state_push,
+                                     promotion_log, other_set)
 
     store = modelsmod.ModelStore(
         os.environ.get("FRIDAY_STATE_DIR", "/srv/friday/state"),
@@ -276,6 +312,7 @@ async def main() -> None:
 
     core = AgentCore(token, device, lambda: c.capabilities(bool(pve)), lambda: dict(state),
                      {"set": set_dispatch,
+                      "alpha_promotion": make_alpha_promotion_handler(orch, ota_state_push, promotion_log),
                       "diagnostics": diagmod.make_handler(lambda: dict(state), lambda: diagmod.load_literals(SECRETS, OPENCLAW_JSON, ENV_FILE) + tuple(x for x in (token, status_token, pve) if x)),
                       **modelsmod.make_handlers(store),
                       **provmod.make_handlers(bundles),

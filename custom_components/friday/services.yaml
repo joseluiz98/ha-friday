@@ -43,6 +43,17 @@ build_image:
       example: "0.3.8"
       selector:
         text:
+set_alpha_promotion:
+  fields:
+    tag:
+      required: false
+      example: "0.4.3"
+      selector:
+        text:
+    allowed:
+      required: true
+      selector:
+        boolean:
 announce:
   fields:
     message:
