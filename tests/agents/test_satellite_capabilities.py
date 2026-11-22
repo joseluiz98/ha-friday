@@ -336,12 +336,12 @@ async def test_keeper_waits_for_the_network_then_announces_and_follows_the_addre
             raise v
         return v
 
-    def fake(sat_id, port, state):
+    def fake(sat_id, port, state, addrs):
         made.append((sat_id, port, state, _Zc()))
         return made[-1][3]
 
     box = []
-    k = an.Keeper("sat-1", 8701, "pairable", box, announce_fn=fake, ip_fn=ip_fn)
+    k = an.Keeper("sat-1", 8701, "pairable", box, announce_fn=fake, ip_fn=ip_fn, addr_fn=dict)
     await k.step(); await k.step()
     assert made == [] and box == []  # no route, then only loopback: nothing announced
     await k.step()
@@ -355,7 +355,8 @@ async def test_keeper_waits_for_the_network_then_announces_and_follows_the_addre
 async def test_keeper_tries_again_when_the_announcement_fails():
     from friday_satellite_agent import announce as an
     box, results = [], [None, _Zc()]
-    k = an.Keeper("sat-1", 8701, "paired", box, announce_fn=lambda *a: results.pop(0), ip_fn=lambda: "192.0.2.34")
+    k = an.Keeper("sat-1", 8701, "paired", box, announce_fn=lambda *a: results.pop(0), ip_fn=lambda: "192.0.2.34",
+                  addr_fn=dict)
     await k.step()
     assert box == [] and len(results) == 1
     await k.step()
