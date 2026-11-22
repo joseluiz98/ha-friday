@@ -31,6 +31,16 @@ BACKOFF_START = 1.0
 BACKOFF_MAX = 60.0
 HELLO_TIMEOUT = 10.0
 HEARTBEAT = 30.0
+CONNECT_TIMEOUT = 5.0  # an unreachable address must not hold the fallback to the next one for minutes
+CABLE_PROBE_S = 10.0  # while on the Wi-Fi, how often the cable address is probed
+CABLE_STABLE_S = 60.0  # the cable must answer this long, without a miss, before the connection moves back
+PROBE_TIMEOUT = 3.0
+
+
+async def _close_ws(ws: aiohttp.ClientWebSocketResponse) -> None:
+    await ws.close()
+    # aiohttp can re-arm its heartbeat timer after close() when the last frame was just received; cancel it explicitly.
+    getattr(ws, "_cancel_heartbeat", lambda: None)()
 
 
 def _remover(listeners: list, cb: Callable) -> Callable[[], None]:
@@ -47,11 +57,21 @@ class FridayConnection:
     """Keeps a websocket to an agent alive and dispatches its messages."""
 
     def __init__(
-        self, hass: HomeAssistant, host: str, port: int, token: str, subentry_id: str
+        self,
+        hass: HomeAssistant,
+        hosts: list[str] | str,
+        port: int,
+        token: str,
+        subentry_id: str,
     ) -> None:
         self.hass = hass
-        self._host = host
+        # preferred first (the cable), then the fallback (the Wi-Fi); a bare str is one host
+        self._hosts: list[str] = [hosts] if isinstance(hosts, str) else list(hosts)
+        self._host = self._hosts[0]  # the address in use (or last tried)
         self._port = port
+        self._watch_task: asyncio.Task | None = None
+        self._wake = asyncio.Event()
+        self._announced_host: str | None = None
         self._token = token
         self._subentry_id = subentry_id
         self.connected = False
@@ -120,6 +140,24 @@ class FridayConnection:
     def subentry_id(self) -> str:
         return self._subentry_id
 
+    @property
+    def host(self) -> str:
+        """The address the connection uses (the one last tried while it is down)."""
+        return self._host
+
+    def set_hosts(self, hosts: list[str], port: int) -> None:
+        """New addresses from discovery: never reloads the entry. A session on a still-listed address is kept; one on
+        a removed address (or port) is closed and the loop reconnects on the new list."""
+        hosts = list(hosts)
+        if hosts == self._hosts and port == self._port:
+            return
+        self._hosts, in_use_port, self._port = hosts, self._port, port
+        if self.connected and self._ws is not None and not self._ws.closed:
+            if self._host not in hosts or in_use_port != port:
+                self.hass.async_create_task(_close_ws(self._ws))
+        else:
+            self._wake.set()  # down and waiting out a backoff: try the new list now
+
     async def send(self, name: str, timeout: float = 10, **fields: Any) -> dict:
         """Send a command and wait for its result."""
         ws = self._ws
@@ -156,30 +194,45 @@ class FridayConnection:
     async def _run(self) -> None:
         backoff = BACKOFF_START
         while True:
-            try:
-                await self._session()
-                backoff = BACKOFF_START
-            except asyncio.CancelledError:
-                raise
-            except (aiohttp.ClientError, OSError, TimeoutError, ProtocolError) as err:
-                _LOGGER.debug("Agent %s:%s connection failed: %s", self._host, self._port, err)
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception("Unexpected error in agent connection")
+            connected_once = False
+            for host in list(self._hosts):
+                self._host = host
+                try:
+                    connected_once = await self._session(host)
+                    backoff = BACKOFF_START
+                    break  # the session ended: start over from the preferred address
+                except asyncio.CancelledError:
+                    raise
+                except (aiohttp.ClientError, OSError, TimeoutError, ProtocolError) as err:
+                    _LOGGER.debug("Agent %s:%s connection failed: %s", host, self._port, err)
+                except Exception:  # noqa: BLE001
+                    _LOGGER.exception("Unexpected error in agent connection")
+                self._set_connected(False)
+                self._ws = None
             self._set_connected(False)
             self._ws = None
             if self._mismatch:
                 self._mismatch = False
                 backoff = BACKOFF_MAX * 5  # incompatible agent: retry rarely
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, BACKOFF_MAX)
+            self._wake.clear()
+            try:
+                await asyncio.wait_for(self._wake.wait(), backoff)
+            except TimeoutError:
+                pass
+            if not connected_once:
+                backoff = min(backoff * 2, BACKOFF_MAX)
 
-    async def _session(self) -> None:
+    async def _session(self, host: str) -> bool:
+        """One websocket session on `host`; True when it got as far as a hello (False: protocol mismatch)."""
         session = async_get_clientsession(self.hass)
-        url = f"ws://{self._host}:{self._port}{WS_PATH}"
-        async with session.ws_connect(
-            url, headers={"Authorization": f"Bearer {self._token}"},
-            heartbeat=HEARTBEAT,
-        ) as ws:
+        url = f"ws://{host}:{self._port}{WS_PATH}"
+        ws = await asyncio.wait_for(
+            session.ws_connect(
+                url, headers={"Authorization": f"Bearer {self._token}"}, heartbeat=HEARTBEAT
+            ),
+            CONNECT_TIMEOUT,
+        )
+        try:
             self._ws = ws
             async with asyncio.timeout(HELLO_TIMEOUT):
                 first = await ws.receive_str()
@@ -191,29 +244,73 @@ class FridayConnection:
                      or proto != PROTOCOL_VERSION)
             ):
                 self._mismatch = True
-                await ws.close()
-                # aiohttp can re-arm its heartbeat timer after close() when
-                # the last frame was just received; cancel it explicitly.
-                getattr(ws, "_cancel_heartbeat", lambda: None)()
+                await _close_ws(ws)
                 self._protocol_mismatch()
-                return
+                return False
             hello = parse_hello(msg)
             ir.async_delete_issue(self.hass, DOMAIN, f"protocol_{self._subentry_id}")
             previous, self.hello = self.hello, hello
             self.state = dict(hello.state)
+            if self._announced_host != host:
+                _LOGGER.info("Agent %s now on %s", self._subentry_id, host)
+                self._announced_host = host
             self._set_connected(True)
             if previous is not None and previous.capabilities != hello.capabilities:
                 # the agent came back with a different capability list (no "capabilities" message): rebuild entities
                 for cb in list(self._capabilities_listeners):
                     cb()
-            async for raw in ws:
-                if raw.type == aiohttp.WSMsgType.TEXT:
-                    try:
-                        self._dispatch(parse_message(raw.data))
-                    except ProtocolError as err:
-                        _LOGGER.debug("Bad agent message: %s", err)
-                elif raw.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
-                    break
+            if len(self._hosts) > 1 and host != self._hosts[0]:
+                self._watch_task = self.hass.async_create_background_task(
+                    self._cable_watch(ws), f"friday cable watch {self._subentry_id}"
+                )
+            try:
+                async for raw in ws:
+                    if raw.type == aiohttp.WSMsgType.TEXT:
+                        try:
+                            self._dispatch(parse_message(raw.data))
+                        except ProtocolError as err:
+                            _LOGGER.debug("Bad agent message: %s", err)
+                    elif raw.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
+                        break
+            finally:
+                task, self._watch_task = self._watch_task, None
+                if task is not None and task is not asyncio.current_task():
+                    task.cancel()
+        finally:
+            await _close_ws(ws)  # also cancels the heartbeat timer the peer's close frame can re-arm
+        return True
+
+    async def _probe(self, host: str, port: int) -> bool:
+        """Does `host` accept a TCP connection on the agent's port?"""
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), PROBE_TIMEOUT)
+        except (OSError, TimeoutError):
+            return False
+        writer.close()
+        return True
+
+    async def _cable_watch(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """On the fallback address: probe the preferred one and move back once it has answered CABLE_STABLE_S."""
+        loop = asyncio.get_running_loop()
+        ok_since: float | None = None
+        watched: str | None = None
+        while not ws.closed:
+            await asyncio.sleep(CABLE_PROBE_S)
+            preferred = self._hosts[0]
+            if preferred == self._host:
+                return  # the list changed under us: the preferred address is the one in use
+            if preferred != watched:
+                watched, ok_since = preferred, None
+            if await self._probe(preferred, self._port):
+                now = loop.time()
+                if ok_since is None:
+                    ok_since = now
+                if now - ok_since >= CABLE_STABLE_S:
+                    _LOGGER.info("Agent %s: %s answers again, moving back", self._subentry_id, preferred)
+                    await _close_ws(ws)
+                    return
+            else:
+                ok_since = None
 
     def _protocol_mismatch(self) -> None:
         _LOGGER.error(
