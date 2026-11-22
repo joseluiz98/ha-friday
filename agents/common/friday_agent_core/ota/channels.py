@@ -22,6 +22,7 @@ class Release:
 class SoakRecord:
     started_at: float | None  # when the first alpha device became healthy on this tag
     failed: bool  # any alpha device (or the server) reported a failure on this tag
+    blocked: bool = False  # the owner stopped this tag's promotion by hand (never cleared by a failure, nor the reverse)
 
 
 def version_key(tag: str) -> tuple[int, int, int]:
@@ -49,7 +50,7 @@ def promoted(r: Release, soak: dict[str, SoakRecord], now: float) -> bool:
         return True
     rec = soak.get(r.tag)
     return (rec is not None and rec.started_at is not None and not rec.failed
-            and now - rec.started_at >= SOAK_S)
+            and not rec.blocked and now - rec.started_at >= SOAK_S)
 
 
 def stable_tag(releases: list[Release], soak: dict[str, SoakRecord], now: float) -> str | None:

@@ -112,7 +112,8 @@ class OtaStore:
                 for t, r in self.data["releases"].items()}
 
     def soak(self) -> dict[str, ch.SoakRecord]:
-        return {t: ch.SoakRecord(s.get("started_at"), bool(s.get("failed"))) for t, s in self.data["soak"].items()}
+        return {t: ch.SoakRecord(s.get("started_at"), bool(s.get("failed")), bool(s.get("blocked")))
+                for t, s in self.data["soak"].items()}
 
     def soak_start(self, tag: str, now: float) -> None:
         s = self.data["soak"].setdefault(tag, {"started_at": None, "failed": False})
@@ -121,6 +122,10 @@ class OtaStore:
 
     def soak_fail(self, tag: str) -> None:
         self.data["soak"].setdefault(tag, {"started_at": None, "failed": False})["failed"] = True
+
+    def soak_block(self, tag: str, blocked: bool) -> None:
+        """The owner's hand block; `failed` is a separate flag and is never touched here."""
+        self.data["soak"].setdefault(tag, {"started_at": None, "failed": False})["blocked"] = bool(blocked)
 
     # devices
     def device(self, sat_id: str) -> dict:
