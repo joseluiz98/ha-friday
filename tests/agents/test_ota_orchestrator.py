@@ -1025,9 +1025,9 @@ def test_allow_keeps_failed(tmp_path):
     w.store.soak_fail("v1.1.0")
     assert w.orch.set_promotion("v1.1.0", True) == {"ok": False, "error": "failed"}
     assert w.store.data["soak"]["v1.1.0"]["failed"] is True
-    # blocking a failed tag is allowed: it only sets the flag
-    assert w.orch.set_promotion("v1.1.0", False) == {"ok": True, "tag": "v1.1.0"}
-    assert w.store.data["soak"]["v1.1.0"]["blocked"] is True and w.store.data["soak"]["v1.1.0"]["failed"] is True
+    # blocking a failed tag is refused too: no silent blocked flag on a tag that cannot be promoted
+    assert w.orch.set_promotion("v1.1.0", False) == {"ok": False, "error": "failed"}
+    assert "blocked" not in w.store.data["soak"]["v1.1.0"]
 
 
 def test_block_persists(tmp_path):
@@ -1057,6 +1057,13 @@ def test_set_promotion_already_promoted(tmp_path):
     w = _alpha_world(tmp_path)
     w.store.data["promotions"]["v1.1.0"] = {"at": w.now, "result": "promoted"}
     assert w.orch.set_promotion("v1.1.0", False) == {"ok": False, "error": "promoted"}
+    assert "blocked" not in w.store.data["soak"].get("v1.1.0", {})
+
+
+def test_set_promotion_superseded_has_its_own_code(tmp_path):
+    w = _alpha_world(tmp_path)
+    w.store.data["promotions"]["v1.1.0"] = {"at": w.now, "result": "superseded"}
+    assert w.orch.set_promotion("v1.1.0", False) == {"ok": False, "error": "superseded"}
     assert "blocked" not in w.store.data["soak"].get("v1.1.0", {})
 
 
@@ -1104,3 +1111,83 @@ def test_failure_on_a_blocked_tag_past_the_soak_still_counts(tmp_path):
     w.now += SOAK_S + 60
     w.orch.report({"sat_id": "sat-0000a1", "tag": "v1.1.0", "result": "rolled_back", "stage": "health", "error": "x"})
     assert w.store.data["soak"]["v1.1.0"]["failed"] is True
+
+
+# ---- the switch follows the newest promotable alpha (owner, 22/11)
+def _three(tmp_path, publisher=None):
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True), rel("v1.2.0", pre=True)])
+    w.orch.publisher = publisher
+    return w
+
+
+def test_switch_tracks_newest_promotable_when_newest_failed(tmp_path):
+    w = _three(tmp_path)
+    w.store.soak_start("v1.1.0", w.now)
+    w.store.soak_start("v1.2.0", w.now)
+    w.store.soak_fail("v1.2.0")
+    assert w.orch.promotion_allowed() is True  # v1.1.0 is the one the switch tracks
+    assert w.orch.alpha_promotion()[1]["tag"] == "v1.2.0"  # the sensor keeps its own view
+    w.store.soak_fail("v1.1.0")
+    assert w.orch.promotion_allowed() is None  # no promotable alpha left
+
+
+def test_switch_off_blocks_that_tag(tmp_path):
+    w = _three(tmp_path)
+    w.store.soak_start("v1.1.0", w.now)
+    w.store.soak_start("v1.2.0", w.now)
+    w.store.soak_fail("v1.2.0")
+    assert w.orch.set_promotion(None, False) == {"ok": True, "tag": "v1.1.0"}
+    assert w.store.data["soak"]["v1.1.0"]["blocked"] is True
+    assert "blocked" not in w.store.data["soak"]["v1.2.0"]
+    assert w.orch.promotion_allowed() is False  # a blocked tag stays tracked (switch off, not unavailable)
+    assert w.orch.set_promotion(None, True) == {"ok": True, "tag": "v1.1.0"}
+
+
+def test_action_default_tag_matches_switch(tmp_path):
+    w = _three(tmp_path)
+    assert w.orch.tracked_promotion_tag() == "v1.2.0"
+    w.store.soak_fail("v1.2.0")
+    assert w.orch.tracked_promotion_tag() == "v1.1.0"
+    assert w.orch.set_promotion(None, False)["tag"] == w.orch.tracked_promotion_tag() == "v1.1.0"
+    assert w.orch.set_promotion("v1.2.0", True) == {"ok": False, "error": "failed"}  # an explicit tag is unchanged
+
+
+# ---- a block arriving while GitHub is being called (final review)
+class BlockingPublisher(FakePublisher):
+    def __init__(self, on_promote):
+        super().__init__()
+        self.on_promote = on_promote
+
+    def promote(self, tag):
+        self.on_promote()
+        super().promote(tag)
+
+
+def test_block_during_promote_call_is_honoured_or_reported(tmp_path, caplog):
+    w = _alpha_world(tmp_path)
+    w.orch.publisher = BlockingPublisher(lambda: w.orch.set_promotion("v1.1.0", False))
+    w.store.soak_start("v1.1.0", w.now - SOAK_S - 1)
+    with caplog.at_level("WARNING"):
+        w.orch._promote_step()
+    # the call was already on its way: GitHub promoted it, and the owner is told the block came too late
+    assert w.orch.publisher.calls == ["v1.1.0"]
+    assert w.store.data["promotions"]["v1.1.0"]["result"] == "promoted"
+    assert any("tarde demais" in t and "v1.1.0" in t for t in w.pushed)
+    assert any("too late" in r.getMessage() for r in caplog.records)
+
+
+def test_block_before_promote_call_is_honoured(tmp_path):
+    # the block lands between the candidate selection and the GitHub call: the re-check under the lock skips it
+    pub = FakePublisher()
+    w = _alpha_world(tmp_path, pub)
+    w.store.soak_start("v1.1.0", w.now - SOAK_S - 1)
+
+    class Hook(dict):
+        def get(self, key, default=None):
+            w.orch.set_promotion("v1.1.0", False)
+            return super().get(key, default)
+
+    w.orch._promote_tried = Hook()
+    w.orch._promote_step()
+    assert pub.calls == [] and "v1.1.0" not in w.store.data["promotions"]
+    assert w.pushed == []

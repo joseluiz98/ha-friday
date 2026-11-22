@@ -187,6 +187,7 @@ PROMOTION_ERRORS = {
     "unknown_tag": "Unknown alpha.",
     "failed": "This alpha failed its soak on its own (rollback or exhausted retries); it cannot be allowed.",
     "promoted": "This release is already stable.",
+    "superseded": "A newer release replaced this alpha; it will not be promoted.",
     "value": "Invalid value.",
 }
 

@@ -52,6 +52,7 @@ async def test_bad_tag_is_refused(hass):
     ("no_alpha", "There is no alpha in soak."),
     ("unknown_tag", "Unknown alpha."),
     ("promoted", "already stable"),
+    ("superseded", "A newer release replaced this alpha; it will not be promoted."),
     ("odd", "(odd)"),
 ])
 async def test_error_messages(hass, code, text):

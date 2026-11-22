@@ -337,6 +337,10 @@ class Orchestrator:
         for r in todo:
             if now - self._promote_tried.get(r.tag, -PROMOTE_RETRY_S) < PROMOTE_RETRY_S:
                 continue
+            with self.store.lock:  # a block (or a failure) that arrived since the selection above wins
+                rec = self.store.soak().get(r.tag)
+                if rec is not None and (rec.blocked or rec.failed):
+                    continue
             self._promote_tried[r.tag] = now
             try:
                 pub.promote(r.tag)  # network: outside the state lock
@@ -346,6 +350,10 @@ class Orchestrator:
             with self.store.lock:
                 self.store.data.setdefault("promotions", {})[r.tag] = {"at": now, "result": "promoted"}
                 self.notifier.queue(nt.format_promoted(r.tag), self.store.data["pushes"])
+                rec = self.store.soak().get(r.tag)
+                if rec is not None and rec.blocked:  # the owner blocked it while the GitHub call was in flight
+                    LOG.warning("OTA: the block on %s came too late; it was already being promoted", r.tag)
+                    self.notifier.queue(nt.format_block_too_late(r.tag), self.store.data["pushes"])
                 try:
                     self.store.event("server", r.tag, "promoted")
                 except OSError as err:
@@ -651,33 +659,42 @@ class Orchestrator:
                     attrs["soaked_hours"] = round(max(end - started, 0.0) / 3600, 1)
         return attrs["promotes_at"], attrs
 
+    def tracked_promotion_tag(self) -> str | None:
+        """The alpha the Alpha promotion switch follows (owner, 22/11): the newest one still promotable (eligible
+        pre-release, not decided, not older than the newest stable) that has not failed, blocked or not. The sensor
+        keeps listing every alpha; this one skips the failed."""
+        _state, attrs = self.alpha_promotion()
+        return next((row["tag"] for row in attrs["alphas"] if row["status"] != "failed"), None)
+
     def promotion_allowed(self) -> bool | None:
         """Value of the switch `ota_alpha_promotion_allowed`: True = the tracked alpha will be promoted, False = blocked
-        by the owner, None (unavailable) = no tracked alpha or it failed on its own (nothing to allow)."""
-        _state, attrs = self.alpha_promotion()
-        status = attrs["status"]
-        if status == "blocked":
-            return False
-        return True if status in ("waiting_install", "soaking", "ready") else None
+        by the owner, None (unavailable) = no promotable alpha."""
+        with self.store.lock:
+            tag = self.tracked_promotion_tag()
+            if tag is None:
+                return None
+            rec = self.store.soak().get(tag)
+            return not (rec is not None and rec.blocked)
 
     def set_promotion(self, tag: str | None, allowed: bool) -> dict:
-        """The owner blocks (allowed=False) or allows the promotion of an alpha; `tag` None = the tracked alpha.
-        Allowing clears only the hand block, never `failed`. Reply: {"ok": True, "tag"} or {"ok": False, "error"}
-        with error in no_alpha | unknown_tag | failed | promoted | value."""
+        """The owner blocks (allowed=False) or allows the promotion of an alpha; `tag` None = the tracked alpha (the
+        one the switch shows). Allowing clears only the hand block, never `failed`; a failed tag refuses both.
+        Reply: {"ok": True, "tag"} or {"ok": False, "error"} with error in
+        no_alpha | unknown_tag | failed | promoted | superseded | value."""
         if not isinstance(allowed, bool):
             return {"ok": False, "error": "value"}
         with self.store.lock:
             if tag is None:
-                _state, attrs = self.alpha_promotion()
-                if attrs["status"] not in ("waiting_install", "soaking", "ready", "blocked", "failed"):
+                tag = self.tracked_promotion_tag()
+                if tag is None:
                     return {"ok": False, "error": "no_alpha"}
-                tag = attrs["tag"]
             elif not any(r.tag == tag and r.prerelease for r in self._eligible()):
                 return {"ok": False, "error": "unknown_tag"}
-            if tag in self.store.data.setdefault("promotions", {}):  # promoted or superseded: already decided
-                return {"ok": False, "error": "promoted"}
+            decided = self.store.data.setdefault("promotions", {}).get(tag)
+            if isinstance(decided, dict):  # already decided: promoted, or replaced by a newer release
+                return {"ok": False, "error": "superseded" if decided.get("result") == "superseded" else "promoted"}
             rec = self.store.soak().get(tag)
-            if allowed and rec is not None and rec.failed:
+            if rec is not None and rec.failed:
                 return {"ok": False, "error": "failed"}
             self.store.soak_block(tag, not allowed)
             try:
