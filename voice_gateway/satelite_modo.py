@@ -12,8 +12,8 @@ MSG_ENTREGANDO = {"evento": "cerebro_entregando"}
 MSG_ENCERRAR = {"evento": "encerrar"}
 # 07/10: informação, não ordem nem frase pronta (regra de autonomia da Friday).
 DESCRICAO_ENCERRAR = (
-    "Encerra a conversa no satélite na hora: a sua fala é cortada, o microfone fecha e a conexão termina, "
-    "sem esperar a continuação. Com um pedido ao cérebro em andamento a conversa não fecha: o satélite espera "
+    "Encerra a conversa na hora: a sua fala é cortada, o microfone fecha e a conexão termina, "
+    "sem esperar a continuação. Com um pedido ao cérebro em andamento a conversa não fecha: fica aberta "
     "em silêncio, com luz e som, e a resposta é falada quando chegar; um pedido cuja resposta vai pelo Telegram "
     "(mandar_resposta_pelo_telegram) não segura a conversa. Serve para quando "
     "quem fala pede para parar ou encerrar, e para quando você percebe que o que o microfone capta não é "
@@ -23,14 +23,14 @@ DESCRICAO_ENCERRAR = (
 # sem ter como mandar e fechou a conversa, e a resposta ficou só no registro.
 DESCRICAO_RESPOSTA_PELO_TELEGRAM = (
     "Faz a resposta dos pedidos ao cérebro ainda em andamento nesta conversa ir só pelo Telegram do " + DONO + ", "
-    "inteira, quando chegar, em vez de ser falada aqui; esses pedidos deixam de segurar a conversa no satélite. "
+    "inteira, quando chegar, em vez de ser falada aqui; esses pedidos deixam de segurar a conversa. "
     "Serve para quando o pedido de receber pelo Telegram vem depois do pedido ao cérebro. Sem pedido em andamento, "
     "nada muda. Fora desta ferramenta a voz não manda mensagens pelo Telegram.")
 
 
 def resultado_encerrar_com_pendente(n: int) -> dict:
     return {"fechada": False, "pedidos_em_andamento": int(n),
-            "situacao": ("A conversa continua aberta porque há pedido ao cérebro em andamento: o satélite espera em "
+            "situacao": ("A conversa continua aberta porque há pedido ao cérebro em andamento: ela espera em "
                          "silêncio, com luz e som, e a resposta será falada quando chegar.")}
 
 
@@ -95,7 +95,7 @@ MOTIVO_NAO_PERTURBE = "calada pelo não perturbe"
 
 
 # D27: "aprende a minha voz" compete com "lembrar de algo → cérebro" na instrução de sistema; o fato diz onde mora.
-FATO_APRENDIZAGEM = ("Este satélite tem um programa de aprendizagem de voz, local, que ensina o satélite a reconhecer o "
+FATO_APRENDIZAGEM = ("Existe um programa de aprendizagem de voz, local, que ensina a casa a reconhecer o "
                      "\"Friday\" de cada pessoa da casa (ferramentas aprendizagem_de_voz e comecar_aprendizagem_de_voz).")
 
 
@@ -550,19 +550,19 @@ def mensagem_de_abertura(texto_entrega, timer, tipo_entrega="lembrete"):
 
 # ---- spec 2026-10-15: programa de aprendizagem de voz (item 4). Textos: fatos, sem ordens (skill designing-for-friday).
 DESCRICAO_APRENDIZAGEM_DE_VOZ = (
-    "Programa de aprendizagem de voz deste satélite: ensina o satélite a reconhecer o \"Friday\" dito por uma pessoa da "
-    "casa, para a palavra acordar com quem mora aqui e não com outras vozes. Vale para qualquer jeito de pedir isso. "
+    "Programa de aprendizagem de voz: ensina a casa a reconhecer o \"Friday\" dito por uma pessoa que mora aqui, "
+    "para a palavra acordar com ela e não com outras vozes. Vale para qualquer jeito de pedir isso. "
     "Devolve o roteiro da gravação e as pessoas já cadastradas. Esta chamada não grava nada.")
 DESCRICAO_COMECAR_APRENDIZAGEM = (
-    "Começa a gravação do programa de aprendizagem de voz para a pessoa com este nome. A conversa fecha quando a sua "
-    "fala termina, e o satélite conduz a gravação sozinho, com falas gravadas e bipes; a pessoa precisa estar perto "
-    "do satélite. Só funciona depois de aprendizagem_de_voz nesta conversa.")
+    "Começa a gravação do programa de aprendizagem de voz para a pessoa com este nome. A gravação começa quando a sua "
+    "fala termina e segue sozinha, com falas gravadas e bipes, e a conversa fecha nesse momento; a pessoa precisa "
+    "estar perto do aparelho. Só funciona depois de aprendizagem_de_voz nesta conversa.")
 ROTEIRO_APRENDIZAGEM = [
-    "o satélite toca uma fala gravada explicando o que fazer",
+    "uma fala gravada explica o que fazer",
     "dez bipes, um a cada 6 segundos; a cada bipe a pessoa diz Friday uma vez",
     "na metade, uma fala gravada pede para mudar de lugar, uns 3 metros",
     "depois, 30 segundos de fala livre, sem dizer a palavra",
-    "no fim, uma fala gravada avisa que o treino começou; o resultado vem falado neste satélite e por Telegram ao " + DONO,
+    "no fim, uma fala gravada avisa que o treino começou; o resultado vem falado aqui e por Telegram ao " + DONO,
 ]
 ERRO_SEM_ROTEIRO = {"ok": False, "erro": "o roteiro ainda não foi passado nesta conversa"}
 
@@ -570,7 +570,7 @@ ERRO_SEM_ROTEIRO = {"ok": False, "erro": "o roteiro ainda não foi passado nesta
 def resultado_comando(resposta) -> dict:
     """Resposta da Pi sem o id do comando (o envelope é do canal, não da voz)."""
     if not isinstance(resposta, dict):
-        return {"ok": False, "erro": "o satélite não confirmou"}
+        return {"ok": False, "erro": "a gravação não foi confirmada"}
     return {k: v for k, v in resposta.items() if k != "id"}
 
 
@@ -583,7 +583,7 @@ def roteiro_aprendizagem(resposta) -> dict:
         "antes_de_comecar": "falta o nome de quem vai gravar e a concordância dessa pessoa",
         "gravar_de_novo_o_mesmo_nome": "substitui o cadastro anterior dessa pessoa, se o novo for aprovado",
         "botao_do_satelite": "cancela a gravação",
-        "cadastrados": vozes if vozes is not None else "o satélite não respondeu",
+        "cadastrados": vozes if vozes is not None else "não foi possível consultar agora",
     }
 
 

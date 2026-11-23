@@ -663,7 +663,7 @@ class TestAprendizagemDeVoz(unittest.TestCase):
         self.assertNotIn("id", r)
 
     def test_roteiro_sem_resposta_da_pi(self):
-        self.assertEqual(sm.roteiro_aprendizagem(None)["cadastrados"], "o satélite não respondeu")
+        self.assertEqual(sm.roteiro_aprendizagem(None)["cadastrados"], "não foi possível consultar agora")
 
     def test_textos_sao_fatos(self):
         textos = (sm.DESCRICAO_APRENDIZAGEM_DE_VOZ, sm.DESCRICAO_COMECAR_APRENDIZAGEM, " ".join(sm.ROTEIRO_APRENDIZAGEM),
@@ -671,6 +671,16 @@ class TestAprendizagemDeVoz(unittest.TestCase):
         for t in textos:
             for ordem in ("Diga ", "Explique", "Pergunte", "Você deve", "Nunca", "SEMPRE", "encerrar_conversa"):
                 self.assertNotIn(ordem, t)
+
+    def test_textos_de_aprendizagem_nao_expoem_o_mecanismo(self):
+        """23/11: a voz disse "o satélite conduzirá o processo", copiando a descrição da ferramenta. A divisão modelo →
+        TTS → satélite é invisível para quem fala: os textos descrevem o que a pessoa vive, não quem faz."""
+        textos = (sm.DESCRICAO_APRENDIZAGEM_DE_VOZ, sm.DESCRICAO_COMECAR_APRENDIZAGEM, " ".join(sm.ROTEIRO_APRENDIZAGEM),
+                  sm.FATO_APRENDIZAGEM, sm.roteiro_aprendizagem(None)["cadastrados"],
+                  sm.resultado_comando(None)["erro"])
+        for t in textos:
+            for interno in ("satélite", "conduz", "cérebro", "modelo"):
+                self.assertNotIn(interno, t.lower())
 
     def test_trava(self):
         t = sm.TravaAprendizagem()
@@ -682,7 +692,7 @@ class TestAprendizagemDeVoz(unittest.TestCase):
     def test_resultado_tira_o_id_do_comando(self):
         self.assertEqual(sm.resultado_comando({"id": "c2", "ok": True, "nome": "Bia", "id_pessoa": "bia"}),
                          {"ok": True, "nome": "Bia", "id_pessoa": "bia"})
-        self.assertEqual(sm.resultado_comando(None), {"ok": False, "erro": "o satélite não confirmou"})
+        self.assertEqual(sm.resultado_comando(None), {"ok": False, "erro": "a gravação não foi confirmada"})
 
     def test_abertura_do_resultado_nomeia_a_fonte_verdadeira(self):
         c = sm.mensagem_de_abertura("a voz de Bia foi aprendida", None, "aprendizagem")["content"]
@@ -843,6 +853,12 @@ class TestEnderecamento(unittest.TestCase):
         t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")).read()
         self.assertIn("Se o usuário interromper você, pare e escute", t)
         self.assertIn("não é interrupção", t)
+
+    def test_system_instruction_diz_que_a_assistente_e_uma_so(self):
+        import os
+        t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")).read()
+        self.assertIn("percebe uma só assistente", t)
+        self.assertIn("mecanismo por dentro", t)
         self.assertNotIn("Se o Alex interromper", t)
 
 
