@@ -3,6 +3,7 @@ resposta (que volta ao bot com o mesmo id) e os efeitos que o programa executa (
 import os, re
 import volume as v
 import cadastro
+import palavras as pw
 import ring
 
 _CHAVE_FRASE = re.compile(r"^[a-z0-9_]{1,40}$")
@@ -73,7 +74,9 @@ def executar(cmd: dict, ctl, timers, agora: float, vozes=None, sons_dir=None, es
                         "timers": [_timer_publico(x, agora) for x in timers.consultar(agora)]}, []
             r = {"cancelados": [_timer_publico(x, agora) for x in feitos]}
         elif acao == "vozes_consultar":  # spec 2026-10-15 §4.4
-            r = {"vozes": [{"nome": x["nome"], "desde": x["desde"]} for x in (vozes.listar() if vozes else [])]}
+            r = {"vozes": [{"nome": x["nome"], "desde": x["desde"],
+                            "palavras": [pw.nome_falado(w) for w in vozes.palavras_de(x["id"])]}
+                           for x in (vozes.listar() if vozes else [])]}
         elif acao == "cadastro_voz":
             if vozes is None:
                 raise ValueError("o programa de aprendizagem de voz não está disponível")

@@ -1,6 +1,6 @@
 # Voice learning for every wake word (design, 2026-11-23)
 
-Status: decisions of section 9 answered by the owner on 23/11; phrase texts awaiting his approval before any paid generation. Builds on PR #55 (negatives that always exist).
+Status: decisions answered and phrases approved by the owner on 23/11; implemented in PR #56 (v0.4.4). Implementation notes: the window names carry the word (`<word>__tentativa_NN`, the principal keeps the old names), marks of the extra words carry `palavra`, sessions of a partial enrolment are merged by appending audio and shifting the marks, and `treino_verificador.py --executar` takes `palavra`, `modelo` and `lv_fixo`. Builds on PR #55 (negatives that always exist).
 
 ## 1. Why
 The voice-learning program teaches one thing: the person's "Friday". The house has two words, and the second one has

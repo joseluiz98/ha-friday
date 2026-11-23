@@ -9,10 +9,11 @@ from openwakeword.model import Model
 from openwakeword.vad import VAD
 from openwakeword.custom_verifier_model import train_verifier_model
 import negativos as ng
+import palavras as pw
 import verificador as vf
 
 RAIZ = "/home/jose/vozes"
-MODELO_BASE = "/home/jose/modelos/friday.onnx"
+MODELO_BASE = pw.MODELO_PRINCIPAL
 PASSO, SILENCIO_ANTES = 1280, 6   # 6 pedaços de silêncio antes de cada clipe: os 5 primeiros do modelo saem zerados
 NEG_PASSO, NEG_MAX = 2, 6000      # negativos: um quadro a cada 2, no máximo 6000 (RAM da Pi 3)
 
@@ -27,11 +28,13 @@ def _baixa_prioridade():
 class Extrator:
     """base (nota do modelo), vad e feats (16x96, as entradas do verificador) por pedaço de 80 ms, com cache."""
 
-    def __init__(self):
-        self.m = Model(wakeword_models=[MODELO_BASE], inference_framework="onnx")
+    def __init__(self, modelo=MODELO_BASE, palavra=pw.PRINCIPAL):
+        self.modelo, self.palavra = modelo, palavra
+        self.m = Model(wakeword_models=[modelo], inference_framework="onnx")
 
     def __call__(self, caminho):
-        chave = hashlib.sha1(f"{caminho}:{os.path.getmtime(caminho)}".encode()).hexdigest()
+        # 23/11: o cache vale por palavra: a nota de cada clipe vem do modelo base daquela palavra
+        chave = hashlib.sha1(f"{caminho}:{os.path.getmtime(caminho)}:{self.modelo}".encode()).hexdigest()
         cache = os.path.join(RAIZ, "_cache", chave + ".npz")
         if os.path.exists(cache):
             z = np.load(cache)
@@ -45,9 +48,9 @@ class Extrator:
         base, vz, feats = [], [], []
         for i in range(0, len(dat) - PASSO + 1, PASSO):
             x = dat[i:i + PASSO]
-            base.append(float(self.m.predict(x)["friday"]))
+            base.append(float(self.m.predict(x)[self.palavra]))
             vz.append(float(vad.predict(x, frame_size=640)))
-            feats.append(self.m.preprocessor.get_features(self.m.model_inputs["friday"])[0])
+            feats.append(self.m.preprocessor.get_features(self.m.model_inputs[self.palavra])[0])
         base, vz = base[SILENCIO_ANTES:], vz[SILENCIO_ANTES:]
         feats = np.asarray(feats[SILENCIO_ANTES:], dtype=np.float16)
         os.makedirs(os.path.dirname(cache), mode=0o700, exist_ok=True)
@@ -74,7 +77,7 @@ def _fatia(e, ini, fim):
     return {"base": e["base"][ini:fim], "vad": e["vad"][ini:fim], "feats": e["feats"][ini:fim]}
 
 
-def clipes(ident_novo, pasta_nova, extrair, rotulos, negativos=()):
+def clipes(ident_novo, pasta_nova, extrair, rotulos, negativos=(), palavra=pw.PRINCIPAL):
     """Os clipes do D14, cada um com base/vad/feats, categoria, grupo (sessão), rótulo e quadros de treino.
     16/10: tentativas e fala livre saem do áudio CONTÍNUO (sessao.wav + marcas.json; historico/continuas/*.wav com os
     recortes de recortes_tentativas): o modelo roda no contínuo e só depois se fatia. Recortes com começo a frio
@@ -103,14 +106,16 @@ def clipes(ident_novo, pasta_nova, extrair, rotulos, negativos=()):
                 pedaco = _fatia(e, mk["ini"], mk["fim"])
                 if mk["nome"] == "fala_livre":
                     add(None, "fala_livre", f"{p}:fala_livre", 0, fala_livre=True, e=pedaco)
-                else:
+                elif mk.get("palavra", pw.PRINCIPAL) == palavra:
                     add(None, cat, f"{p}:{mk['nome']}", 1, e=pedaco)
-        elif os.path.isdir(pasta):  # cadastros anteriores a 16/10: só as janelas recortadas
+                else:  # 23/11: a outra palavra dita na mesma gravação é negativo desta (os quadros que passam saem)
+                    add(None, "falsas", f"{p}:{mk['nome']}", 0, fala_livre=True, e=pedaco)
+        elif os.path.isdir(pasta) and palavra == pw.PRINCIPAL:  # cadastros anteriores a 16/10: só as janelas recortadas
             for c in sorted(glob.glob(f"{pasta}/tentativa_*.wav")):
                 add(c, cat, f"{p}:{os.path.basename(c)}", 1)
             if os.path.exists(f"{pasta}/fala_livre.wav"):
                 add(f"{pasta}/fala_livre.wav", "fala_livre", f"{p}:fala_livre", 0, fala_livre=True)
-        if p == "jose":
+        if p == "jose" and palavra == pw.PRINCIPAL:  # o acervo de 15/10 é da "Friday"
             continuas = sorted(c for c in glob.glob(f"{RAIZ}/jose/historico/continuas/*.wav")
                                if not os.path.basename(c).startswith(HISTORICO_IGNORADO))
             for c in continuas:
@@ -151,7 +156,10 @@ def _numeros(cats):
             "falsas_barradas": f"{f[1] - f[0]}/{f[1]}" if f else None}
 
 
-def executar(ident, nome, pasta_nova, limiar_voz, antes, saida_dir="/home/jose/modelos"):
+def executar(ident, nome, pasta_nova, limiar_voz, antes, saida_dir="/home/jose/modelos", palavra=pw.PRINCIPAL,
+             modelo=None, lv_fixo=None):
+    """Treina e julga o verificador de UMA palavra. `lv_fixo`: o limiar do verificador já em uso (é um só para todas
+    as palavras): a palavra é avaliada nele, e se só passaria em outro, é reprovada dizendo isso."""
     _baixa_prioridade()
     rotulos = ng.carregar_rotulos(f"{RAIZ}/rotulos.json")  # 23/11: só o MK1 tem o acervo de 15/10; sem ele é vazio
     neg = ng.escolher()
@@ -159,20 +167,23 @@ def executar(ident, nome, pasta_nova, limiar_voz, antes, saida_dir="/home/jose/m
     resumo = {k: neg[k] for k in ("origem", "proprio_s", "baseline_s", "acervo_s", "total_s")}
     if motivo:
         return {"aprovado": False, "numeros": {}, "motivo": motivo, "negativos": resumo}
-    cl = clipes(ident, pasta_nova, Extrator(), rotulos, neg["clipes"])
+    cl = clipes(ident, pasta_nova, Extrator(modelo or MODELO_BASE, palavra), rotulos, neg["clipes"], palavra)
     novas = [c["base"] for c in cl if c["cat"] == "nova"]
     mal = vf.ouviu_mal(novas)
     if mal > vf.OUVIU_MAL_MAX:
-        return {"aprovado": False, "numeros": {},
-                "motivo": f"o modelo base mal ouviu o Friday de {nome} (nota abaixo de 0,3 em {mal} de {len(novas)})",
+        return {"aprovado": False, "numeros": {}, "palavra": palavra,
+                "motivo": f"o modelo base mal ouviu o {pw.nome_falado(palavra)} de {nome} (nota abaixo de 0,3 em {mal} de {len(novas)})",
                 "negativos": resumo}
     tabela = vf.avaliar(cl, treinar, notas_de, limiar_voz)
-    aprovado, (lv, lp), textos, falhou = vf.escolher(tabela, antes)
-    r = {"aprovado": aprovado, "motivo": falhou, "numeros": dict(_numeros(tabela[(lv, lp)]), textos=textos),
+    aprovado, (lv, lp), textos, falhou = vf.escolher(tabela, antes, lv_fixo)
+    if not aprovado and lv_fixo is not None and vf.escolher(tabela, antes)[0]:
+        falhou = (f"só passa com o limiar {vf.escolher(tabela, antes)[1][0]} do verificador, e o que está em uso é "
+                  f"{lv_fixo}; mudar o limiar afetaria as outras palavras")
+    r = {"palavra": palavra, "aprovado": aprovado, "motivo": falhou, "numeros": dict(_numeros(tabela[(lv, lp)]), textos=textos),
          "limiar_verificador": lv, "limiar_palavra": lp, "negativos": resumo}
     if aprovado:
         modelo = treinar(cl)
-        fd, tmp = tempfile.mkstemp(dir=saida_dir, prefix=".verificador-", suffix=".pkl")
+        fd, tmp = tempfile.mkstemp(dir=saida_dir, prefix=f".verificador-{palavra}-", suffix=".pkl")
         with os.fdopen(fd, "wb") as f:
             pickle.dump(modelo, f)
         r["modelo_tmp"] = tmp
@@ -197,8 +208,9 @@ def _avaliar_previo():
 
 def _executar_cli(args_json):
     a = json.loads(args_json)
-    print(json.dumps(executar(a["ident"], a["nome"], a["pasta"], a["limiar_voz"], a["antes"]), ensure_ascii=False),
-          flush=True)
+    print(json.dumps(executar(a["ident"], a["nome"], a["pasta"], a["limiar_voz"], a["antes"],
+                              palavra=a.get("palavra", pw.PRINCIPAL), modelo=a.get("modelo"), lv_fixo=a.get("lv_fixo")),
+                     ensure_ascii=False), flush=True)
 
 
 if __name__ == "__main__":

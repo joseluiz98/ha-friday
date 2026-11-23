@@ -331,24 +331,48 @@ def e_aviso_de_cadastro(corpo) -> bool:
 
 
 def _texto_cadastro_voz(corpo, sat: dict) -> str:
-    """Spec 2026-10-15 D18: resultado do programa de aprendizagem de voz (Telegram e entrega falada)."""
+    """Spec 2026-10-15 D18 (Telegram e entrega falada). 23/11: um resultado por palavra, e sem dizer "satélite": a voz
+    lê este texto em voz alta e a pessoa percebe uma só assistente."""
     nome = corpo.get("nome")
     if not isinstance(nome, str) or not 1 <= len(nome.strip()) <= 20:
         raise ValueError("nome inválido")
+    nome = nome.strip()
     if not isinstance(corpo.get("aprovado"), bool):
         raise ValueError("aprovado inválido")
-    onde = f"no satélite do {sat.get('comodo')}" if sat.get("comodo") else "no satélite"
-    n = corpo.get("numeros") if isinstance(corpo.get("numeros"), dict) else {}
-    num = lambda k: n.get(k) if isinstance(n.get(k), str) and len(n.get(k)) <= 12 else None
-    if corpo["aprovado"]:
-        partes = [f"tentativas reconhecidas: {num('nova')}" if num("nova") else None,
-                  f"disparos falsos barrados: {num('falsas_barradas')}" if num("falsas_barradas") else None]
+    onde = f"no {sat.get('comodo')}" if sat.get("comodo") else "em casa"
+    num = lambda n, k: n.get(k) if isinstance(n.get(k), str) and len(n.get(k)) <= 12 else None
+
+    def detalhe(n):
+        n = n if isinstance(n, dict) else {}
+        partes = [f"tentativas reconhecidas: {num(n, 'nova')}" if num(n, "nova") else None,
+                  f"disparos falsos barrados: {num(n, 'falsas_barradas')}" if num(n, "falsas_barradas") else None]
         extra = "; ".join(p for p in partes if p)
-        return f"Programa de aprendizagem de voz {onde}: a voz de {nome.strip()} foi aprendida" + \
-            (f" ({extra})" if extra else "") + "."
-    motivo = corpo.get("motivo") if isinstance(corpo.get("motivo"), str) else "motivo não informado"
-    return (f"Programa de aprendizagem de voz {onde}: a voz de {nome.strip()} não foi aprendida ({motivo[:200]}). "
-            "O satélite continua como antes.")
+        return f" ({extra})" if extra else ""
+
+    def motivo_de(m):
+        return m[:200] if isinstance(m, str) and m else "motivo não informado"
+
+    itens = corpo.get("palavras")
+    if itens is None:  # corpo de antes de 23/11: uma palavra só
+        if corpo["aprovado"]:
+            return f"Aprendizagem de voz {onde}: a voz de {nome} foi aprendida" + detalhe(corpo.get("numeros")) + "."
+        return (f"Aprendizagem de voz {onde}: a voz de {nome} não foi aprendida ({motivo_de(corpo.get('motivo'))}). "
+                "Tudo continua como antes.")
+    if not isinstance(itens, list) or not 1 <= len(itens) <= 6 or not all(
+            isinstance(i, dict) and isinstance(i.get("palavra"), str) and 1 <= len(i["palavra"]) <= 20
+            and isinstance(i.get("aprovado"), bool) for i in itens):
+        raise ValueError("palavras inválidas")
+    ok = [i for i in itens if i["aprovado"]]
+    no = [i for i in itens if not i["aprovado"]]
+    if not no:
+        return (f"Aprendizagem de voz {onde}: a voz de {nome} foi aprendida para "
+                + " e ".join(f"{i['palavra']}{detalhe(i.get('numeros'))}" for i in ok) + ".")
+    falhas = "; ".join(f"{i['palavra']} ({motivo_de(i.get('motivo'))})" for i in no)
+    if not ok:
+        return f"Aprendizagem de voz {onde}: a voz de {nome} não foi aprendida: {falhas}. Tudo continua como antes."
+    return (f"Aprendizagem de voz {onde}: a voz de {nome} foi aprendida para "
+            + " e ".join(f"{i['palavra']}{detalhe(i.get('numeros'))}" for i in ok)
+            + f"; não para {falhas}. O que já funcionava continua como antes.")
 
 
 def texto_aviso(corpo, sat: dict) -> str:

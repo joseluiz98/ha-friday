@@ -25,6 +25,7 @@ import xvf_link
 import doa
 from ativacao_detalhes import payload as payload_ativacao
 import negativos
+import palavras as pw
 import net_recovery
 import porta_local
 import registro_palavra
@@ -698,8 +699,26 @@ class Satelite:
             self.emissor.emitir("config", {"mudancas": {"volume": self.volume.normal}, "origem": "voz"})
         if "bip_volume" in efeitos:
             self.alto.tocar_wav(self._som("volume"))
+        if cmd.get("acao") == "vozes_consultar" and resposta.get("ok") is not False:
+            # 23/11: as palavras que a gravação cobre neste aparelho (as que têm a fala gravada)
+            resposta = dict(resposta, palavras=[pw.nome_falado(w) for w in pw.escolher(self.cfg, SONS)["gravar"]])
         if "cadastro" in efeitos:  # §4.4: o maestro só aceita com a conversa aberta
-            self._agendado = {"nome": resposta["nome"], "id": resposta["id_pessoa"]}
+            ja = self.vozes.palavras_de(resposta["id_pessoa"])
+            sel = pw.escolher(self.cfg, SONS, ja)  # 23/11: quais palavras esta gravação cobre
+            if not sel["gravar"]:
+                resposta = {"id": cmd.get("id"), "ok": False,
+                            "erro": "nenhuma palavra tem a fala gravada para guiar a gravação"}
+                print(json.dumps({"comando": cmd.get("acao"), "ok": False}), flush=True)
+                if self.conexao:
+                    self.conexao.enviar_mensagem("resposta", resposta)
+                return
+            resposta = dict(resposta, palavras=[pw.nome_falado(w) for w in sel["gravar"]],
+                            gravacao_s=cadastro.gravacao_prevista_s(len(sel["gravar"])))
+            if ja and set(ja) - set(sel["gravar"]):
+                resposta["ja_cadastrada_em"] = [pw.nome_falado(w) for w in ja]
+            if sel["puladas"]:
+                resposta["sem_fala_gravada"] = [pw.nome_falado(w) for w in sel["puladas"]]
+            self._agendado = {"nome": resposta["nome"], "id": resposta["id_pessoa"], "palavras": sel["gravar"]}
             self.evento("cadastro_agendado", self._agendado)
             if self.maestro.publico()["cadastro"]:
                 self.vozes.ocupado = True
@@ -740,6 +759,8 @@ class Satelite:
     def _som_aprendizagem(self, nome):
         if nome == "bipe":
             return self._som("volume")
+        if nome.startswith("intro_"):  # 23/11: a fala de apresentação de cada palavra extra
+            return pw.arquivo_da_intro(nome[len("intro_"):], SONS)
         caminho = f"{SONS}/{self.cfg['sons'].get('aprendizagem_' + nome, '')}"
         return caminho if os.path.isfile(caminho) else self._som(SONS_RESERVA[nome])
 
@@ -752,10 +773,12 @@ class Satelite:
         if arg == "iniciar":
             a, agora = self._agendado, datetime.datetime.now()
             pasta = self.vozes.pasta_nova(a["id"], agora)
-            dur = {k: self._duracao_wav(self._som_aprendizagem(k)) for k in ("intro", "bipe", "mudar_lugar",
-                                                                            "fala_livre", "fim")}
+            palavras_ = a.get("palavras") or [pw.PRINCIPAL]
+            falas = ["bipe", "mudar_lugar", "fala_livre", "fim"] + [
+                "intro" if w == pw.PRINCIPAL else f"intro_{w}" for w in palavras_]
+            dur = {k: self._duracao_wav(self._som_aprendizagem(k)) for k in falas}
             self._cad = {"nome": a["nome"], "id": a["id"], "pasta": pasta, "gravador": cadastro.Gravador(pasta),
-                         "roteiro": cadastro.Roteiro(dur, time.monotonic())}
+                         "palavras": palavras_, "roteiro": cadastro.Roteiro(dur, time.monotonic(), palavras_)}
             print(json.dumps({"aprendizagem": "inicio", "id": a["id"]}), flush=True)
             self.emissor.emitir("conversa", {"estado": "aberta"})  # 05/11: para o HA, a gravação continua a conversa
         elif arg in ("cancelar", "interromper"):
@@ -796,29 +819,80 @@ class Satelite:
                 c["gravador"].finalizar()  # 16/10: sessão contínua + marcas (o treino roda o modelo no contínuo)
                 self.evento("cadastro_fim")
                 self.emissor.emitir("conversa", {"estado": "fechada"})
-                threading.Thread(target=self._treinar, args=(c["id"], c["nome"], c["pasta"]), daemon=True).start()
+                threading.Thread(target=self._treinar, args=(c["id"], c["nome"], c["pasta"], c["palavras"]),
+                                 daemon=True).start()
 
-    def _treinar(self, ident, nome, pasta):
-        """Processo separado com nice 19: os laços da extração não disputam o GIL com a captura, e uma falta de
-        memória mata só o treino (Pi 3, 1 GB)."""
-        antes = {x["id"]: self.vozes.aceitas_de(x["id"]) for x in self.vozes.listar() if x["id"] != ident}
+    def _treinar(self, ident, nome, pasta, palavras_=(pw.PRINCIPAL,)):
+        """Um processo separado com nice 19 POR PALAVRA, uma de cada vez (a Pi 3 não aguenta dois pesados): os laços
+        da extração não disputam o GIL com a captura, e uma falta de memória mata só o treino (1 GB). Cada palavra é
+        julgada sozinha; o limiar do verificador, que é um só, fica o que já está em uso ou o da primeira aprovada."""
         baseline = self._buscar_baseline()
-        args = json.dumps({"ident": ident, "nome": nome, "pasta": pasta, "limiar_voz": self.cfg["limiar_voz_palavra"],
-                           "antes": antes}, ensure_ascii=False)
-        try:
-            p = subprocess.run(["nice", "-n", "19", sys.executable, os.path.join(os.path.dirname(__file__),
-                                "treino_verificador.py"), "--executar", args], capture_output=True, text=True,
-                               timeout=3600)
-            linhas = [l for l in p.stdout.splitlines() if l.startswith("{")]
-            if p.returncode != 0 or not linhas:
-                raise RuntimeError(f"código {p.returncode}: {(p.stderr or '').strip()[-200:]}")
-            r = json.loads(linhas[-1])
-        except Exception as e:
-            r = {"aprovado": False, "motivo": f"erro no treino: {type(e).__name__}: {e}", "numeros": {}}
+        lv = pw.limiar_do_verificador(self.cfg)
+        modelos = {p["nome"]: p["arquivo"] for p in pw.todas(self.cfg)}
+        resultados = []
+        for palavra in palavras_:
+            antes = {x["id"]: self.vozes.aceitas_de(x["id"], palavra) for x in self.vozes.listar() if x["id"] != ident}
+            args = json.dumps({"ident": ident, "nome": nome, "pasta": pasta, "limiar_voz": self.cfg["limiar_voz_palavra"],
+                               "antes": antes, "palavra": palavra, "modelo": modelos.get(palavra), "lv_fixo": lv},
+                              ensure_ascii=False)
+            try:
+                p = subprocess.run(["nice", "-n", "19", sys.executable, os.path.join(os.path.dirname(__file__),
+                                    "treino_verificador.py"), "--executar", args], capture_output=True, text=True,
+                                   timeout=3600)
+                linhas = [l for l in p.stdout.splitlines() if l.startswith("{")]
+                if p.returncode != 0 or not linhas:
+                    raise RuntimeError(f"código {p.returncode}: {(p.stderr or '').strip()[-200:]}")
+                r = json.loads(linhas[-1])
+            except Exception as e:
+                r = {"aprovado": False, "motivo": f"erro no treino: {type(e).__name__}: {e}", "numeros": {}}
+            r["palavra"] = palavra
+            if r.get("aprovado") and lv is None:
+                lv = r["limiar_verificador"]
+            resultados.append(r)
         shutil.rmtree(negativos.BASELINE, ignore_errors=True)  # a linha de base só vale para este treino
         if baseline:
-            r["negativos_baixados"] = baseline
-        self.loop.call_soon_threadsafe(self._fim_do_treino, ident, nome, pasta, r)
+            resultados[0]["negativos_baixados"] = baseline
+        self.loop.call_soon_threadsafe(self._fim_do_treino, ident, nome, pasta, resultados)
+
+    def _fim_do_treino(self, ident, nome, pasta, resultados):
+        aprovadas = {r["palavra"]: r for r in resultados if r.get("aprovado")}
+        try:
+            if aprovadas:
+                for palavra, r in aprovadas.items():
+                    os.replace(r["modelo_tmp"], pw.verificador_de(palavra))
+                if len(aprovadas) < len(resultados):
+                    self.vozes.copiar_reprovado(ident, pasta)  # a sessão segue para `aprovar`; a cópia é diagnóstico
+                por_palavra = {p: {"aceitas": (r.get("numeros") or {}).get("aceitas")} for p, r in aprovadas.items()}
+                self.vozes.aprovar(ident, nome, pasta, {"aceitas": por_palavra.get(pw.PRINCIPAL, {}).get("aceitas")}
+                                   if pw.PRINCIPAL in por_palavra else {}, datetime.datetime.now(), por_palavra)
+                novo = cfgmod.validar_mudancas(self.cfg, pw.mudancas_de_config(self.cfg, aprovadas))
+                cfgmod.gravar(CFG, novo)
+                self.ao_mudar_config(novo)
+            else:
+                self.vozes.guardar_reprovado(ident, pasta)  # 16/10: o último reprovado fica para diagnóstico
+        except Exception as e:
+            motivo = f"erro ao guardar: {type(e).__name__}: {e}"
+            resultados = [dict(r, aprovado=False, motivo=motivo) for r in resultados]
+            aprovadas = {}
+            self.vozes.descartar(pasta)
+        self.vozes.ocupado = False
+
+        def numeros(r):
+            n = r.get("numeros") or {}
+            return {"nova": n.get("nova"), "falsas_barradas": n.get("falsas_barradas")}
+        print(json.dumps({"aprendizagem": "fim", "id": ident, "aprovado": bool(aprovadas),
+                          "palavras": [{"palavra": r["palavra"], "aprovado": bool(r.get("aprovado")),
+                                        "motivo": r.get("motivo"), "numeros": r.get("numeros") or {},
+                                        "limiares": [r.get("limiar_verificador"), r.get("limiar_palavra")],
+                                        "negativos": r.get("negativos")} for r in resultados]},
+                         ensure_ascii=False), flush=True)
+        recusada = next((r for r in resultados if not r.get("aprovado")), None)
+        asyncio.ensure_future(self._avisar_bot({
+            "tipo": "cadastro_voz", "nome": nome, "aprovado": bool(aprovadas),
+            "motivo": recusada.get("motivo") if recusada else None,
+            "numeros": numeros(next(iter(aprovadas.values()), resultados[0])),
+            "palavras": [{"palavra": pw.nome_falado(r["palavra"]), "aprovado": bool(r.get("aprovado")),
+                          "motivo": r.get("motivo"), "numeros": numeros(r)} for r in resultados]}))
 
     def _buscar_baseline(self):
         """23/11: ambiente próprio abaixo de MIN_AMBIENTE_S → pede ao agente local os negativos dos outros satélites
@@ -837,33 +911,6 @@ class Satelite:
             r = {"ok": False, "erro": type(e).__name__}
         print(json.dumps({"aprendizagem": "linha_de_base", **r}), flush=True)
         return r
-
-    def _fim_do_treino(self, ident, nome, pasta, r):
-        aprovado = bool(r.get("aprovado"))
-        try:
-            if aprovado:
-                os.replace(r["modelo_tmp"], MODELO_VERIFICADOR)
-                self.vozes.aprovar(ident, nome, pasta, {"aceitas": (r.get("numeros") or {}).get("aceitas")},
-                                   datetime.datetime.now())
-                novo = cfgmod.validar_mudancas(self.cfg, {"verificador": MODELO_VERIFICADOR,
-                                                          "limiar_verificador": r["limiar_verificador"],
-                                                          "limiar_palavra": r["limiar_palavra"]})
-                cfgmod.gravar(CFG, novo)
-                self.ao_mudar_config(novo)
-            else:
-                self.vozes.guardar_reprovado(ident, pasta)  # 16/10: o último reprovado fica para diagnóstico
-        except Exception as e:
-            aprovado, r = False, dict(r, motivo=f"erro ao guardar: {type(e).__name__}: {e}")
-            self.vozes.descartar(pasta)
-        self.vozes.ocupado = False
-        n = r.get("numeros") or {}
-        print(json.dumps({"aprendizagem": "fim", "id": ident, "aprovado": aprovado, "motivo": r.get("motivo"),
-                          "numeros": n, "limiares": [r.get("limiar_verificador"), r.get("limiar_palavra")]},
-                         ensure_ascii=False), flush=True)
-        asyncio.ensure_future(self._avisar_bot({"tipo": "cadastro_voz", "nome": nome, "aprovado": aprovado,
-                                                "motivo": r.get("motivo"),
-                                                "numeros": {"nova": n.get("nova"),
-                                                            "falsas_barradas": n.get("falsas_barradas")}}))
 
     def _contagem(self, atraso, segundos):
         if segundos > 0:

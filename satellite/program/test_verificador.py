@@ -139,6 +139,28 @@ class TestEscolher(unittest.TestCase):
         ok, _, _, falhou = vf.escolher(t, {})
         self.assertFalse(ok); self.assertIn("fala livre", falhou)
 
+    def tabela_por_limiar(self, passa_em):
+        """Passa só nos limiares dados; nos outros a pessoa nova fica com 5 de 10."""
+        t = self.tabela((9, 10), (3, 31), hist=(39, 60))
+        for (lv, lp), cats in t.items():
+            if lv != "base" and lv not in passa_em:
+                cats["nova"] = [5, 10]
+        return t
+
+    def test_limiar_fixo_avalia_so_nele(self):
+        t = self.tabela_por_limiar({0.3})
+        ok, (lv, _), _, _ = vf.escolher(t, {}, 0.3)
+        self.assertTrue(ok); self.assertEqual(lv, 0.3)
+
+    def test_limiar_fixo_reprova_quando_so_passa_em_outro(self):
+        t = self.tabela_por_limiar({0.5})
+        self.assertTrue(vf.escolher(t, {})[0])                       # a escolha livre acha o 0,5
+        ok, (lv, _), _, falhou = vf.escolher(t, {}, 0.3)
+        self.assertFalse(ok); self.assertEqual(lv, 0.3); self.assertIn("pessoa nova", falhou)
+
+    def test_limiar_fixo_fora_da_tabela_vale_a_escolha_livre(self):
+        self.assertTrue(vf.escolher(self.tabela_por_limiar({0.5}), {}, 0.35)[0])
+
 
 class TestApoio(unittest.TestCase):
     def test_ouviu_mal(self):

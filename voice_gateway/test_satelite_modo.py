@@ -682,6 +682,25 @@ class TestAprendizagemDeVoz(unittest.TestCase):
             for interno in ("satélite", "conduz", "cérebro", "modelo"):
                 self.assertNotIn(interno, t.lower())
 
+    def test_roteiro_inteiro_nao_expoe_o_mecanismo_com_uma_ou_duas_palavras(self):
+        import json
+        for resposta in (None, {"ok": True, "vozes": [{"nome": "Bia", "desde": "x", "palavras": ["Friday"]}]},
+                         {"ok": True, "vozes": [], "palavras": ["Friday", "Sexta-feira"]}):
+            t = json.dumps(sm.roteiro_aprendizagem(resposta), ensure_ascii=False).lower()
+            for interno in ("satélite", "satelite", "cérebro", "modelo", "conduz"):
+                self.assertNotIn(interno, t)
+
+    def test_roteiro_de_uma_palavra_e_o_de_sempre(self):
+        r = sm.roteiro_aprendizagem({"ok": True, "vozes": [], "palavras": ["Friday"]})
+        self.assertEqual((r["roteiro"], r["palavras"], r["gravacao_minutos"]), (sm.ROTEIRO_APRENDIZAGEM, ["Friday"], 2))
+        self.assertEqual(sm.roteiro_aprendizagem(None)["palavras"], ["Friday"])
+
+    def test_roteiro_de_duas_palavras_cita_as_duas_e_o_tempo(self):
+        r = sm.roteiro_aprendizagem({"ok": True, "vozes": [], "palavras": ["Friday", "Sexta-feira"]})
+        self.assertEqual((r["palavras"], r["gravacao_minutos"]), (["Friday", "Sexta-feira"], 4))
+        self.assertTrue(any("Friday, Sexta-feira" in p for p in r["roteiro"]))
+        self.assertTrue(any("bipe" in p for p in r["roteiro"]))
+
     def test_trava(self):
         t = sm.TravaAprendizagem()
         self.assertFalse(t.permite)

@@ -138,13 +138,16 @@ class _Vozes:
     def listar(self):
         return [{"nome": "Bia", "id": "bia", "desde": "2026-10-15 18:00"}]
 
+    def palavras_de(self, ident):
+        return ["friday", "sexta_feira"]
+
 
 class TestAprendizagem(unittest.TestCase):
     """Spec 2026-10-15 §4.4: comandos do programa de aprendizagem de voz."""
 
     def test_consultar_devolve_nome_e_data(self):
         r, ef = comandos.executar({"id": "c1", "acao": "vozes_consultar"}, None, None, 0.0, _Vozes())
-        self.assertEqual((r["ok"], r["id"], r["vozes"], ef), (True, "c1", [{"nome": "Bia", "desde": "2026-10-15 18:00"}], []))
+        self.assertEqual((r["ok"], r["id"], r["vozes"], ef), (True, "c1", [{"nome": "Bia", "desde": "2026-10-15 18:00", "palavras": ["Friday", "Sexta-feira"]}], []))
 
     def test_cadastro_valido_devolve_efeito_sem_colidir_com_o_id_do_comando(self):
         r, ef = comandos.executar({"id": "c2", "acao": "cadastro_voz", "nome": "Bia"}, None, None, 0.0, _Vozes())
