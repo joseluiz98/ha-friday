@@ -1,6 +1,6 @@
 # Voice learning for every wake word (design, 2026-11-23)
 
-Status: proposal for the owner's decisions (section 9). Builds on PR #55 (negatives that always exist).
+Status: decisions of section 9 answered by the owner on 23/11; phrase texts awaiting his approval before any paid generation. Builds on PR #55 (negatives that always exist).
 
 ## 1. Why
 The voice-learning program teaches one thing: the person's "Friday". The house has two words, and the second one has
@@ -46,7 +46,7 @@ share the free-speech negatives and the "move" step.
 
 ## 5. Flow (A)
 1. `aprendizagem_de_voz` returns the script and the words this satellite will record: every word in its config
-   (`friday` + `palavras_extras`) that has recorded phrases (decision 1). A person already enrolled for some words is
+   (`friday` + `palavras_extras`) that has recorded phrases (decision 1: every word in the config). A person already enrolled for some words is
    offered only the missing ones (decision 4).
 2. `comecar_aprendizagem_de_voz(nome)` as today. The Pi builds the script from the word list:
    intro(word1) -> 5 beeps -> "move" -> 5 beeps -> [transition(word2) -> 5 beeps -> "move" -> 5 beeps] -> free speech
@@ -71,26 +71,36 @@ refused with that reason (honest, and the owner can decide to retune). Alternati
 openWakeWord for per-word thresholds.
 
 ## 7. Recorded phrases (paid, needs permission)
-New files, generated with `gerar_falas_com_voz_da_friday.py` (voice Aoede, transcript checked): per extra word an intro
-("Agora a segunda palavra. Depois de cada bipe, diga Sexta-feira uma vez.") and the "move" phrase if the wording must
-change; the free-speech phrase becomes "sem dizer Friday nem Sexta-feira" (re-recorded); the ending already says
-"vou aprender a sua voz". 3 phrases, up to 4 attempts each: cents (< R$ 1, estimate). Naming: `aprendizagem_intro_<word>`.
-A word without its phrase is left out of the session and the result says so (no silent tone fallback, a beep cannot
-tell the person which word to say). Move `gerar_falas_aprendizagem.py` (FALAS) into `satellite/voice_lines/`.
-Ship order: audio first (vault manifest), code after.
+Today (generated 15-16/10, voice Aoede):
+| File | Text now |
+|---|---|
+| `aprendizagem_intro` | "Vamos começar o aprendizado da sua voz. Depois de cada bipe, diga Friday uma vez, do jeito que você costuma me chamar. São dez vezes." |
+| `aprendizagem_mudar_lugar` | "Muito bem. Agora vá para outro lugar do cômodo, a uns três metros daqui, e continue depois de cada bipe." |
+| `aprendizagem_fala_livre` | "Ótimo. Agora fale qualquer coisa por trinta segundos, sem dizer Friday. Pode contar como foi o seu dia." |
+| `aprendizagem_fim` | "Pronto. Agora eu vou aprender a sua voz. Em alguns minutos eu aviso o resultado." |
+
+Proposal: 2 files change, 3 stay.
+- **new** `aprendizagem_intro_<word>` (one per extra word; first: `aprendizagem_intro_sexta_feira`): "Agora a próxima palavra.
+  Depois de cada bipe, diga Sexta-feira uma vez, do jeito que você costuma me chamar. Também são dez vezes."
+- **replaced** `aprendizagem_fala_livre`, worded so it is true for one word or many: "Ótimo. Agora fale qualquer coisa
+  por trinta segundos, sem repetir as palavras que você acabou de dizer. Pode contar como foi o seu dia."
+- unchanged: `intro` (the first word, as today), `mudar_lugar` (reused in each round), `fim`, `cancelada`.
+Up to 4 attempts each, transcript checked against the text: cents (< R$ 1, estimate). A word without its intro file
+is left out of the session and the result says so (no tone fallback: a beep cannot tell which word to say). Move
+`gerar_falas_aprendizagem.py` (FALAS) into `satellite/voice_lines/`. Ship order: audio first (vault manifest), code after.
 
 ## 8. Voice texts (transparency)
 The roteiro returned to the voice lists beeps, moving and speaking per word, never who does it. The words come from the
 config, so the texts are built, not written per word. Same test as PR #55 greps every text for "satélite",
 "cérebro", "modelo".
 
-## 9. Decisions for the owner
-1. Which words: every word in the config (also `sombra`) or only the active ones? Recommended: all, so a word in
-   shadow is ready when it is turned on.
-2. Approve approach A (3.5 min) and the three phrase wordings (section 7).
-3. Permission to generate the phrases (cents), with the transcript check.
-4. A person already enrolled only for Friday (you, on MK1): the program offers just "Sexta-feira"? Recommended: yes.
-5. Shared threshold rule (section 6): accept refusal over silent retuning?
+## 9. Decisions (owner, 23/11)
+1. Which words: every word in the satellite's config. The shadow/active mode is per word and per satellite and has no
+   bearing on enrolment.
+2. Approach A approved; phrase wordings (section 7) pending his approval.
+3. Generation of the 2 phrases: yes, after he sees the texts.
+4. A person already enrolled only for Friday is offered just the missing word: yes.
+5. A word that passes only at another threshold is refused with the reason: yes.
 
 ## 10. Tests and rollout
 - Pure: word list from config, script building (durations from recorded phrases), mark naming, per-word layout and
