@@ -138,3 +138,141 @@ class TestVozes(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, "_negativos"))
             self.assertEqual(ca.Vozes(d).listar(), [])
+
+
+DUR2 = dict(DUR, intro_sexta_feira=6.0)
+PEDACO = b"\x01\x00" * 1280
+
+
+def sessao(pasta, marcas, pedacos):
+    """Pasta de sessão com `pedacos` pedaços de 80 ms e as marcas dadas."""
+    os.makedirs(pasta, exist_ok=True)
+    with wave.open(os.path.join(pasta, "sessao.wav"), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(PEDACO * pedacos)
+    with open(os.path.join(pasta, "marcas.json"), "w") as f:
+        json.dump(marcas, f)
+
+
+class TestRoteiroDuasPalavras(unittest.TestCase):
+    def sons_e_janelas(self, r):
+        return [(a, v) for _, a, v in r.passos if a in ("som", "janela") and v != "bipe"]
+
+    def test_uma_palavra_e_como_sempre_foi(self):
+        self.assertEqual(ca.Roteiro(DUR, 0.0).passos, ca.Roteiro(DUR, 0.0, ("friday",)).passos)
+
+    def test_duas_palavras_cada_uma_com_sua_introducao_e_a_troca_de_lugar(self):
+        r = ca.Roteiro(DUR2, 0.0, ("friday", "sexta_feira"))
+        seq = self.sons_e_janelas(r)
+        sons = [v for a, v in seq if a == "som"]
+        self.assertEqual(sons, ["intro", "mudar_lugar", "intro_sexta_feira", "mudar_lugar", "fala_livre", "fim"])
+        janelas = [v for a, v in seq if a == "janela"]
+        self.assertEqual(janelas[:2] + janelas[9:11], ["tentativa_01", "tentativa_02", "tentativa_10", "sexta_feira__tentativa_01"])
+        self.assertEqual(len([j for j in janelas if j.startswith("sexta_feira__")]), 10)
+        self.assertEqual(janelas[-1], "fala_livre")
+
+    def test_a_ordem_no_tempo_nunca_volta(self):
+        ts = [t for t, *_ in ca.Roteiro(DUR2, 0.0, ("friday", "sexta_feira")).passos]
+        self.assertEqual(ts, sorted(ts))
+
+    def test_duracao_prevista_cresce_com_as_palavras(self):
+        um = ca.Roteiro(ca.DURACOES_PADRAO, 0.0).duracao_s
+        dois = ca.Roteiro(dict(ca.DURACOES_PADRAO, intro_sexta_feira=8.0), 0.0, ("friday", "sexta_feira")).duracao_s
+        self.assertLessEqual(abs(dois - um - ca.POR_PALAVRA_EXTRA_S), 15)
+        self.assertEqual(ca.gravacao_prevista_s(2), ca.GRAVACAO_PREVISTA_S + ca.POR_PALAVRA_EXTRA_S)
+        self.assertEqual(ca.gravacao_prevista_s(1), ca.GRAVACAO_PREVISTA_S)
+
+
+class TestMarcasPorPalavra(unittest.TestCase):
+    def test_a_marca_da_palavra_extra_leva_o_nome_dela_e_a_principal_nao(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = ca.Gravador(os.path.join(d, "novo"))
+            g.abrir("tentativa_01"); g.alimentar(PEDACO); g.fechar()
+            g.abrir("sexta_feira__tentativa_01"); g.alimentar(PEDACO); g.fechar()
+            g.abrir("fala_livre"); g.alimentar(PEDACO); g.fechar()
+            g.finalizar()
+            marcas = json.load(open(os.path.join(d, "novo", "marcas.json")))
+            self.assertEqual(marcas, [{"nome": "tentativa_01", "ini": 0, "fim": 1},
+                                      {"nome": "sexta_feira__tentativa_01", "ini": 1, "fim": 2, "palavra": "sexta_feira"},
+                                      {"nome": "fala_livre", "ini": 2, "fim": 3}])
+
+
+class TestVozesPorPalavra(unittest.TestCase):
+    agora = datetime.datetime(2026, 11, 23, 18, 0)
+
+    def test_cadastro_antigo_conta_como_so_a_principal(self):
+        with tempfile.TemporaryDirectory() as d:
+            v = ca.Vozes(d)
+            p = v.pasta_nova("bia", self.agora); sessao(p, [{"nome": "tentativa_01", "ini": 0, "fim": 2}], 4)
+            v.aprovar("bia", "Bia", p, {"aceitas": 9}, self.agora)
+            self.assertEqual(v.palavras_de("bia"), ["friday"])
+            self.assertEqual(v.aceitas_de("bia"), 9)
+            self.assertIsNone(v.aceitas_de("bia", "sexta_feira"))
+            self.assertEqual(v.palavras_de("ninguem"), [])
+
+    def test_palavra_nova_junta_a_sessao_e_mantem_a_antiga(self):
+        with tempfile.TemporaryDirectory() as d:
+            v = ca.Vozes(d)
+            p1 = v.pasta_nova("bia", self.agora)
+            sessao(p1, [{"nome": "tentativa_01", "ini": 0, "fim": 2}, {"nome": "fala_livre", "ini": 3, "fim": 4}], 4)
+            v.aprovar("bia", "Bia", p1, {"aceitas": 9}, self.agora)
+            p2 = v.pasta_nova("bia", self.agora + datetime.timedelta(days=1))
+            sessao(p2, [{"nome": "sexta_feira__tentativa_01", "ini": 0, "fim": 2, "palavra": "sexta_feira"},
+                        {"nome": "fala_livre", "ini": 3, "fim": 5}], 5)
+            v.aprovar("bia", "Bia", p2, {}, self.agora, {"sexta_feira": {"aceitas": 8}})
+            self.assertFalse(os.path.exists(p2))
+            self.assertEqual(v.palavras_de("bia"), ["friday", "sexta_feira"])
+            self.assertEqual(v.aceitas_de("bia", "friday"), 9)
+            self.assertEqual(v.aceitas_de("bia", "sexta_feira"), 8)
+            atual = os.path.join(d, "bia", "atual")
+            with wave.open(os.path.join(atual, "sessao.wav")) as w:
+                self.assertEqual(w.getnframes(), 9 * 1280)
+            marcas = json.load(open(os.path.join(atual, "marcas.json")))
+            self.assertEqual(marcas, [{"nome": "tentativa_01", "ini": 0, "fim": 2}, {"nome": "fala_livre", "ini": 3, "fim": 4},
+                                      {"nome": "sexta_feira__tentativa_01", "ini": 4, "fim": 6, "palavra": "sexta_feira"},
+                                      {"nome": "fala_livre", "ini": 7, "fim": 9}])
+
+    def test_regravar_a_mesma_palavra_troca_so_as_marcas_dela(self):
+        with tempfile.TemporaryDirectory() as d:
+            v = ca.Vozes(d)
+            p1 = v.pasta_nova("bia", self.agora)
+            sessao(p1, [{"nome": "tentativa_01", "ini": 0, "fim": 2},
+                        {"nome": "sexta_feira__tentativa_01", "ini": 2, "fim": 4, "palavra": "sexta_feira"}], 4)
+            v.aprovar("bia", "Bia", p1, {}, self.agora, {"friday": {"aceitas": 9}, "sexta_feira": {"aceitas": 8}})
+            p2 = v.pasta_nova("bia", self.agora + datetime.timedelta(days=1))
+            sessao(p2, [{"nome": "sexta_feira__tentativa_01", "ini": 0, "fim": 2, "palavra": "sexta_feira"}], 2)
+            v.aprovar("bia", "Bia", p2, {}, self.agora, {"sexta_feira": {"aceitas": 10}})
+            marcas = json.load(open(os.path.join(d, "bia", "atual", "marcas.json")))
+            self.assertEqual([m["nome"] for m in marcas], ["tentativa_01", "sexta_feira__tentativa_01"])
+            self.assertEqual(marcas[1]["ini"], 4)
+            self.assertEqual(v.aceitas_de("bia", "sexta_feira"), 10)
+            self.assertEqual(v.aceitas_de("bia", "friday"), 9)
+
+    def test_sessao_que_cobre_todas_as_palavras_substitui_tudo(self):
+        with tempfile.TemporaryDirectory() as d:
+            v = ca.Vozes(d)
+            p1 = v.pasta_nova("bia", self.agora); sessao(p1, [{"nome": "tentativa_01", "ini": 0, "fim": 2}], 4)
+            v.aprovar("bia", "Bia", p1, {"aceitas": 9}, self.agora)
+            p2 = v.pasta_nova("bia", self.agora + datetime.timedelta(days=1))
+            sessao(p2, [{"nome": "tentativa_01", "ini": 0, "fim": 2}], 3)
+            v.aprovar("bia", "Bia", p2, {}, self.agora, {"friday": {"aceitas": 10}})
+            with wave.open(os.path.join(d, "bia", "atual", "sessao.wav")) as w:
+                self.assertEqual(w.getnframes(), 3 * 1280)            # só a nova: nada foi mantido
+            self.assertEqual(v.aceitas_de("bia", "friday"), 10)
+
+    def test_copiar_reprovado_deixa_a_sessao_para_aprovar(self):
+        with tempfile.TemporaryDirectory() as d:
+            v = ca.Vozes(d)
+            p = v.pasta_nova("bia", self.agora); sessao(p, [], 2)
+            v.copiar_reprovado("bia", p)
+            self.assertTrue(os.path.isfile(os.path.join(d, "bia", "reprovado", "sessao.wav")))
+            self.assertTrue(os.path.isdir(p))
+
+    def test_legado_com_palavra_nova_e_sem_sessao_continua_so_com_a_nova(self):
+        with tempfile.TemporaryDirectory() as d:
+            v = ca.Vozes(d)
+            p1 = v.pasta_nova("bia", self.agora); os.makedirs(p1); open(os.path.join(p1, "tentativa_01.wav"), "wb").close()
+            v.aprovar("bia", "Bia", p1, {"aceitas": 9}, self.agora)
+            p2 = v.pasta_nova("bia", self.agora + datetime.timedelta(days=1))
+            sessao(p2, [{"nome": "sexta_feira__tentativa_01", "ini": 0, "fim": 2, "palavra": "sexta_feira"}], 2)
+            v.aprovar("bia", "Bia", p2, {}, self.agora, {"sexta_feira": {"aceitas": 8}})
+            self.assertEqual(v.palavras_de("bia"), ["sexta_feira"])

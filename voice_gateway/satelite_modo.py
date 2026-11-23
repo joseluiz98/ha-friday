@@ -95,8 +95,8 @@ MOTIVO_NAO_PERTURBE = "calada pelo não perturbe"
 
 
 # D27: "aprende a minha voz" compete com "lembrar de algo → cérebro" na instrução de sistema; o fato diz onde mora.
-FATO_APRENDIZAGEM = ("Existe um programa de aprendizagem de voz, local, que ensina a casa a reconhecer o "
-                     "\"Friday\" de cada pessoa da casa (ferramentas aprendizagem_de_voz e comecar_aprendizagem_de_voz).")
+FATO_APRENDIZAGEM = ("Existe um programa de aprendizagem de voz, local, que ensina a casa a reconhecer as palavras de "
+                     "ativação de cada pessoa da casa (ferramentas aprendizagem_de_voz e comecar_aprendizagem_de_voz).")
 
 
 def music_fact(player, estado) -> str:
@@ -550,13 +550,14 @@ def mensagem_de_abertura(texto_entrega, timer, tipo_entrega="lembrete"):
 
 # ---- spec 2026-10-15: programa de aprendizagem de voz (item 4). Textos: fatos, sem ordens (skill designing-for-friday).
 DESCRICAO_APRENDIZAGEM_DE_VOZ = (
-    "Programa de aprendizagem de voz: ensina a casa a reconhecer o \"Friday\" dito por uma pessoa que mora aqui, "
-    "para a palavra acordar com ela e não com outras vozes. Vale para qualquer jeito de pedir isso. "
-    "Devolve o roteiro da gravação e as pessoas já cadastradas. Esta chamada não grava nada.")
+    "Programa de aprendizagem de voz: ensina a casa a reconhecer as palavras de ativação ditas por uma pessoa que "
+    "mora aqui, para elas acordarem com ela e não com outras vozes. Vale para qualquer jeito de pedir isso. "
+    "Devolve o roteiro da gravação, as palavras que ela cobre e as pessoas já cadastradas. Esta chamada não grava nada.")
 DESCRICAO_COMECAR_APRENDIZAGEM = (
     "Começa a gravação do programa de aprendizagem de voz para a pessoa com este nome. A gravação começa quando a sua "
     "fala termina e segue sozinha, com falas gravadas e bipes, e a conversa fecha nesse momento; a pessoa precisa "
-    "estar perto do aparelho. Só funciona depois de aprendizagem_de_voz nesta conversa.")
+    "estar perto do aparelho. Quem já está cadastrado em algumas palavras grava só as que faltam. Só funciona depois "
+    "de aprendizagem_de_voz nesta conversa.")
 ROTEIRO_APRENDIZAGEM = [
     "uma fala gravada explica o que fazer",
     "dez bipes, um a cada 6 segundos; a cada bipe a pessoa diz Friday uma vez",
@@ -574,15 +575,33 @@ def resultado_comando(resposta) -> dict:
     return {k: v for k, v in resposta.items() if k != "id"}
 
 
+def roteiro_para(palavras) -> list:
+    """O roteiro em fatos: o que a pessoa vive, palavra por palavra. Uma palavra só é o roteiro de sempre."""
+    if len(palavras) <= 1:
+        return ROTEIRO_APRENDIZAGEM
+    return [
+        "uma fala gravada explica o que fazer",
+        "para cada palavra (" + ", ".join(palavras) + "), dez bipes, um a cada 6 segundos; a cada bipe a pessoa diz a "
+        "palavra uma vez",
+        "na metade de cada palavra, uma fala gravada pede para mudar de lugar, uns 3 metros",
+        "depois, 30 segundos de fala livre, sem repetir as palavras",
+        "no fim, uma fala gravada avisa que o treino começou; o resultado vem falado aqui e por Telegram ao " + DONO,
+    ]
+
+
 def roteiro_aprendizagem(resposta) -> dict:
-    vozes = resposta.get("vozes") if isinstance(resposta, dict) and resposta.get("ok") else None
+    ok = isinstance(resposta, dict) and resposta.get("ok")
+    vozes = resposta.get("vozes") if ok else None
+    palavras = [p for p in (resposta.get("palavras") if ok else None) or [] if isinstance(p, str)] or ["Friday"]
     return {
-        "roteiro": ROTEIRO_APRENDIZAGEM,
-        "gravacao_minutos": 2,
-        "treino_minutos": "de 5 a 20",
+        "roteiro": roteiro_para(palavras),
+        "palavras": palavras,
+        "gravacao_minutos": 2 + 2 * (len(palavras) - 1),
+        "treino_minutos": "de 5 a 20 por palavra",
         "antes_de_comecar": "falta o nome de quem vai gravar e a concordância dessa pessoa",
-        "gravar_de_novo_o_mesmo_nome": "substitui o cadastro anterior dessa pessoa, se o novo for aprovado",
-        "botao_do_satelite": "cancela a gravação",
+        "gravar_de_novo_o_mesmo_nome": "substitui o cadastro anterior dessa pessoa nas palavras regravadas, se o novo "
+                                       "for aprovado",
+        "botao_do_aparelho": "cancela a gravação",
         "cadastrados": vozes if vozes is not None else "não foi possível consultar agora",
     }
 
