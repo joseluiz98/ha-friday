@@ -9,6 +9,7 @@ import hashlib
 import io
 import logging
 import os
+import re
 import secrets
 import tempfile
 import time
@@ -19,7 +20,8 @@ TTS_TIMEOUT_S = 15.0
 RETRY_CADA_S = 15.0
 RETRY_ATE_S = 300.0
 PRIMEIRA_RODADA_S = 18.0  # a resposta sai até aqui (a integração espera 30 s); o que faltar segue em segundo plano
-CACHE_LIMITE = 200
+CACHE_LIMITE = 100
+CACHE_VERSAO = "v2"  # v1 entries hold WAV headers played as audio (click/hiss); never served again
 RESPOSTAS_DA_PI = ("vou_tocar", "na_fila", "calado", "expirado")
 
 _em_curso: set = set()  # referência às tarefas de reenvio (o laço só guarda referência fraca)
@@ -98,7 +100,8 @@ class Cache:
 
 
 def chave(tts: dict, texto: str) -> str:
-    return hashlib.sha256(f"{tts['voice']}\n{tts['model']}\n{tts.get('rate', 'normal')}\n{texto}".encode()).hexdigest()
+    return hashlib.sha256(
+        f"{CACHE_VERSAO}\n{tts['voice']}\n{tts['model']}\n{tts.get('rate', 'normal')}\n{texto}".encode()).hexdigest()
 
 
 def reamostrar(pcm: bytes, de: int, para: int) -> bytes:
@@ -144,11 +147,32 @@ def _tokens_da_resposta(resp) -> dict:
                            audio(getattr(u, "cache_tokens_details", None)))
 
 
+def pcm_do_blob(dados: bytes, mime: str) -> tuple[bytes, int]:
+    """(mono S16LE PCM, rate) of one TTS inline blob. The model may return a complete WAV file (header + trailing
+    chunk), which must not be played as samples; a blob without RIFF is raw PCM at the mime's rate."""
+    import numpy as np
+    if dados[:4] != b"RIFF":
+        m = re.search(r"rate=(\d+)", mime or "")  # same rule as whisper_mode._rate_do_mime, without pipecat
+        return dados[:len(dados) // 2 * 2], int(m.group(1)) if m else 24000
+    try:
+        with wave.open(io.BytesIO(dados), "rb") as w:
+            canais, largura, rate = w.getnchannels(), w.getsampwidth(), w.getframerate()
+            quadros = w.readframes(w.getnframes())
+    except (wave.Error, EOFError) as e:
+        raise RuntimeError(f"TTS returned an unreadable WAV: {e}") from e
+    if largura != 2 or canais not in (1, 2):
+        raise RuntimeError(f"TTS WAV not supported: {largura * 8}-bit, {canais} channel(s)")
+    x = np.frombuffer(quadros[:len(quadros) // (2 * canais) * 2 * canais], dtype=np.int16)
+    if canais == 2:
+        x = x.reshape(-1, 2).astype(np.int32).sum(axis=1) // 2  # average of the two channels
+    return x.astype(np.int16).tobytes(), rate
+
+
 async def falar(client, tts: dict, texto: str) -> tuple[bytes, dict]:
     """TTS não-streaming: (PCM 24 kHz mono S16LE, tokens para o registro de custo). Sem estilo; o ritmo vai no texto."""
     from google.genai import types
     import voice_settings
-    from whisper_mode import _rate_do_mime, _reamostrar
+    from whisper_mode import _reamostrar
     resp = await client.aio.models.generate_content(
         model=tts["model"],
         contents=voice_settings.tts_texto(texto, tts.get("rate", "normal")),
@@ -161,8 +185,8 @@ async def falar(client, tts: dict, texto: str) -> tuple[bytes, dict]:
         for part in (getattr(getattr(cand, "content", None), "parts", None) or []):
             blob = getattr(part, "inline_data", None)
             if blob and blob.data:
-                dados = blob.data[:len(blob.data) // 2 * 2]
-                pcm += _reamostrar(dados, _rate_do_mime(blob.mime_type), 24000)
+                pcm_b, rate = pcm_do_blob(blob.data, blob.mime_type)
+                pcm += _reamostrar(pcm_b, rate, 24000)
     if not pcm:
         raise RuntimeError("TTS sem áudio")
     return pcm, _tokens_da_resposta(resp)
