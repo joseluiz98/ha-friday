@@ -15,8 +15,7 @@ On 23/11 at 09:00 "reproduzir o meu Flow do Deezer" on MK1 failed three times ov
 3. The brain fell back to Code Mode, wrote `process.env.FRIDAY_HA_URL` and died
    (`Cannot read properties of undefined (reading 'FRIDAY_HA_URL')`); no answer was delivered.
 
-Separately, the owner wants the Alpha promotion to follow the **next** alpha (the oldest one still waiting above the
-newest stable), not the newest. v0.4.3 (d4346df) made it follow the newest and supersede the older ones.
+Separately, the Alpha promotion sensor shows the newest alpha even when an older one is promoted first.
 
 ## Goals
 1. **Music audio files readable by the player.** Board ALSA files live in `/etc/friday-audio/` (dir 0755, files 0644);
@@ -37,12 +36,10 @@ newest stable), not the newest. v0.4.3 (d4346df) made it follow the newest and s
 3. **Brain never uses Code Mode.** The server image sets `tools.codeMode.enabled false` (OpenClaw 2026.11.3 key,
    verified on the VM) at start, next to the other `openclaw config set` lines, so HA calls go through `exec`, which sees
    the environment.
-4. **Next-alpha promotion.** Tracked alpha = the **oldest** eligible pre-release above the newest stable that is not
-   decided and not failed. Blocked does not skip it: a blocked next alpha holds the queue, so the switch shows it and
-   can unblock it **(builder's call: otherwise the switch could never unblock it, and promoting a newer one would
-   supersede it)**. Only the tracked alpha is promoted, when soaked; when it is promoted, every older undecided alpha
-   (failed) becomes `superseded`. Newer alphas keep soaking and are promoted in order afterwards (their clocks keep
-   running). The sensor `alphas` list is ordered oldest first. GitHub "latest" never moves backwards.
+4. **Alpha promotion sensor shows the alpha promoted first (owner, 23/11, corrected).** Promotion itself is
+   unchanged. `sensor.friday_server_ota_alpha_promotion` shows the alpha with the earliest promotion time (state and
+   `tag`); with none timed (blocked, failed, not installed), the newest as before. Trigger: an older alpha promoting at
+   lunch while the sensor said "tomorrow" (the newest).
 
 ## Non-goals
 - The house package `friday_music.yaml` (outside the repo, not OTA).
@@ -52,8 +49,8 @@ newest stable), not the newest. v0.4.3 (d4346df) made it follow the newest and s
 ## Anti-goals
 - Music landing on another room because the guard rewrote an existing player.
 - A guard that adds latency to every music call when HA is slow (1 s ceiling, then pass through).
-- An older alpha promoted after a newer one.
+- Any change to which alpha is promoted, or when.
 
 ## To confirm on the alpha (MK1)
 "Reproduzir o meu Flow do Deezer" plays on MK1; reboot MK1 and music still plays; a brain request that touches HA (e.g.
-"quais rotinas da Alexa existem") answers; the Alpha promotion sensor shows v0.4.3 as tracked while v0.4.4 soaks.
+"quais rotinas da Alexa existem") answers; the Alpha promotion sensor shows v0.4.3 while v0.4.4 soaks.
