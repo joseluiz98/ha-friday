@@ -8,7 +8,7 @@ showed the assistant telling the person "o satélite conduzirá o processo": it 
 descriptions, and the satellite/brain/model split is meant to be invisible to whoever is talking.
 
 ## Decisions (owner, 23/11)
-- A satellite with enough ambient audio of its own trains on it. Without enough, the training mixes in negatives the
+- A satellite with enough ambient audio of its own learns from it. Without enough, the training mixes in negatives the
   VM already knows from the other satellites, measured at the moment of the training. There is always a baseline.
 - MK2 is not trained with a stopgap: the owner redoes it when the release with this fix is promoted to stable
   (a one-shot Home Assistant automation tells him).
