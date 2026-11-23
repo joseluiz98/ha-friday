@@ -487,36 +487,78 @@ def _soak_all(w, *tags):
         w.store.data["soak"][t] = {"started_at": w.now - SOAK_S - 1, "failed": False}
 
 
-def test_two_soaked_prereleases_promote_only_the_newest(tmp_path):
+def test_two_soaked_prereleases_promote_the_oldest_first(tmp_path):
     pub = FakePublisher()
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.3", pre=True), rel("v0.4.4", pre=True)])
+    w.orch.publisher = pub
+    w.orch.poll()
+    _soak_all(w, "v0.4.3", "v0.4.4")
+    w.orch.poll()
+    assert pub.calls == ["v0.4.3"]  # one promotion per cycle: the next alpha first
+    assert w.store.data["promotions"]["v0.4.3"]["result"] == "promoted"
+    assert "v0.4.4" not in w.store.data["promotions"]
+    w.orch.poll()
+    assert pub.calls == ["v0.4.3", "v0.4.4"]  # the newer one on the next cycle, in order
+    assert w.store.data["promotions"]["v0.4.4"]["result"] == "promoted"
+
+
+def test_newer_waits_while_next_is_soaking(tmp_path):
+    pub = FakePublisher()
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.3", pre=True), rel("v0.4.4", pre=True)])
+    w.orch.publisher = pub
+    w.orch.poll()
+    w.store.data["soak"]["v0.4.3"] = {"started_at": w.now - 10 * 3600, "failed": False}
+    _soak_all(w, "v0.4.4")
+    w.orch.poll()
+    assert pub.calls == [] and w.store.data["promotions"] == {}
+    assert w.orch.tracked_promotion_tag() == "v0.4.3"
+
+
+def test_blocked_next_holds_the_queue(tmp_path):
+    pub = FakePublisher()
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.3", pre=True), rel("v0.4.4", pre=True)])
+    w.orch.publisher = pub
+    w.orch.poll()
+    _soak_all(w, "v0.4.3", "v0.4.4")
+    w.store.soak_block("v0.4.3", True)
+    w.orch.poll()
+    w.orch.poll()
+    assert pub.calls == [] and w.store.data["promotions"] == {}
+    assert w.orch.tracked_promotion_tag() == "v0.4.3"
+    assert w.orch.alpha_promotion()[1]["tag"] == "v0.4.3"
+
+
+def test_failed_oldest_is_skipped_then_superseded(tmp_path):
+    pub = FakePublisher()
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.3", pre=True), rel("v0.4.4", pre=True)])
+    w.orch.publisher = pub
+    w.orch.poll()
+    _soak_all(w, "v0.4.3", "v0.4.4")
+    w.store.data["soak"]["v0.4.3"]["failed"] = True
+    assert w.orch.tracked_promotion_tag() == "v0.4.4"
+    w.orch.poll()
+    assert pub.calls == ["v0.4.4"]
+    assert w.store.data["promotions"]["v0.4.4"]["result"] == "promoted"
+    assert w.store.data["promotions"]["v0.4.3"]["result"] == "superseded"  # only after the newer one went out
+
+
+def test_failed_promotion_call_holds_the_newer_alpha(tmp_path):
+    pub = FakePublisher(fail="http 502")
     w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True), rel("v0.4.1", pre=True)])
     w.orch.publisher = pub
     w.orch.poll()
     _soak_all(w, "v0.4.0", "v0.4.1")
     w.orch.poll()
-    w.orch.poll()
-    assert pub.calls == ["v0.4.1"]
-    assert w.store.data["promotions"]["v0.4.1"]["result"] == "promoted"
-    assert w.store.data["promotions"]["v0.4.0"]["result"] == "superseded"
-
-
-def test_a_failed_older_promotion_is_superseded_after_a_newer_one_succeeds(tmp_path):
-    pub = FakePublisher(fail="http 502")
-    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True), rel("v0.4.1", pre=True)])
-    w.orch.publisher = pub
-    w.orch.poll()
-    _soak_all(w, "v0.4.0")  # only the older one has soaked so far
-    w.orch.poll()
-    assert pub.calls == ["v0.4.0"] and "v0.4.0" not in w.store.data["promotions"]
-    _soak_all(w, "v0.4.1")  # the newer one finishes its soak; GitHub recovers
+    assert pub.calls == ["v0.4.0"] and w.store.data["promotions"] == {}
     pub.fail = None
     w.orch.poll()
-    assert pub.calls[-1] == "v0.4.1"
+    assert pub.calls == ["v0.4.0"]  # the retry throttle holds; v0.4.1 never jumps the queue
     w.now += orc.PROMOTE_RETRY_S
     w.orch.poll()
-    assert pub.calls == ["v0.4.0", "v0.4.1"]  # v0.4.0 is never promoted after v0.4.1 ("latest" must not go back)
-    assert w.store.data["promotions"]["v0.4.0"]["result"] == "superseded"
-    assert w.store.data["promotions"]["v0.4.1"]["result"] == "promoted"
+    w.orch.poll()
+    assert pub.calls == ["v0.4.0", "v0.4.0", "v0.4.1"]
+    assert {t: p["result"] for t, p in w.store.data["promotions"].items()} == {"v0.4.0": "promoted",
+                                                                            "v0.4.1": "promoted"}
 
 
 def test_a_tag_promoted_by_us_counts_as_stable(tmp_path):
@@ -614,8 +656,17 @@ def test_an_alpha_no_satellite_installed_never_starts_its_clock(tmp_path):
     _installed(w, ALPHA, "v0.4.1")
     w.now += SOAK_S + 600
     w.orch.poll()
-    assert w.orch.publisher.calls == ["v0.4.1"]
-    assert "v0.4.0" not in w.store.data["soak"] and "v0.4.0" not in w.store.data["promotions"]
+    assert w.orch.publisher.calls == ["v0.4.1"]  # the never-installed v0.4.0 does not hold the queue
+    assert "v0.4.0" not in w.store.data["soak"] and w.store.data["promotions"]["v0.4.0"]["result"] == "superseded"
+
+
+def test_a_never_installed_next_alpha_holds_only_while_it_is_the_newest(tmp_path):
+    w = _series_world(tmp_path, [rel("v0.3.11"), rel("v0.4.0", pre=True)])
+    assert w.orch.tracked_promotion_tag() == "v0.4.0"  # waiting_install, but nothing newer: it is the next
+    _publish(w, "v0.4.1")
+    assert w.orch.tracked_promotion_tag() == "v0.4.1"  # the channel moved on: v0.4.0 will never be installed
+    w.store.soak_fail("v0.4.1")
+    assert w.orch.tracked_promotion_tag() == "v0.4.0"  # the channel offers v0.4.0 again
 
 
 # ---- server-first gate, built_by, offered marker (plan 2026-11-18 Task 3)
@@ -930,9 +981,9 @@ def test_alpha_promotion_two_in_series(tmp_path):
     w.store.soak_start("v1.2.0", t0 + 7200)
     w.now = t0 + 10800
     state, attrs = w.orch.alpha_promotion()
-    assert attrs["tag"] == "v1.2.0" and state == _iso(t0 + 7200 + SOAK_S)
-    assert [a["tag"] for a in attrs["alphas"]] == ["v1.2.0", "v1.1.0"]
-    assert [a["promotes_at"] for a in attrs["alphas"]] == [_iso(t0 + 7200 + SOAK_S), _iso(t0 + SOAK_S)]
+    assert attrs["tag"] == "v1.1.0" and state == _iso(t0 + SOAK_S)  # the next (oldest) alpha is the tracked one
+    assert [a["tag"] for a in attrs["alphas"]] == ["v1.1.0", "v1.2.0"]  # oldest first
+    assert [a["promotes_at"] for a in attrs["alphas"]] == [_iso(t0 + SOAK_S), _iso(t0 + 7200 + SOAK_S)]
     # A is promoted: it leaves the list, B stays tracked
     w.store.data["promotions"]["v1.1.0"] = {"at": t0 + SOAK_S, "result": "promoted"}
     _state, attrs = w.orch.alpha_promotion()
@@ -1040,9 +1091,11 @@ def test_block_persists(tmp_path):
 
 def test_set_promotion_default_tag_is_tracked(tmp_path):
     w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True), rel("v1.2.0", pre=True)])
-    assert w.orch.set_promotion(None, False) == {"ok": True, "tag": "v1.2.0"}
-    assert w.store.data["soak"]["v1.2.0"]["blocked"] is True and "v1.1.0" not in w.store.data["soak"]
-    assert w.orch.set_promotion("v1.1.0", False) == {"ok": True, "tag": "v1.1.0"}  # another alpha, by tag
+    w.store.soak_start("v1.1.0", w.now)
+    w.store.soak_start("v1.2.0", w.now)
+    assert w.orch.set_promotion(None, False) == {"ok": True, "tag": "v1.1.0"}  # the next alpha
+    assert w.store.data["soak"]["v1.1.0"]["blocked"] is True and "blocked" not in w.store.data["soak"]["v1.2.0"]
+    assert w.orch.set_promotion("v1.2.0", False) == {"ok": True, "tag": "v1.2.0"}  # another alpha, by tag
 
 
 def test_set_promotion_no_alpha_and_unknown_tag(tmp_path):
@@ -1113,21 +1166,23 @@ def test_failure_on_a_blocked_tag_past_the_soak_still_counts(tmp_path):
     assert w.store.data["soak"]["v1.1.0"]["failed"] is True
 
 
-# ---- the switch follows the newest promotable alpha (owner, 22/11)
+# ---- the switch follows the next alpha (owner, 23/11; it followed the newest on 22/11)
 def _three(tmp_path, publisher=None):
     w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True), rel("v1.2.0", pre=True)])
     w.orch.publisher = publisher
     return w
 
 
-def test_switch_tracks_newest_promotable_when_newest_failed(tmp_path):
+def test_switch_tracks_next_alpha(tmp_path):
     w = _three(tmp_path)
     w.store.soak_start("v1.1.0", w.now)
     w.store.soak_start("v1.2.0", w.now)
+    assert w.orch.promotion_allowed() is True and w.orch.tracked_promotion_tag() == "v1.1.0"
+    assert [a["tag"] for a in w.orch.alpha_promotion()[1]["alphas"]] == ["v1.1.0", "v1.2.0"]  # oldest first
+    w.store.soak_fail("v1.1.0")  # the next alpha failed: the switch moves to the one after it
+    assert w.orch.promotion_allowed() is True and w.orch.tracked_promotion_tag() == "v1.2.0"
+    assert w.orch.alpha_promotion()[1]["tag"] == "v1.2.0"
     w.store.soak_fail("v1.2.0")
-    assert w.orch.promotion_allowed() is True  # v1.1.0 is the one the switch tracks
-    assert w.orch.alpha_promotion()[1]["tag"] == "v1.2.0"  # the sensor keeps its own view
-    w.store.soak_fail("v1.1.0")
     assert w.orch.promotion_allowed() is None  # no promotable alpha left
 
 
@@ -1145,11 +1200,13 @@ def test_switch_off_blocks_that_tag(tmp_path):
 
 def test_action_default_tag_matches_switch(tmp_path):
     w = _three(tmp_path)
-    assert w.orch.tracked_promotion_tag() == "v1.2.0"
-    w.store.soak_fail("v1.2.0")
+    w.store.soak_start("v1.1.0", w.now)
+    w.store.soak_start("v1.2.0", w.now)
     assert w.orch.tracked_promotion_tag() == "v1.1.0"
-    assert w.orch.set_promotion(None, False)["tag"] == w.orch.tracked_promotion_tag() == "v1.1.0"
-    assert w.orch.set_promotion("v1.2.0", True) == {"ok": False, "error": "failed"}  # an explicit tag is unchanged
+    w.store.soak_fail("v1.1.0")
+    assert w.orch.tracked_promotion_tag() == "v1.2.0"
+    assert w.orch.set_promotion(None, False)["tag"] == w.orch.tracked_promotion_tag() == "v1.2.0"
+    assert w.orch.set_promotion("v1.1.0", True) == {"ok": False, "error": "failed"}  # an explicit tag is unchanged
 
 
 # ---- a block arriving while GitHub is being called (final review)

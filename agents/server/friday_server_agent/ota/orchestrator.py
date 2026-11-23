@@ -88,6 +88,20 @@ def _newer(tag: str, installed: str | None) -> bool:
     return ch.version_key(tag) > ch.version_key(installed)
 
 
+def _next_alpha(rows: list[dict]) -> str | None:
+    """The tag the promotion queue waits for: the first row (oldest first) that has not failed. An alpha no satellite
+    installed while a newer one that has not failed exists is passed over too: the alpha channel offers the newest
+    one that has not failed, so the older one would never start a clock and would hold the queue for ever; it ends
+    superseded when the newer one is promoted. A blocked alpha is never passed over (a block holds the queue)."""
+    for i, row in enumerate(rows):
+        if row["status"] == "failed":
+            continue
+        if row["status"] == "waiting_install" and any(later["status"] != "failed" for later in rows[i + 1:]):
+            continue
+        return row["tag"]
+    return None
+
+
 class Orchestrator:
     def __init__(self, store, tokens, watcher, repo, vault, notifier, build: Callable = pk.build_release,
                  wheels: Callable = wh.build, root: str = OTA_ROOT, clock: Callable[[], float] = time.time,
@@ -311,8 +325,12 @@ class Orchestrator:
         return max(stable_keys, default=None)
 
     def _promote_step(self) -> None:
-        """A pre-release that passed the alpha soak becomes the stable release on GitHub (the release page is then the
-        truth for the stable channel too). Once per tag; a newer stable release supersedes an older soaked one."""
+        """The next alpha (the oldest still waiting above the newest stable, see `alpha_promotion`) becomes the stable
+        release on GitHub once it has passed the alpha soak (the release page is then the truth for the stable channel
+        too). Once per tag. Only the tracked alpha is a candidate, so a blocked or still soaking next alpha holds the
+        newer ones back, and a newer alpha is promoted on a later cycle, in order: GitHub "latest" never moves
+        backwards. Promoting it supersedes every older undecided alpha (the failed ones the queue skipped); a soaked
+        alpha older than the newest stable is superseded at once."""
         pub = self.publisher
         if pub is None:
             return
@@ -320,20 +338,17 @@ class Orchestrator:
         with self.store.lock:
             promotions = self.store.data.setdefault("promotions", {})
             soak = self.store.soak()
-            candidates = [r for r in self._eligible()
-                          if r.prerelease and ch.promoted(r, soak, now) and r.tag not in promotions]
             newest_stable = self._newest_stable_key()
-            best = max(candidates, key=lambda r: ch.version_key(r.tag), default=None)
-            if best is not None and newest_stable is not None and ch.version_key(best.tag) <= newest_stable:
-                best = None
-            # only the newest candidate is promoted; every other one is superseded (recomputed on each call, so a
-            # failed older tag is never promoted after a newer one, which would move GitHub "latest" backwards)
-            todo = [best] if best is not None else []
-            for r in candidates:
-                if r is not best:
-                    promotions[r.tag] = {"at": now, "result": "superseded"}
-            if len(candidates) > len(todo):
+            stale = [r for r in self._eligible()
+                     if r.prerelease and ch.promoted(r, soak, now) and r.tag not in promotions
+                     and newest_stable is not None and ch.version_key(r.tag) <= newest_stable]
+            for r in stale:  # soaked, but a newer stable exists: it can only end superseded
+                promotions[r.tag] = {"at": now, "result": "superseded"}
+            if stale:
                 self.store.save()
+            tracked = self.tracked_promotion_tag()
+            todo = [r for r in self._eligible()
+                    if r.tag == tracked and r.prerelease and r.tag not in promotions and ch.promoted(r, soak, now)]
         for r in todo:
             if now - self._promote_tried.get(r.tag, -PROMOTE_RETRY_S) < PROMOTE_RETRY_S:
                 continue
@@ -348,7 +363,11 @@ class Orchestrator:
                 LOG.warning("OTA: promotion of %s failed: %s", r.tag, err)
                 continue
             with self.store.lock:
-                self.store.data.setdefault("promotions", {})[r.tag] = {"at": now, "result": "promoted"}
+                promotions = self.store.data.setdefault("promotions", {})
+                promotions[r.tag] = {"at": now, "result": "promoted"}
+                for old in self._eligible():  # the alphas the queue skipped (failed) end here, never promoted later
+                    if old.prerelease and old.tag not in promotions and ch.version_key(old.tag) < ch.version_key(r.tag):
+                        promotions[old.tag] = {"at": now, "result": "superseded"}
                 self.notifier.queue(nt.format_promoted(r.tag), self.store.data["pushes"])
                 rec = self.store.soak().get(r.tag)
                 if rec is not None and rec.blocked:  # the owner blocked it while the GitHub call was in flight
@@ -588,10 +607,12 @@ class Orchestrator:
 
     def alpha_promotion(self) -> tuple[str | None, dict]:
         """(state, attributes) of the sensor `ota_alpha_promotion`: when the tracked alpha will be promoted to stable.
-        Tracked = the newest eligible pre-release not yet decided and not older than the newest stable (that one can
-        only end superseded); none left: the last decided tag, so a promotion stays visible with its result. The state
-        is the promotion time (None without a running clock). `soaked_hours` is the only value that moves with time;
-        it is recomputed only when this is called (every OTA cycle), never by a timer of its own."""
+        Tracked = the next alpha: the oldest eligible pre-release not yet decided, not older than the newest stable
+        (that one can only end superseded) and not failed (blocked included: a blocked next alpha holds the queue);
+        `alphas` is ordered oldest first. No alpha left: the last decided tag, so a promotion stays visible with its
+        result (all of them failed: the newest, shown as failed). The state is the promotion time (None without a
+        running clock). `soaked_hours` is the only value that moves with time; it is recomputed only when this is
+        called (every OTA cycle), never by a timer of its own."""
         now = self._clock()
 
         def iso(ts: float | None) -> str | None:
@@ -604,7 +625,7 @@ class Orchestrator:
             alphas = sorted((r for r in self._eligible()
                              if r.prerelease and r.tag not in promotions
                              and (newest_stable is None or ch.version_key(r.tag) > newest_stable)),
-                            key=lambda r: ch.version_key(r.tag), reverse=True)
+                            key=lambda r: ch.version_key(r.tag))
 
             def clock(tag: str) -> tuple[float | None, bool]:
                 rec = soak.get(tag)
@@ -633,7 +654,7 @@ class Orchestrator:
                            "soaked_hours": None, "newer_stable": False, "alphas": rows}
             tag, end, at = None, now, None
             if alphas:
-                tag = alphas[0].tag
+                tag = _next_alpha(rows) or alphas[-1].tag
                 attrs["status"] = status(tag)
                 at = promotes_at(tag)
             else:
@@ -660,11 +681,11 @@ class Orchestrator:
         return attrs["promotes_at"], attrs
 
     def tracked_promotion_tag(self) -> str | None:
-        """The alpha the Alpha promotion switch follows (owner, 22/11): the newest one still promotable (eligible
-        pre-release, not decided, not older than the newest stable) that has not failed, blocked or not. The sensor
-        keeps listing every alpha; this one skips the failed."""
+        """The alpha the Alpha promotion switch follows and `_promote_step` promotes (owner, 23/11): the next one, i.e.
+        the oldest still promotable (eligible pre-release, not decided, not older than the newest stable) that has not
+        failed, blocked or not. The sensor keeps listing every alpha; this one skips the failed."""
         _state, attrs = self.alpha_promotion()
-        return next((row["tag"] for row in attrs["alphas"] if row["status"] != "failed"), None)
+        return _next_alpha(attrs["alphas"])
 
     def promotion_allowed(self) -> bool | None:
         """Value of the switch `ota_alpha_promotion_allowed`: True = the tracked alpha will be promoted, False = blocked
