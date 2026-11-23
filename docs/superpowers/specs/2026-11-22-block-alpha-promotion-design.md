@@ -1,7 +1,5 @@
 # Block an alpha's promotion by hand (22/11/2026)
 
-> Superseded in part by `2026-11-23-mk1-music-and-next-alpha-design.md` (Goal 4): the switch and the promotion now follow the **next** (oldest waiting) alpha, not the newest.
-
 Short design, approved by the owner on 22/11 (option 1). Calls marked **(builder's call)** were filled in by the designer.
 
 ## Why
