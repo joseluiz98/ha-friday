@@ -930,7 +930,7 @@ def test_alpha_promotion_two_in_series(tmp_path):
     w.store.soak_start("v1.2.0", t0 + 7200)
     w.now = t0 + 10800
     state, attrs = w.orch.alpha_promotion()
-    assert attrs["tag"] == "v1.2.0" and state == _iso(t0 + 7200 + SOAK_S)
+    assert attrs["tag"] == "v1.1.0" and state == _iso(t0 + SOAK_S)  # the one promoted first (owner, 23/11)
     assert [a["tag"] for a in attrs["alphas"]] == ["v1.2.0", "v1.1.0"]
     assert [a["promotes_at"] for a in attrs["alphas"]] == [_iso(t0 + 7200 + SOAK_S), _iso(t0 + SOAK_S)]
     # A is promoted: it leaves the list, B stays tracked
@@ -1126,7 +1126,7 @@ def test_switch_tracks_newest_promotable_when_newest_failed(tmp_path):
     w.store.soak_start("v1.2.0", w.now)
     w.store.soak_fail("v1.2.0")
     assert w.orch.promotion_allowed() is True  # v1.1.0 is the one the switch tracks
-    assert w.orch.alpha_promotion()[1]["tag"] == "v1.2.0"  # the sensor keeps its own view
+    assert w.orch.alpha_promotion()[1]["tag"] == "v1.1.0"  # the sensor shows the one promoted first
     w.store.soak_fail("v1.1.0")
     assert w.orch.promotion_allowed() is None  # no promotable alpha left
 
@@ -1191,3 +1191,15 @@ def test_block_before_promote_call_is_honoured(tmp_path):
     w.orch._promote_step()
     assert pub.calls == [] and "v1.1.0" not in w.store.data["promotions"]
     assert w.pushed == []
+
+
+def test_alpha_promotion_shows_the_alpha_promoted_first(tmp_path):
+    # owner, 23/11: v1.1.0 promotes at lunch, v1.2.0 tomorrow; the sensor showed v1.2.0 ("tomorrow")
+    w = _promo_world(tmp_path, [rel("v1.0.0"), rel("v1.1.0", pre=True), rel("v1.2.0", pre=True)])
+    t0 = w.now
+    w.store.soak_start("v1.1.0", t0)
+    w.store.soak_start("v1.2.0", t0 + 20 * 3600)
+    w.now = t0 + 21 * 3600
+    state, attrs = w.orch.alpha_promotion()
+    assert attrs["tag"] == "v1.1.0" and state == _iso(t0 + SOAK_S) and attrs["status"] == "soaking"
+    assert [r["tag"] for r in attrs["alphas"]] == ["v1.2.0", "v1.1.0"]

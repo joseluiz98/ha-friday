@@ -83,6 +83,8 @@ migrar_openclaw
 # para chamar o cérebro. Modelo, skills e política ficam com o onboarding do dono.
 openclaw config set gateway.http.endpoints.chatCompletions.enabled true >/dev/null 2>&1 \
   || log "não consegui ligar gateway.http.endpoints.chatCompletions"
+# O cérebro nunca usa o Code Mode do OpenClaw (23/11): tudo passa pelas ferramentas normais.
+openclaw config set tools.codeMode.enabled false >/dev/null 2>&1 || echo "codeMode: config set failed" >&2
 if [ -n "${FRIDAY_OPENCLAW_MODEL:-}" ]; then
   openclaw config set agents.defaults.model.primary "$FRIDAY_OPENCLAW_MODEL" >/dev/null 2>&1
   log "cérebro forçado por friday.env: $FRIDAY_OPENCLAW_MODEL"

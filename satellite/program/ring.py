@@ -59,6 +59,11 @@ def escalar(cor: int, f: float) -> int:
 # 3/4 de volta por segundo (12 LEDs, 9 passos/s), as duas cores no brilho da luz de resposta
 GIRO_PASSO_S = 1 / 9
 COR_GIRO_BASE = escalar(0x0000FF, COR_RESPOSTA_FATOR)
+# 23/11 (dono): luzes do sistema (update achado, instalando, setup) num laranja fraco; o amarelo fica para as
+# notificações que virão. Instalando pulsa mais rápido que o update achado, e mais devagar que o alarme (laranja forte)
+COR_SISTEMA_FATOR = 0.4
+COR_SISTEMA = escalar(0xFF8000, COR_SISTEMA_FATOR)
+SPEED_UPDATING = 2
 COR_GIRO = (escalar(0x00C8FF, COR_RESPOSTA_FATOR), escalar(0x00C8FF, 0.4), escalar(0x00C8FF, 0.15))  # cabeça, meio, cauda
 
 
@@ -271,9 +276,9 @@ class JabraRing(_Composto):
 
 # estado -> (efeito, cor, velocidade). velocidade None = sem respiração (cor fixa)
 _XVF = {"speak": (3, 0x0000FF, None), "respond": (1, escalar(0x00C8FF, COR_RESPOSTA_FATOR), SPEED_RESPOND), "think": (5, COR_GIRO_BASE, None), "dnd": (1, 0x8000FF, SPEED_SLOW),
-        "alarm": (1, 0xFF8000, SPEED_FAST), "setup": (1, 0xFF8000, SPEED_SLOW), "updating": (1, 0xFFFFFF, SPEED_SLOW),
+        "alarm": (1, 0xFF8000, SPEED_FAST), "setup": (1, COR_SISTEMA, SPEED_SLOW), "updating": (1, COR_SISTEMA, SPEED_UPDATING),
         "error": (1, 0xFF0000, SPEED_SLOW), "muted": (3, 0xFF0000, None),
-        "net_error": (1, 0xFF0000, SPEED_SLOW), "update_pending": (1, 0xFFC800, SPEED_SLOW)}  # amarelo, como a notificação das Echos
+        "net_error": (1, 0xFF0000, SPEED_SLOW), "update_pending": (1, COR_SISTEMA, SPEED_SLOW)}
 
 
 class Xvf3800Ring(_Composto):

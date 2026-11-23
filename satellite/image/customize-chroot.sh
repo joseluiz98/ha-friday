@@ -30,9 +30,10 @@ install -D -m 0644 $P/files/etc/99-respeaker.rules /etc/udev/rules.d/99-respeake
 install -D -m 0644 $P/files/etc/70-jabra-satelite.rules /etc/udev/rules.d/70-jabra-satelite.rules  # hidraw do Jabra para o grupo plugdev (botão, anel)
 install -D -m 0644 $P/files/etc/tmpfiles-friday-gravacoes.conf /etc/tmpfiles.d/friday-gravacoes.conf
 # one ALSA file per audio board; /etc/asound.conf points to the board in use (Jabra until friday-audio-select runs)
-install -D -m 0644 $P/asound/jabra.conf /etc/friday-satelite/asound/jabra.conf
-install -D -m 0644 $P/asound/xvf3800.conf /etc/friday-satelite/asound/xvf3800.conf
-ln -sfn /etc/friday-satelite/asound/jabra.conf /etc/asound.conf
+install -d -m 0755 /etc/friday-audio   # readable by the music player (/etc/friday-satelite is 0700)
+install -m 0644 $P/asound/jabra.conf /etc/friday-audio/jabra.conf
+install -m 0644 $P/asound/xvf3800.conf /etc/friday-audio/xvf3800.conf
+ln -sfn /etc/friday-audio/jabra.conf /etc/asound.conf
 mkdir -p /var/log/journal
 
 echo "== program, models, sounds"
@@ -75,9 +76,10 @@ PY
   visudo -cf $U/sudoers.friday-satellite-agent >/dev/null
   install -m 0440 $U/sudoers.friday-satellite-agent /etc/sudoers.d/friday-satellite-agent
   for h in friday-wifi-apply friday-agent-apply friday-ota-apply; do install -m 0755 $U/$h /usr/local/sbin/$h; done
-  install -D -m 0644 $U/jabra.conf /etc/friday-satelite/asound/jabra.conf
-  install -D -m 0644 $U/xvf3800.conf /etc/friday-satelite/asound/xvf3800.conf
-  ln -sfn /etc/friday-satelite/asound/jabra.conf /etc/asound.conf
+  install -d -m 0755 /etc/friday-audio
+  install -m 0644 $U/jabra.conf /etc/friday-audio/jabra.conf
+  install -m 0644 $U/xvf3800.conf /etc/friday-audio/xvf3800.conf
+  ln -sfn /etc/friday-audio/jabra.conf /etc/asound.conf
   install -m 0755 $U/friday-audio-select /usr/local/sbin/friday-audio-select
   install -m 0644 $U/90-friday-audio.rules /etc/udev/rules.d/90-friday-audio.rules
   install -D -m 0644 $U/audio-board.conf /etc/systemd/system/sendspin-cli.service.d/audio-board.conf

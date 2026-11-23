@@ -52,6 +52,7 @@ import cancellation as cx
 import satelite_modo as sm
 import voice_settings as vs_cfg
 import music_state as ms
+import player_guard as pgd
 import preferencias_voz as pv
 import inventario_casa as ic
 import gemini_watch as gw
@@ -808,8 +809,27 @@ def registrar_rotas(app):
         return JSONResponse(r)
 
 
+class GuardedMCPClient(MCPClient):
+    """MCP client that, for a satellite session, corrects a made-up music player to the satellite's own before the
+    call reaches HA (player_guard). Any failure of the guard lets the call through unchanged."""
+
+    def __init__(self, *args, own_player: str, ha_token: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._own_player = own_player
+        self._ha_token = ha_token
+
+    async def _read_player_state(self, entity_id):
+        return await pgd.read_state_http(entity_id, HA_URL, self._ha_token)
+
+    async def _call_tool_text(self, function_name, arguments) -> str:
+        arguments, early = await pgd.safe_guard(function_name, arguments, self._own_player, self._read_player_state)
+        if early is not None:
+            return json.dumps(early)
+        return await super()._call_tool_text(function_name, arguments)
+
+
 async def build_tools(eh_satelite: bool = False, brain_desc: str | None = None, skill_tools: bool = False,
-                      search_tool: bool = False, apresentacao: bool = False) -> tuple:
+                      search_tool: bool = False, apresentacao: bool = False, own_player: str | None = None) -> tuple:
     """(ToolsSchema, cliente do MCP ou None, nomes das ferramentas vindas do MCP)."""
     brain = BRAIN_FUNCTION if brain_desc is None else _brain_function(brain_desc)
     standard = [brain] + (
@@ -823,12 +843,12 @@ async def build_tools(eh_satelite: bool = False, brain_desc: str | None = None, 
         standard.append(SEARCH_SKILLS_FUNCTION)
     mcp, nomes_mcp = None, set()
     try:
-        mcp = MCPClient(
-            server_params=StreamableHttpParameters(
-                url=HA_MCP_URL,
-                headers={"Authorization": f"Bearer {os.environ['FRIDAY_HA_TOKEN']}"},
-            )
-        )
+        ha_token = os.environ["FRIDAY_HA_TOKEN"]
+        mcp_params = StreamableHttpParameters(url=HA_MCP_URL, headers={"Authorization": f"Bearer {ha_token}"})
+        if eh_satelite and own_player:
+            mcp = GuardedMCPClient(server_params=mcp_params, own_player=own_player, ha_token=ha_token)
+        else:
+            mcp = MCPClient(server_params=mcp_params)
         ha_tools = await mcp.tools()
         standard = ha_tools.standard_tools + standard
         nomes_mcp = {t.name for t in ha_tools.standard_tools}
@@ -1224,12 +1244,20 @@ async def bot(runner_args: RunnerArguments):
     async def _cadastro():
         return await cc.read_satellites_without_blocking(SATELITES_ARQ, SATELITES_CACHE)
 
+    async def _player_do_satelite():
+        # Own player from the catalog, for the music guard (GuardedMCPClient); a read failure = no guard.
+        try:
+            return ((await _cadastro()).get(satelite_id) or {}).get("player") if eh_satelite else None
+        except Exception:
+            return None
+
     async def _estado_do_player(player):
         return await ms.player_state(player, HA_URL, os.environ["FRIDAY_HA_TOKEN"])
 
+    player_proprio = await _player_do_satelite()
     (ferramentas, mcp, nomes_mcp), (inventario, erro_inventario), fato_musica = await asyncio.gather(
         build_tools(eh_satelite, mv.brain_description(caps), skill_tools=bool(habilidades), search_tool=cortou,
-                    apresentacao=bool(apresentacao)),
+                    apresentacao=bool(apresentacao), own_player=player_proprio),
         ic.buscar(HA_MCP_URL, os.environ["FRIDAY_HA_TOKEN"]),
         ms.music_fact_for(satelite_id, _cadastro, _estado_do_player, sm.music_fact) if eh_satelite else _vazio()
     )
