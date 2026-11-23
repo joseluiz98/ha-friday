@@ -633,7 +633,10 @@ class Orchestrator:
                            "soaked_hours": None, "newer_stable": False, "alphas": rows}
             tag, end, at = None, now, None
             if alphas:
-                tag = alphas[0].tag
+                # shown: the alpha promoted first (owner, 23/11), i.e. the earliest promotion time; none has one
+                # (blocked, failed or not installed): the newest, as before
+                timed = [(promotes_at(r.tag), r.tag) for r in alphas if promotes_at(r.tag) is not None]
+                tag = min(timed)[1] if timed else alphas[0].tag
                 attrs["status"] = status(tag)
                 at = promotes_at(tag)
             else:
