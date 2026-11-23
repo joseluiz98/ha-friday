@@ -542,6 +542,45 @@ def test_failed_oldest_is_skipped_then_superseded(tmp_path):
     assert w.store.data["promotions"]["v0.4.3"]["result"] == "superseded"  # only after the newer one went out
 
 
+def test_stable_target_waits_for_blocked_next_alpha(tmp_path):
+    pub = FakePublisher()
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.3", pre=True), rel("v0.4.4", pre=True)])
+    w.orch.publisher = pub
+    w.orch.poll()
+    _soak_all(w, "v0.4.3", "v0.4.4")
+    w.store.soak_block("v0.4.3", True)
+    w.orch.poll()
+    assert w.orch.target("stable") == "v0.3.0"  # the soaked newer alpha does not jump the blocked next one
+    assert pub.calls == []
+    w.store.soak_block("v0.4.3", False)
+    assert w.orch.target("stable") == "v0.4.3"
+
+
+def test_stable_target_follows_promotion_order(tmp_path):
+    pub = FakePublisher()
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.3", pre=True), rel("v0.4.4", pre=True)])
+    w.orch.publisher = pub
+    w.orch.poll()
+    _soak_all(w, "v0.4.3", "v0.4.4")
+    assert w.orch.target("stable") == "v0.4.3"  # both soaked, v0.4.3 is next and not yet promoted
+    w.orch.poll()
+    assert pub.calls == ["v0.4.3"] and w.orch.target("stable") == "v0.4.4"  # v0.4.4 is the tracked one now
+    w.orch.poll()
+    assert pub.calls == ["v0.4.3", "v0.4.4"] and w.orch.target("stable") == "v0.4.4"
+
+
+def test_stable_target_ignores_unsoaked_next_alpha_and_keeps_github_stable(tmp_path):
+    w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.3", pre=True), rel("v0.4.4", pre=True)])
+    w.orch.poll()
+    w.store.data["soak"]["v0.4.3"] = {"started_at": w.now - 10 * 3600, "failed": False}
+    _soak_all(w, "v0.4.4")
+    assert w.orch.target("stable") == "v0.3.0"  # v0.4.3 still soaking holds v0.4.4 back
+    w.releases["v0.3.5"] = rel("v0.3.5")  # a plain GitHub stable release is stable as always
+    w.manifests[w.releases["v0.3.5"].release.sha] = man()
+    w.orch.poll()
+    assert w.orch.target("stable") == "v0.3.5"
+
+
 def test_failed_promotion_call_holds_the_newer_alpha(tmp_path):
     pub = FakePublisher(fail="http 502")
     w = World(tmp_path, [rel("v0.3.0"), rel("v0.4.0", pre=True), rel("v0.4.1", pre=True)])
