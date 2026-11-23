@@ -3,7 +3,7 @@
 
 Runs as root in the ExecCondition of the voice program and of the Sendspin player (and so again on every hotplug, since
 the udev rule restarts them). XVF3800 (2886:001a) wins over the Jabra Speak 410 (0b0e:0410). It points /etc/asound.conf
-at the board's file in /etc/friday-satelite/asound/, writes audio_board and mic, and starts or stops the silence feeder.
+at the board's file in /etc/friday-audio/ (0755: the music player cannot enter the 0700 /etc/friday-satelite), writes audio_board and mic, and starts or stops the silence feeder.
 
   friday-audio-select --check        (voice program) exit 0 = a board is present and the voice is wanted, 1 = skip
   friday-audio-select --check-board  (music player)  exit 0 = a board is present (the voice switch does not matter)
@@ -60,7 +60,7 @@ def _read(path: str) -> str | None:
 def apply(board: str, root: str = "", run=subprocess.run) -> bool:
     """Points /etc/asound.conf and writes audio_board/mic. True when anything changed."""
     etc = os.path.join(root, "etc/friday-satelite")
-    target = f"/etc/friday-satelite/asound/{board if board != 'none' else 'jabra'}.conf"
+    target = f"/etc/friday-audio/{board if board != 'none' else 'jabra'}.conf"
     link = os.path.join(root, "etc/asound.conf")
     changed = False
     if not (os.path.islink(link) and os.readlink(link) == target):

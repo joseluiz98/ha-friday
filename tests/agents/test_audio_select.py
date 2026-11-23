@@ -30,9 +30,10 @@ def usb(tmp_path, *ids):
 
 def root(tmp_path, intent=None):
     r = tmp_path / "root"
-    (r / "etc/friday-satelite/asound").mkdir(parents=True)
+    (r / "etc/friday-satelite").mkdir(parents=True)  # audio_board and mic stay here
+    (r / "etc/friday-audio").mkdir(parents=True)
     for b in ("jabra", "xvf3800"):
-        (r / f"etc/friday-satelite/asound/{b}.conf").write_text(b)
+        (r / f"etc/friday-audio/{b}.conf").write_text(b)
     if intent is not None:
         (r / "home/jose/.friday-agent").mkdir(parents=True)
         (r / "home/jose/.friday-agent/voice-enabled").write_text(intent + "\n")
@@ -62,9 +63,16 @@ def test_detect_jabra_and_none(tmp_path):
 def test_apply_points_symlink_and_writes_board_and_mic(tmp_path):
     m, r, run = load(), root(tmp_path), Run()
     assert m.apply("xvf3800", r, run) is True
-    assert os.readlink(os.path.join(r, "etc/asound.conf")) == "/etc/friday-satelite/asound/xvf3800.conf"
+    assert os.readlink(os.path.join(r, "etc/asound.conf")) == "/etc/friday-audio/xvf3800.conf"
     assert open(os.path.join(r, "etc/friday-satelite/audio_board")).read().strip() == "xvf3800"
     assert open(os.path.join(r, "etc/friday-satelite/mic")).read().strip() == "xvf3800"
+
+
+def test_apply_points_to_friday_audio(tmp_path):
+    # the music player (a 0700 /etc/friday-satelite is unreadable to it) must reach the board file through /etc/friday-audio
+    m, r = load(), root(tmp_path)
+    m.apply("jabra", r, Run())
+    assert os.readlink(os.path.join(r, "etc/asound.conf")) == "/etc/friday-audio/jabra.conf"
 
 
 def test_old_asound_file_is_kept_aside_once(tmp_path):
@@ -78,7 +86,7 @@ def test_old_asound_file_is_kept_aside_once(tmp_path):
 def test_none_keeps_jabra_conf_and_reports_none(tmp_path):
     m, r = load(), root(tmp_path)
     m.apply("none", r, Run())
-    assert os.readlink(os.path.join(r, "etc/asound.conf")) == "/etc/friday-satelite/asound/jabra.conf"
+    assert os.readlink(os.path.join(r, "etc/asound.conf")) == "/etc/friday-audio/jabra.conf"
     assert open(os.path.join(r, "etc/friday-satelite/audio_board")).read().strip() == "none"
 
 
