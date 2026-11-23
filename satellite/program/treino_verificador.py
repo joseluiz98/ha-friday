@@ -8,6 +8,7 @@ from threadpoolctl import threadpool_limits
 from openwakeword.model import Model
 from openwakeword.vad import VAD
 from openwakeword.custom_verifier_model import train_verifier_model
+import negativos as ng
 import verificador as vf
 
 RAIZ = "/home/jose/vozes"
@@ -73,7 +74,7 @@ def _fatia(e, ini, fim):
     return {"base": e["base"][ini:fim], "vad": e["vad"][ini:fim], "feats": e["feats"][ini:fim]}
 
 
-def clipes(ident_novo, pasta_nova, extrair, rotulos):
+def clipes(ident_novo, pasta_nova, extrair, rotulos, negativos=()):
     """Os clipes do D14, cada um com base/vad/feats, categoria, grupo (sessão), rótulo e quadros de treino.
     16/10: tentativas e fala livre saem do áudio CONTÍNUO (sessao.wav + marcas.json; historico/continuas/*.wav com os
     recortes de recortes_tentativas): o modelo roda no contínuo e só depois se fatia. Recortes com começo a frio
@@ -90,6 +91,8 @@ def clipes(ident_novo, pasta_nova, extrair, rotulos):
 
     for c in sorted(glob.glob(f"{RAIZ}/_negativos/*.wav")):
         add(c, "falsas", "f:" + _dia(os.path.basename(c), rotulos), 0)
+    for c, g in negativos:  # 23/11: ambiente do próprio satélite e linha de base dos outros (negativos.escolher)
+        add(c, "falsas", g, 0, fala_livre=True)  # fala_livre: o que passa de 0,5 e a vizinhança saem do treino
     pessoas = sorted(d for d in os.listdir(RAIZ) if not d.startswith("_") and os.path.isdir(f"{RAIZ}/{d}"))
     for p in pessoas:
         pasta = pasta_nova if (p == ident_novo and pasta_nova) else f"{RAIZ}/{p}/atual"
@@ -150,17 +153,23 @@ def _numeros(cats):
 
 def executar(ident, nome, pasta_nova, limiar_voz, antes, saida_dir="/home/jose/modelos"):
     _baixa_prioridade()
-    rotulos = json.load(open(f"{RAIZ}/rotulos.json"))
-    cl = clipes(ident, pasta_nova, Extrator(), rotulos)
+    rotulos = ng.carregar_rotulos(f"{RAIZ}/rotulos.json")  # 23/11: só o MK1 tem o acervo de 15/10; sem ele é vazio
+    neg = ng.escolher()
+    motivo = ng.veredito(neg)
+    resumo = {k: neg[k] for k in ("origem", "proprio_s", "baseline_s", "acervo_s", "total_s")}
+    if motivo:
+        return {"aprovado": False, "numeros": {}, "motivo": motivo, "negativos": resumo}
+    cl = clipes(ident, pasta_nova, Extrator(), rotulos, neg["clipes"])
     novas = [c["base"] for c in cl if c["cat"] == "nova"]
     mal = vf.ouviu_mal(novas)
     if mal > vf.OUVIU_MAL_MAX:
         return {"aprovado": False, "numeros": {},
-                "motivo": f"o modelo base mal ouviu o Friday de {nome} (nota abaixo de 0,3 em {mal} de {len(novas)})"}
+                "motivo": f"o modelo base mal ouviu o Friday de {nome} (nota abaixo de 0,3 em {mal} de {len(novas)})",
+                "negativos": resumo}
     tabela = vf.avaliar(cl, treinar, notas_de, limiar_voz)
     aprovado, (lv, lp), textos, falhou = vf.escolher(tabela, antes)
     r = {"aprovado": aprovado, "motivo": falhou, "numeros": dict(_numeros(tabela[(lv, lp)]), textos=textos),
-         "limiar_verificador": lv, "limiar_palavra": lp}
+         "limiar_verificador": lv, "limiar_palavra": lp, "negativos": resumo}
     if aprovado:
         modelo = treinar(cl)
         fd, tmp = tempfile.mkstemp(dir=saida_dir, prefix=".verificador-", suffix=".pkl")
@@ -171,14 +180,14 @@ def executar(ident, nome, pasta_nova, limiar_voz, antes, saida_dir="/home/jose/m
 
 
 def _conferir_recortes():
-    hist = [c for c in clipes("jose", None, Extrator(), json.load(open(f"{RAIZ}/rotulos.json")))
+    hist = [c for c in clipes("jose", None, Extrator(), ng.carregar_rotulos(f"{RAIZ}/rotulos.json"))
             if c["cat"] == "historico"]
     ok = sum(1 for c in hist if max(c["base"]) >= 0.5)
     print(json.dumps({"tentativas": len(hist), "base_acima_de_0_5": ok}))
 
 
 def _avaliar_previo():
-    rotulos = json.load(open(f"{RAIZ}/rotulos.json"))
+    rotulos = ng.carregar_rotulos(f"{RAIZ}/rotulos.json")
     cl = clipes("jose", None, Extrator(), rotulos)
     tabela = vf.avaliar(cl, treinar, notas_de, 0.6)
     for combo, cats in sorted((k, v) for k, v in tabela.items() if k[0] != "base"):

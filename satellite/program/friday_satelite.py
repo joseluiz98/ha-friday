@@ -1,6 +1,6 @@
 """friday-satelite: liga Jabra, palavra, maestro e conexão (spec 2026-10-05). Serviço systemd na Pi.
 Registro: uma linha JSON por abertura no journald (sem áudio, nunca)."""
-import asyncio, collections, datetime, json, math, os, subprocess, sys, tempfile, threading, time, wave
+import asyncio, collections, datetime, json, math, os, shutil, subprocess, sys, tempfile, threading, time, urllib.request, wave
 import aiohttp
 import numpy as np
 from openwakeword.model import Model
@@ -24,6 +24,7 @@ import sons
 import xvf_link
 import doa
 from ativacao_detalhes import payload as payload_ativacao
+import negativos
 import net_recovery
 import porta_local
 import registro_palavra
@@ -801,6 +802,7 @@ class Satelite:
         """Processo separado com nice 19: os laços da extração não disputam o GIL com a captura, e uma falta de
         memória mata só o treino (Pi 3, 1 GB)."""
         antes = {x["id"]: self.vozes.aceitas_de(x["id"]) for x in self.vozes.listar() if x["id"] != ident}
+        baseline = self._buscar_baseline()
         args = json.dumps({"ident": ident, "nome": nome, "pasta": pasta, "limiar_voz": self.cfg["limiar_voz_palavra"],
                            "antes": antes}, ensure_ascii=False)
         try:
@@ -813,7 +815,28 @@ class Satelite:
             r = json.loads(linhas[-1])
         except Exception as e:
             r = {"aprovado": False, "motivo": f"erro no treino: {type(e).__name__}: {e}", "numeros": {}}
+        shutil.rmtree(negativos.BASELINE, ignore_errors=True)  # a linha de base só vale para este treino
+        if baseline:
+            r["negativos_baixados"] = baseline
         self.loop.call_soon_threadsafe(self._fim_do_treino, ident, nome, pasta, r)
+
+    def _buscar_baseline(self):
+        """23/11: ambiente próprio abaixo de MIN_AMBIENTE_S → pede ao agente local os negativos dos outros satélites
+        que a VM conhece agora (satélite novo treina no 1º dia). Falha não impede o treino: o portão decide com o que
+        houver e diz o que falta. Devolve o resumo do agente, ou None quando não precisou ou não conseguiu."""
+        if negativos.total_s(negativos.listar(negativos.AMBIENTE)) >= negativos.MIN_AMBIENTE_S:
+            return None
+        try:
+            req = urllib.request.Request(
+                self.cfg["agente_url"] + "/v1/local/negatives", method="POST",
+                data=json.dumps({"seconds": negativos.ALVO_NEGATIVOS_S}).encode(),
+                headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.cfg['senha_porta_local']}"})
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                r = json.loads(resp.read().decode())
+        except Exception as e:  # noqa: BLE001 - sem agente, sem VM ou sem credencial: segue sem a linha de base
+            r = {"ok": False, "erro": type(e).__name__}
+        print(json.dumps({"aprendizagem": "linha_de_base", **r}), flush=True)
+        return r
 
     def _fim_do_treino(self, ident, nome, pasta, r):
         aprovado = bool(r.get("aprovado"))
