@@ -139,27 +139,7 @@ class Orchestrator:
 
     def target(self, channel: str) -> str | None:
         with self.store.lock:
-            releases = self._eligible()
-            if channel == "stable":
-                releases = self._in_promotion_order(releases)
-            return ch.target_for(channel, releases, self.store.soak(), self._clock())
-
-    def _in_promotion_order(self, releases: list[ch.Release]) -> list[ch.Release]:
-        """The releases the stable channel may serve: a pre-release counts only when it is the tracked next alpha, was
-        already promoted by this agent, or is older than the tracked alpha. A newer soaked alpha never jumps a blocked
-        or still soaking next one (promotion order = stable order). GitHub stable releases are always kept."""
-        tracked = self.tracked_promotion_tag()
-        if tracked is None:
-            return releases
-        limit = ch.version_key(tracked)
-        promotions = self.store.data.setdefault("promotions", {})
-
-        def promoted_here(tag: str) -> bool:
-            p = promotions.get(tag)
-            return isinstance(p, dict) and p.get("result") == "promoted"
-
-        return [r for r in releases
-                if not r.prerelease or r.tag == tracked or promoted_here(r.tag) or ch.version_key(r.tag) < limit]
+            return ch.target_for(channel, self._eligible(), self.store.soak(), self._clock())
 
     def _targets(self) -> set[str]:
         with self.store.lock:
