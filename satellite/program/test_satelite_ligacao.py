@@ -103,7 +103,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.p = mock.patch.multiple(fs, CFG=os.path.join(self.d, "config.json"), ID=os.path.join(self.d, "id"),
                                      TIMERS=os.path.join(self.d, "estado", "timers.json"), SONS=self.d,
-                                     ANUNCIOS=os.path.join(self.d, "anuncios"), TIMER_VOZ=os.path.join(self.d, "timer_voz"))
+                                     ANUNCIOS=os.path.join(self.d, "anuncios"), TIMER_VOZ=os.path.join(self.d, "timer_voz"),
+                                     TIMER_GENERICO=os.path.join(self.d, "timer_generico.wav"))
         self.p.start()
         self.p_placa = mock.patch.object(fs.placa, "ler_placa", return_value="jabra")  # never the host's audio_board
         self.p_placa.start()
@@ -753,6 +754,36 @@ class TestProvisionamento(Base):
         for tipo, arg in self.s.maestro.evento("botao", 1.0):
             self.s._agir(tipo, arg)
         self.assertFalse(os.path.exists(self.s.timer_voz_path(tid)))
+
+    def _wav(self, caminho):
+        import wave
+        os.makedirs(os.path.dirname(caminho), exist_ok=True)
+        with wave.open(caminho, "wb") as w:
+            w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000); w.writeframes(b"\x00" * 4800)
+
+    def _aviso(self, timer):
+        F.sons.clear()
+        self.s._agir("aviso_timer", timer)
+        return list(F.sons)
+
+    async def test_notice_plays_the_timer_file_when_present(self):
+        self._wav(self.s.timer_voz_path("t1ab852")); self._wav(fs.TIMER_GENERICO)
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), ["t1ab852.wav"])
+
+    async def test_notice_falls_back_to_generic_when_file_missing(self):
+        self._wav(fs.TIMER_GENERICO)
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), ["timer_generico.wav"])
+
+    async def test_notice_falls_back_to_generic_when_file_is_not_a_wav(self):
+        self._voz("t1ab852"); self._wav(fs.TIMER_GENERICO)  # _voz grava só "RIFF": cabeçalho incompleto
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), ["timer_generico.wav"])
+
+    async def test_notice_silent_when_both_missing(self):
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), [])
+
+    async def test_unnamed_timer_uses_generic_clip(self):
+        self._wav(fs.TIMER_GENERICO)
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": None}), ["timer_generico.wav"])
 
     async def test_apresentacao_recusada_com_mudo(self):
         self.s.maestro.mudo = True

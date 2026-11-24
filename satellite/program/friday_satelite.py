@@ -48,6 +48,8 @@ ID = "/etc/friday-satelite/id"
 SONS = "/home/jose/satelite/sons"
 TIMERS = "/home/jose/satelite/estado/timers.json"  # spec 2026-10-12 §2: sobrevive a reinício
 TIMER_VOZ = os.environ.get("FRIDAY_TIMER_VOICE_DIR", "/home/jose/timer_voz")  # spec 2026-11-24: <id>.wav do aviso de cada timer
+# spec 2026-11-24: o aviso genérico de timer vem junto do programa (imagem e OTA), nunca depende do que o bot mandou
+TIMER_GENERICO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sons", "timer_generico.wav")
 ANUNCIOS = os.environ.get("FRIDAY_ANNOUNCE_DIR", "/home/jose/anuncios")  # spec 2026-11-20: <id>.wav, apagado depois
 MODELO_VERIFICADOR = "/home/jose/modelos/friday_verificador.pkl"  # spec 2026-10-15 D13
 # D16: sem os WAVs das falas da aprendizagem, a Pi usa os sons de sempre
@@ -491,6 +493,11 @@ class Satelite:
                 self.emissor.emitir("conversa", {"estado": "fechada"})
         elif tipo == "registrar":
             print(json.dumps({"abertura": arg, "satelite": self.sid}), flush=True)
+        elif tipo == "aviso_timer":  # spec 2026-11-24: uma vez, depois da rampa e das voltas do alarme
+            caminho, qual = self._aviso_do_timer(arg)
+            print(json.dumps({"timer_aviso": qual, "id": arg.get("id"), "satelite": self.sid}), flush=True)
+            if caminho:
+                self.alto.tocar_wav(caminho)
         elif tipo == "registrar_timer":
             print(json.dumps({"timer": arg, "satelite": self.sid}), flush=True)
             self._limpar_timer_voz()  # o alarme acabou: o aviso falado desse timer não serve mais
@@ -546,6 +553,23 @@ class Satelite:
 
     def timer_ativo(self, timer_id):
         return any(t["id"] == timer_id for t in self.timers.consultar(time.time()))
+
+    @staticmethod
+    def _wav_legivel(caminho):
+        try:
+            with wave.open(caminho) as w:
+                return w.getnframes() > 0
+        except (OSError, EOFError, wave.Error):
+            return False
+
+    def _aviso_do_timer(self, timer):
+        """O aviso falado de um timer: o arquivo dele, senão o genérico do programa, senão nada (os beeps seguem)."""
+        proprio = self.timer_voz_path(timer.get("id"))
+        if self._wav_legivel(proprio):
+            return proprio, "proprio"
+        if self._wav_legivel(TIMER_GENERICO):
+            return TIMER_GENERICO, "generico"
+        return None, "sem_arquivo"
 
     def _limpar_timer_voz(self):
         """Apaga o aviso falado de todo timer que não está ativo nem tocando (partida, cancelamento, fim do alarme)."""
