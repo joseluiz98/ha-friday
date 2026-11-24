@@ -1068,8 +1068,7 @@ class TestRecadoComMicFechadoEsperandoResposta(unittest.TestCase):  # 19/11, rev
     def test_room_speech_during_the_gate_leaves_a_deadline_after_the_answer(self):
         m = Maestro(Ajustes(close_mic_awaiting_reply=True))
         m.mudo = False
-        m.evento("timer_venceu", 0.0, {"id": "t1", "nome": "x"})
-        m.evento("tique", 1.5)  # 1ª volta do alarme: a conversa do timer abre
+        m.campainha("e1", 0.0)  # 24/11: o recado é a entrega (o timer não abre mais conversa)
         m.evento("conectou", 2.5)
         m.evento("ela_comecou", 3.0); m.evento("ela_parou", 5.0)
         m.evento("fala_comecou", 5.2); m.evento("fala_parou", 5.5)  # sala, na pausa de 1,5 s do fim do recado

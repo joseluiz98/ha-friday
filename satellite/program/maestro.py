@@ -27,9 +27,12 @@ class Ajustes:
     # Reaproveitava continuacao_s (tolerância para a fala CONTINUAR em uma conversa já aberta) por acaso
     # os dois terem o mesmo valor hoje — encurtar um pelo outro motivo também encurtava este sem querer.
     cerebro_fim_s: float = 8.0
-    # Spec 2026-10-12: 1ª volta do alarme antes de a Friday falar o timer; tempo máximo tocando; quanto uma
-    # entrega pode esperar na fila (o bot desiste em ~90 s).
-    volta_alarme_s: float = 1.5
+    # Spec 2026-11-24: o timer só toca. `volta_alarme_s` = duração de uma volta do som do alarme (a Pi põe a do WAV);
+    # `rampa_s` = alarm_ramp_s; o aviso falado do timer vem depois da rampa mais `voltas_antes_do_nome` voltas.
+    # Tempo máximo tocando; quanto uma entrega pode esperar na fila (o bot desiste em ~90 s).
+    volta_alarme_s: float = 1.65
+    rampa_s: float = 0.0
+    voltas_antes_do_nome: int = 3
     alarme_max_s: float = 300.0
     fila_entrega_max_s: float = 90.0
     anuncio_max_s: float = 300.0  # spec 2026-11-20: quanto um anúncio pode esperar (contado do pedido ao bot, F6)
@@ -70,7 +73,7 @@ class Maestro:
         self.whisper = False
         self.ultima_abertura = None
         # spec 2026-10-12: fora de _zerar, sobrevivem ao fim das conversas
-        self._alarme = None  # {"timer", "inicio", "atendido"} do alarme em curso
+        self._alarme = None  # {"timer", "inicio"} do alarme em curso
         self._fila_alarmes, self._fila_entregas = [], []  # timers vencidos esperando; (id, instante) de entregas
         self._fila_anuncios, self._anuncio = [], None  # (id, instante) de anúncios esperando; id do que está tocando
         self._cadastro = None  # {"nome", "id"} agendado na conversa ou em gravação; fora de _zerar
@@ -295,13 +298,6 @@ class Maestro:
     def _apos_conversa(self, agora, como):
         if como == "entrega":
             return [("volume_alerta", False)]
-        if como == "timer" and self._alarme:
-            if self._alarme["atendido"]:
-                return self._encerrar_alarme(agora, "atendido")
-            if agora >= self._alarme["inicio"] + self.a.alarme_max_s:
-                return self._encerrar_alarme(agora, "nao_atendido")
-            self.estado, self._prazo = ALARME, None  # ninguém respondeu: o alarme volta até ser parado
-            return [("alarme", "tocar"), ("luz", "alarme")]
         return []
 
     @property
@@ -310,7 +306,7 @@ class Maestro:
         return bool(self._alarme and self._alarme.get("music"))
 
     def _iniciar_alarme(self, agora, timer):
-        self._alarme = {"timer": timer, "inicio": agora, "atendido": False}
+        self._alarme = {"timer": timer, "inicio": agora}
         self.estado = ALARME
         acoes = [("volume_alerta", True), ("alarme", "tocar"), ("luz", "alarme")]
         if timer.get("music"):  # R11: campainha + pedido de música; sem música em music_wait_s, segue como sempre
@@ -318,7 +314,7 @@ class Maestro:
             self._prazo = ("music_wait", agora + self.a.music_wait_s)
             acoes.append(("request_music", {"timer_id": timer.get("id"), "query": timer["music"]}))
         else:
-            self._prazo = ("alarme_fala", agora + self.a.volta_alarme_s)
+            self._prazo = ("nome_do_timer", self._quando_o_nome(agora))
         return acoes
 
     def _encerrar_alarme(self, agora, como):
@@ -341,9 +337,9 @@ class Maestro:
         self._prazo = ("espera_inicial", agora + self.a.resposta_max_s)
         return [("luz", "ouvindo"), ("conectar", extras)]
 
-    def _abrir_timer(self, agora):  # 19/11: a fala do timer é recado (mic fechado, só a palavra ativa corta)
-        return [("alarme", "pausar")] + self._fechar_mic_do_recado(
-            self._abrir_propria(agora, "timer", {"timer": self._alarme["timer"]}))
+    def _quando_o_nome(self, agora):
+        """24/11: o aviso falado do timer vem depois da rampa e de `voltas_antes_do_nome` voltas do alarme."""
+        return agora + self.a.rampa_s + self.a.voltas_antes_do_nome * self.a.volta_alarme_s
 
     def _abrir_entrega(self, agora, entrega_id):
         return self._fechar_mic_do_recado([("volume_alerta", True), ("som", "lembrete")] + self._abrir_propria(
@@ -471,7 +467,7 @@ class Maestro:
             if nome == "music_started":
                 return self._encerrar_alarme(agora, "music") + [("music_ramp", None)]
             self._alarme["music"] = False
-            self._prazo = ("alarme_fala", max(agora, self._alarme["inicio"] + self.a.volta_alarme_s))
+            self._prazo = ("nome_do_timer", max(agora, self._quando_o_nome(self._alarme["inicio"])))
             return []
         if nome == "timer_venceu":
             if self._alarme is not None or e == ANUNCIO:  # durante um anúncio o timer espera (e toca antes do próximo)
@@ -534,13 +530,6 @@ class Maestro:
                 return self._encerrar_alarme(agora, "palavra") + self._abrir(agora, "palavra", self._sussurro(valor),
                                                                            self._palavra(valor))
             return []
-        if self._alarme and self._da_conversa("timer") and (nome == "botao" or (nome == "fala_comecou" and not self._recado)
-                                                            or (nome == "palavra" and self._recado and e in ABERTO
-                                                                and self.mudo is False)):
-            # alguém respondeu ao timer: o alarme não volta. O `encerrar` NÃO entra aqui: sozinho ele é o modelo
-            # decidindo (14/10: encerrou em 1,2 s sem falar); quem manda parar já falou antes (fala_comecou).
-            # 19/11: fala da sala com o microfone fechado (recado) não atende; a palavra que corta o recado atende.
-            self._alarme["atendido"] = True
         if nome == "botao" and valor == "vermelho":
             # Spec 2026-11-04: o vermelho corta tudo e fecha, em qualquer estado de conversa aberta. Parado, só o
             # verde abre. (Alarme e cadastro já foram tratados acima: qualquer cor os encerra como antes.)
@@ -598,7 +587,7 @@ class Maestro:
             if e == PARADA:
                 return []
             # conversa do timer que falhou: o alarme volta sozinho, sem o som de erro por cima
-            return self._fechar(agora, "falha", som=None if self._da_conversa("timer") else "erro")
+            return self._fechar(agora, "falha", som=None if self._alarme is not None else "erro")
         if nome == "fala_comecou":
             if self._recado and e in ABERTO:  # 19/11 (revisão I2): fala da sala no recado não chega a ela nem conta prazo
                 return []
@@ -759,11 +748,11 @@ class Maestro:
         if motivo == "music_wait":  # a música não começou a tempo: o alarme segue como um timer normal
             if self._alarme:
                 self._alarme["music"] = False
-            motivo = "alarme_fala"
-        if motivo == "alarme_fala":
-            if self.mudo is not False:  # com mudo ninguém responderia: o alarme segue
+            motivo = "nome_do_timer"
+        if motivo == "nome_do_timer":  # 24/11: um aviso falado por timer, sem abrir conversa
+            if self._alarme is None or self.estado != ALARME:
                 return []
-            return self._abrir_timer(agora)
+            return [("aviso_timer", self._alarme["timer"])]
         # Com o cérebro pendente a conversa nunca fecha por prazo: volta a aguardar (06/10, resposta perdida).
         if self.pendentes > 0 and e in ABERTO and motivo in ("espera_inicial", "continuacao", "resposta",
                                                              "resposta_curta"):

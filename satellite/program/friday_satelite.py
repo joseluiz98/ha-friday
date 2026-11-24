@@ -211,7 +211,15 @@ class Satelite:
                        keep_listening_while_speaking=self.cfg.get("keep_listening_while_speaking", True) is not False,
                        no_follow_up_while_music=self.cfg.get("no_follow_up_while_music", True) is not False,
                        no_follow_up_after_home_commands=self.cfg.get("no_follow_up_after_home_commands", True) is not False,
-                       only_wake_word_interrupts=self.cfg.get("only_wake_word_interrupts", True) is not False)
+                       only_wake_word_interrupts=self.cfg.get("only_wake_word_interrupts", True) is not False,
+                       rampa_s=float(self.cfg.get("alarm_ramp_s", 0) or 0), volta_alarme_s=self._volta_do_alarme())
+
+    def _volta_do_alarme(self):
+        """Duração de uma volta do som do alarme (o maestro conta as voltas até o aviso falado do timer)."""
+        try:
+            return self._duracao_wav(self._som("alarme"))
+        except (OSError, EOFError, wave.Error, KeyError, ZeroDivisionError):
+            return Ajustes.volta_alarme_s
 
     async def _musica_agora(self) -> bool:
         """Há música tocando no Sendspin? Qualquer erro, saída estranha ou demora = não (nunca derruba o programa)."""

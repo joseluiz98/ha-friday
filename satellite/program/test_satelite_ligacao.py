@@ -1212,6 +1212,14 @@ class TestPausaGuardada(Base):
         self.s.cfg["only_wake_word_interrupts"] = False
         self.assertFalse(self.s._ajustes().only_wake_word_interrupts)
 
+    async def test_ajustes_carry_the_alarm_ramp_and_the_loop_length(self):  # 24/11: o aviso do timer segue a rampa
+        self.s.cfg["alarm_ramp_s"] = 3.0
+        a = self.s._ajustes()
+        self.assertEqual(a.rampa_s, 3.0)
+        self.assertEqual(a.volta_alarme_s, self.s._duracao_wav(self.s._som("alarme")))
+        self.s.cfg["alarm_ramp_s"] = 0
+        self.assertEqual(self.s._ajustes().rampa_s, 0.0)
+
 
 class TestPararFala(Base):
     async def test_parar_fala_cuts_playback_and_the_rest_of_her_speech(self):
