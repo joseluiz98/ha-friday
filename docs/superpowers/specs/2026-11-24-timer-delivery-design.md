@@ -29,10 +29,13 @@ On 24/11 the "almoço" timer rang on MK2 and the owner, on the sofa with the TV 
 4. **Generic clip as the safety net.** Every satellite always carries a generic WAV ("seu timer terminou", in the
    Friday voice): shipped in the image and added to existing satellites by migration. It plays instead of the named
    notice for a timer with no name, with no per-timer file, or with a file that is missing or unreadable at expiry.
-5. **Failures are logged and escalated.** Each TTS failure at creation is logged (timer id, error class, ms). When
-   N failures happen inside a window, the server device exposes a problem sensor in HA; it clears when the window
-   passes without a new failure. Defaults **(builder's call)**: 3 failures in 30 min. The push to the owner is a
-   house-side automation (outside the repo, owner's OK before it is created).
+5. **Failures are logged and escalated.** Each TTS failure at creation is logged (timer id, error class, ms). The bot
+   counts **consecutive** TTS failures with no success in between, regardless of the time they took (timers are rare:
+   a time window would almost never fire). At **3 in a row** the server device exposes a problem sensor in HA; the
+   first successful TTS clears it, and it expires by itself after **7 days** without any new TTS attempt **(builder's
+   call)**. Announcements use the same TTS call, so their failures count in the same streak (same cause, earlier
+   signal) **(builder's call)**. The push to the owner is a house-side automation (outside the repo, owner's OK before
+   it is created).
 6. **Stopping, Echo style.** Only after the wake word (or the button): a normal conversation opens on the satellite that
    heard it, already knowing which timers are ringing (name and room, on any satellite). "Friday, parar" alone stops
    **all ringing timers on all satellites** (like the Echo's "stop"); "parar o timer do escritório" stops the timers of
@@ -85,4 +88,4 @@ On 24/11 the "almoço" timer rang on MK2 and the owner, on the sofa with the TV 
 ## To confirm on the alpha
 A named timer on MK2 with the TV on: purple pulse, ramp, beeps, the name after 3 loops; "Friday, parar" from MK1 stops
 the MK2 timer too and she names it; an unnamed timer and a forced TTS failure both play the generic clip; three forced
-failures raise the HA problem sensor and it clears after the window.
+failures in a row raise the HA problem sensor, even hours apart, and the next good TTS clears it.
