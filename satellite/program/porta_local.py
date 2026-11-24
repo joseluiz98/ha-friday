@@ -8,6 +8,8 @@ import configuracao as c
 _ID_MENSAGEM = re.compile(r"^[a-z0-9]{8,32}$")
 ANUNCIO_MAX_BYTES = 16 * 1024 * 1024  # spec 2026-11-20: 500 caracteres em ritmo lento passam de 8 MB (F5)
 ANUNCIOS_PADRAO = "/home/jose/anuncios"
+_ID_TIMER = re.compile(r"^t[0-9a-f]{6}$")
+TIMER_VOZ_MAX_BYTES = 2 * 1024 * 1024  # spec 2026-11-24: "o timer <nome> terminou" cabe em uma fração disto
 
 
 def _idade(valor) -> int:
@@ -22,7 +24,8 @@ def pasta_anuncios():
 
 
 def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavras_fn=None, comando_fn=None,
-              musica_fn=None, anuncio_fn=None, anuncio_dir=None, anuncio_tem_fn=None):
+              musica_fn=None, anuncio_fn=None, anuncio_dir=None, anuncio_tem_fn=None, timer_voz_dir=None,
+              timer_ativo_fn=None):
     async def autorizado(req):
         senha = c.carregar(cfg_caminho)["senha_porta_local"]
         dada = req.headers.get("Authorization", "").removeprefix("Bearer ")
@@ -103,6 +106,28 @@ def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavr
             raise
         return web.json_response({"resposta": resposta})
 
+    async def timer_voz(req):
+        """Spec 2026-11-24: o bot manda o aviso falado de um timer com nome (WAV pronto) logo depois de criá-lo; fica em
+        <pasta>/<id>.wav (atômico) até o timer acabar ou ser cancelado. Timer que não está ativo não tem dono: 404."""
+        if not await autorizado(req):
+            return web.Response(status=401)
+        tid = req.headers.get("X-Timer-Id", "")
+        if not _ID_TIMER.match(tid):
+            return web.json_response({"erro": "id inválido"}, status=400)
+        corpo = await req.read()
+        if len(corpo) > TIMER_VOZ_MAX_BYTES:
+            return web.json_response({"erro": "grande demais"}, status=413)
+        if not corpo.startswith(b"RIFF"):
+            return web.json_response({"erro": "não é WAV"}, status=400)
+        if not timer_ativo_fn(tid):
+            return web.json_response({"erro": "timer desconhecido"}, status=404)
+        os.makedirs(timer_voz_dir, exist_ok=True)
+        destino = os.path.join(timer_voz_dir, tid + ".wav")
+        with open(destino + ".tmp", "wb") as f:
+            f.write(corpo)
+        os.replace(destino + ".tmp", destino)
+        return web.json_response({"ok": True})
+
     async def comando(req):
         """Spec 2026-11-05: comandos de provisionamento do agente (play_phrases, ring, wake_word_test,
         open_presentation); a mesma tabela que a conversa usa (comandos.executar)."""
@@ -167,6 +192,8 @@ def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavr
         rotas.append(web.post("/doorbell", campainha))
     if anuncio_fn:
         rotas.append(web.post("/announce", anuncio))
+    if timer_voz_dir and timer_ativo_fn:
+        rotas.append(web.post("/timer_voice", timer_voz))
     if comando_fn:
         rotas.append(web.post("/command", comando))
     if palavras_fn:
@@ -176,9 +203,10 @@ def criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn=None, palavr
 
 
 async def iniciar(cfg_caminho, estado_fn, ao_mudar_config, porta, campainha_fn=None, palavras_fn=None, comando_fn=None,
-                  musica_fn=None, anuncio_fn=None, anuncio_dir=None, anuncio_tem_fn=None):
+                  musica_fn=None, anuncio_fn=None, anuncio_dir=None, anuncio_tem_fn=None, timer_voz_dir=None,
+                  timer_ativo_fn=None):
     runner = web.AppRunner(criar_app(cfg_caminho, estado_fn, ao_mudar_config, campainha_fn, palavras_fn, comando_fn,
-                                     musica_fn, anuncio_fn, anuncio_dir, anuncio_tem_fn))
+                                     musica_fn, anuncio_fn, anuncio_dir, anuncio_tem_fn, timer_voz_dir, timer_ativo_fn))
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", porta).start()
     return runner

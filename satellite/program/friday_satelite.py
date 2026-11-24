@@ -47,6 +47,7 @@ CFG = "/etc/friday-satelite/config.json"
 ID = "/etc/friday-satelite/id"
 SONS = "/home/jose/satelite/sons"
 TIMERS = "/home/jose/satelite/estado/timers.json"  # spec 2026-10-12 §2: sobrevive a reinício
+TIMER_VOZ = os.environ.get("FRIDAY_TIMER_VOICE_DIR", "/home/jose/timer_voz")  # spec 2026-11-24: <id>.wav do aviso de cada timer
 ANUNCIOS = os.environ.get("FRIDAY_ANNOUNCE_DIR", "/home/jose/anuncios")  # spec 2026-11-20: <id>.wav, apagado depois
 MODELO_VERIFICADOR = "/home/jose/modelos/friday_verificador.pkl"  # spec 2026-10-15 D13
 # D16: sem os WAVs das falas da aprendizagem, a Pi usa os sons de sempre
@@ -492,6 +493,7 @@ class Satelite:
             print(json.dumps({"abertura": arg, "satelite": self.sid}), flush=True)
         elif tipo == "registrar_timer":
             print(json.dumps({"timer": arg, "satelite": self.sid}), flush=True)
+            self._limpar_timer_voz()  # o alarme acabou: o aviso falado desse timer não serve mais
         elif tipo == "registrar_espera":  # D4: quanto ela levou para começar a falar
             print(json.dumps({"espera": arg, "satelite": self.sid}), flush=True)
         elif tipo == "cadastro":
@@ -537,6 +539,18 @@ class Satelite:
             self._tocar_frases([f"{SONS}/onboarding/{arg}.wav"])
         elif tipo == "onboarding":
             self.emissor.emitir("onboarding", arg)
+
+    @staticmethod
+    def timer_voz_path(timer_id):
+        return os.path.join(TIMER_VOZ, f"{timer_id}.wav")
+
+    def timer_ativo(self, timer_id):
+        return any(t["id"] == timer_id for t in self.timers.consultar(time.time()))
+
+    def _limpar_timer_voz(self):
+        """Apaga o aviso falado de todo timer que não está ativo nem tocando (partida, cancelamento, fim do alarme)."""
+        manter = {t["id"] for t in self.timers.consultar(time.time())} | {t["id"] for t in self.maestro._timers_tocando()}
+        tm.limpar_voz(TIMER_VOZ, manter)
 
     @staticmethod
     def _arquivo_anuncio(anuncio_id):
@@ -628,6 +642,8 @@ class Satelite:
         if "bip_volume" in efeitos:
             self.alto.tocar_wav(self._som("volume"))
         resposta = self._efeitos_provisionamento(efeitos, resposta)
+        if cmd.get("acao") == "timer_cancelar":
+            self._limpar_timer_voz()
         print(json.dumps({"comando_porta": cmd.get("acao"), "ok": resposta.get("ok")}), flush=True)
         return resposta
 
@@ -708,6 +724,8 @@ class Satelite:
         resposta, efeitos = comandos.executar(cmd, self.volume, self.timers, time.time(), self.vozes,
                                               sons_dir=SONS, estado_maestro=self.maestro.estado)
         resposta = self._efeitos_provisionamento(efeitos, resposta)
+        if cmd.get("acao") == "timer_cancelar":
+            self._limpar_timer_voz()
         if self.volume.normal != volume_antes:
             self.emissor.emitir("config", {"mudancas": {"volume": self.volume.normal}, "origem": "voz"})
         if "bip_volume" in efeitos:
@@ -1384,9 +1402,11 @@ async def principal():
     await porta_local.iniciar(CFG, s.estado_publico, s.ao_mudar_config, s.cfg["porta_local"], s.campainha,
                              palavras_fn=s.palavras_carregadas, comando_fn=s.comando_porta, musica_fn=s._musica_agora,
                              anuncio_fn=s.anuncio, anuncio_dir=ANUNCIOS,
-                             anuncio_tem_fn=s.maestro.tem_anuncio)
+                             anuncio_tem_fn=s.maestro.tem_anuncio, timer_voz_dir=TIMER_VOZ,
+                             timer_ativo_fn=s.timer_ativo)
     print(json.dumps({"iniciado": s.sid}), flush=True)
     s.carregar_timers()
+    s._limpar_timer_voz()
     while not morreu.is_set():
         s.tique()
         try:

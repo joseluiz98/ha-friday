@@ -103,7 +103,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.p = mock.patch.multiple(fs, CFG=os.path.join(self.d, "config.json"), ID=os.path.join(self.d, "id"),
                                      TIMERS=os.path.join(self.d, "estado", "timers.json"), SONS=self.d,
-                                     ANUNCIOS=os.path.join(self.d, "anuncios"))
+                                     ANUNCIOS=os.path.join(self.d, "anuncios"), TIMER_VOZ=os.path.join(self.d, "timer_voz"))
         self.p.start()
         self.p_placa = mock.patch.object(fs.placa, "ler_placa", return_value="jabra")  # never the host's audio_board
         self.p_placa.start()
@@ -720,6 +720,39 @@ class TestProvisionamento(Base):
         self.assertEqual(self.s.maestro.estado, "parada")
         vazio = self.s.comando_porta({"acao": "timers_parar"})
         self.assertEqual((vazio["parados"], vazio["tocando"]), ([], False))
+
+    def _voz(self, tid):
+        os.makedirs(fs.TIMER_VOZ, exist_ok=True)
+        with open(self.s.timer_voz_path(tid), "wb") as f:
+            f.write(b"RIFF")
+
+    async def test_cancel_deletes_the_timer_notice_file(self):
+        r = self.s.comando_porta({"acao": "timer_criar", "duracao_s": 600, "nome": "arroz"})
+        tid = r["timer"]["id"]
+        self._voz(tid)
+        self.assertTrue(self.s.timer_ativo(tid))
+        self.s.comando_porta({"acao": "timer_cancelar", "timer_id": tid})
+        self.assertFalse(os.path.exists(self.s.timer_voz_path(tid)))
+        self.assertFalse(self.s.timer_ativo(tid))
+
+    async def test_boot_cleanup_removes_orphan_files_and_keeps_active_ones(self):
+        ativo = self.s.comando_porta({"acao": "timer_criar", "duracao_s": 600, "nome": "arroz"})["timer"]["id"]
+        self._voz(ativo); self._voz("t999999")
+        self.s._limpar_timer_voz()
+        self.assertTrue(os.path.exists(self.s.timer_voz_path(ativo)))
+        self.assertFalse(os.path.exists(self.s.timer_voz_path("t999999")))
+
+    async def test_notice_file_survives_expiry_and_goes_when_the_alarm_ends(self):
+        self.s.maestro.mudo = False
+        tid = self.s.comando_porta({"acao": "timer_criar", "duracao_s": 1, "nome": "arroz"})["timer"]["id"]
+        self._voz(tid)
+        vencido, = self.s.timers.vencidos(time.time() + 10)  # o laço do programa tira do arquivo o que venceu
+        self.s.maestro.evento("timer_venceu", 0.0, vencido)
+        self.s._limpar_timer_voz()  # vencido e tocando: o arquivo fica para o aviso
+        self.assertTrue(os.path.exists(self.s.timer_voz_path(tid)))
+        for tipo, arg in self.s.maestro.evento("botao", 1.0):
+            self.s._agir(tipo, arg)
+        self.assertFalse(os.path.exists(self.s.timer_voz_path(tid)))
 
     async def test_apresentacao_recusada_com_mudo(self):
         self.s.maestro.mudo = True
