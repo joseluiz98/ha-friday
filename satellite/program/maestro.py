@@ -3,6 +3,7 @@
 Lógica pura: recebe eventos com o horário (segundos, relógio monotônico) e devolve ações. Não toca em
 hardware nem em rede, então é testado sem o Jabra (test_maestro.py).
 """
+import unicodedata
 from dataclasses import dataclass
 
 PARADA, CONECTANDO, OUVINDO, CORTADA, AGUARDANDO = "parada", "conectando", "ouvindo", "cortada", "aguardando"
@@ -54,6 +55,12 @@ class Ajustes:
     # 21/11: while she answers no audio goes to Gemini; only the wake word interrupts her (the answer becomes a "recado").
     # The dataclass default stays False so that tests of other behavior keep today's flow; the program passes the config.
     only_wake_word_interrupts: bool = False
+
+
+def _chave(nome):
+    """Nome de timer sem acento, caixa nem espaço sobrando (o mesmo critério de `timers._chave`)."""
+    t = unicodedata.normalize("NFKD", nome or "").encode("ascii", "ignore").decode()
+    return " ".join(t.lower().split())
 
 
 class Maestro:
@@ -350,10 +357,10 @@ class Maestro:
     def parar_alarmes(self, agora, nome=None):
         """Comando `timers_parar` (a ferramenta do bot): para o alarme em curso e os da fila, todos ou só os de `nome`.
         Devolve ([{"id","nome"}, ...] parados, ações). Com uma conversa aberta ela segue; sem nada tocando, ([], [])."""
-        alvo = (nome.strip().casefold() or None) if isinstance(nome, str) else None
+        alvo = (_chave(nome) or None) if isinstance(nome, str) else None
 
         def casa(t):
-            return alvo is None or (t.get("nome") or "").strip().casefold() == alvo
+            return alvo is None or _chave(t.get("nome")) == alvo
 
         parados, acoes = [], []
         if self._alarme and casa(self._alarme["timer"]):
@@ -575,10 +582,15 @@ class Maestro:
                 # 24/11: a palavra pausa o alarme e abre uma conversa que já sabe o que está tocando; quem para o
                 # timer é o comando `parar_alarmes` (a ferramenta do bot). Sem parar, o alarme volta ao fechar.
                 extras = {"timers_tocando": self._timers_tocando()}
+                self._alarme["music"] = False  # o pedido de música cai: ao voltar, segue como um timer normal
                 self.estado, self._prazo = PARADA, None
                 return [("alarme", "pausar"), ("volume_alerta", False)] + self._abrir(
                     agora, "palavra", self._sussurro(valor), self._palavra(valor), extras=extras)
             return []
+        if nome == "botao" and self._alarme is not None and e in (CONECTANDO, OUVINDO, CORTADA, AGUARDANDO):
+            # 24/11 (revisão I1): o botão também para o timer cuja palavra abriu esta conversa (alarme pausado)
+            acoes = self._encerrar_alarme(agora, "botao")
+            return acoes + (self._cancelar(agora) if valor == "vermelho" else self._cortar(agora, "botao"))
         if nome == "botao" and valor == "vermelho":
             # Spec 2026-11-04: o vermelho corta tudo e fecha, em qualquer estado de conversa aberta. Parado, só o
             # verde abre. (Alarme e cadastro já foram tratados acima: qualquer cor os encerra como antes.)

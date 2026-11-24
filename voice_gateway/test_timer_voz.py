@@ -139,5 +139,11 @@ class TestFiacao(unittest.TestCase):
             self.assertIn(trecho, fonte)
 
 
+    def test_ringing_elsewhere_reaches_a_satellite_that_is_silent(self):  # review C3
+        fonte = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")).read()
+        self.assertNotIn("if eh_satelite and sm.timers_tocando(corpo)", fonte)  # the lookup is not gated by local timers
+        self.assertIn("_alarmes_de_fora() if eh_satelite", fonte)  # it runs in the startup gather, every satellite session
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -134,6 +134,35 @@ class TestPalavraNoAlarme(Base):
         self.assertEqual(self.m.evento("tique", 20.0 + 7.9), [])  # o aviso (ainda não tocou) conta de novo
         self.assertEqual(self.m.evento("tique", 20.0 + 8.0), [("aviso_timer", T)])
 
+    def test_wake_word_over_a_music_alarm_drops_the_music_request(self):  # review C2/I2
+        self.alarme(0.0, TM)
+        self.m.evento("palavra", 3.0, {"wake_word": "friday"}); self.m.evento("conectou", 3.5)
+        self.assertEqual(self.m.evento("music_started", 4.0, "t9"), [])  # the paused alarm must not turn into music
+        self.assertEqual(self.m.evento("music_failed", 4.5, "t9"), [])   # nor re-arm a deadline over the conversation
+        self.m.evento("encerrar", 20.0)
+        self.assertEqual(self.m.estado, "alarme")
+        self.assertEqual(self.m.evento("tique", 20.0 + 8.0), [("aviso_timer", TM)])  # resumes as a plain timer
+
+    def test_button_in_the_paused_conversation_stops_the_timer(self):  # review I1
+        self.alarme()
+        self.m.evento("palavra", 3.0, {"wake_word": "friday"}); self.m.evento("conectou", 3.5)
+        acoes = self.m.evento("botao", 5.0, "verde")
+        self.assertEqual(achar(acoes, "registrar_timer")["como_parou"], "botao")
+        self.assertNotEqual(self.m.estado, "alarme")
+        self.assertNotIn(("alarme", "tocar"), self.m.evento("tique", 60.0))
+
+    def test_red_button_in_the_paused_conversation_stops_the_timer(self):  # review I1
+        self.alarme()
+        self.m.evento("palavra", 3.0, {"wake_word": "friday"}); self.m.evento("conectou", 3.5)
+        acoes = self.m.evento("botao", 5.0, "vermelho")
+        self.assertEqual(achar(acoes, "registrar_timer")["como_parou"], "botao")
+        self.assertNotEqual(self.m.estado, "alarme")
+
+    def test_stop_by_name_ignores_accents(self):  # review I2b
+        self.alarme(0.0, {"id": "t5", "nome": "almoço", "duracao_s": 60, "termino": 0.0})
+        parados, _ = self.m.parar_alarmes(2.0, "ALMOCO")
+        self.assertEqual(parados, [{"id": "t5", "nome": "almoço"}])
+
     def test_notice_already_played_is_not_repeated_after_resume(self):
         self.alarme()
         self.assertEqual(self.m.evento("tique", 8.0), [("aviso_timer", T)])

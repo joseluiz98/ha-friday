@@ -722,6 +722,16 @@ class TestProvisionamento(Base):
         vazio = self.s.comando_porta({"acao": "timers_parar"})
         self.assertEqual((vazio["parados"], vazio["tocando"]), ([], False))
 
+    async def test_timers_parar_under_the_button_mute_leaves_the_ring_alone(self):  # review I3
+        self.s.maestro.mudo = False
+        self.s.maestro.evento("timer_venceu", 0.0, {"id": "t1", "nome": "arroz", "duracao_s": 60, "termino": 0.0})
+        self.s.maestro.mudo = True  # the button muted the mic: the ring belongs to the Jabra
+        feitos = []
+        self.s._agir = lambda tipo, arg=None: feitos.append(tipo)
+        self.s.comando_porta({"acao": "timers_parar"})
+        self.assertIn("alarme", feitos)
+        self.assertNotIn("luz", feitos)
+
     def _voz(self, tid):
         os.makedirs(fs.TIMER_VOZ, exist_ok=True)
         with open(self.s.timer_voz_path(tid), "wb") as f:
@@ -776,6 +786,15 @@ class TestProvisionamento(Base):
 
     async def test_notice_falls_back_to_generic_when_file_is_not_a_wav(self):
         self._voz("t1ab852"); self._wav(fs.TIMER_GENERICO)  # _voz grava só "RIFF": cabeçalho incompleto
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), ["timer_generico.wav"])
+
+    async def test_notice_falls_back_to_generic_when_file_is_in_another_format(self):  # review minor: would play as noise
+        import wave
+        caminho = self.s.timer_voz_path("t1ab852")
+        os.makedirs(os.path.dirname(caminho), exist_ok=True)
+        with wave.open(caminho, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000); w.writeframes(b"\x00" * 4800)
+        self._wav(fs.TIMER_GENERICO)
         self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), ["timer_generico.wav"])
 
     async def test_notice_silent_when_both_missing(self):

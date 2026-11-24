@@ -1295,21 +1295,24 @@ async def bot(runner_args: RunnerArguments):
         return await ms.player_state(player, HA_URL, os.environ["FRIDAY_HA_TOKEN"])
 
     player_proprio = await _player_do_satelite()
-    (ferramentas, mcp, nomes_mcp), (inventario, erro_inventario), fato_musica = await asyncio.gather(
+
+    async def _alarmes_de_fora():  # nos outros satélites; nunca atrasa nem derruba a conversa (1 s por satélite)
+        try:
+            return await pt.alarmes_nas_casas(DepsAnuncio(REGISTRO_SATELITES.current()), excluir=satelite_id)
+        except Exception:
+            return []
+
+    (ferramentas, mcp, nomes_mcp), (inventario, erro_inventario), fato_musica, outros = await asyncio.gather(
         build_tools(eh_satelite, mv.brain_description(caps), skill_tools=bool(habilidades), search_tool=cortou,
                     apresentacao=bool(apresentacao), own_player=player_proprio),
         ic.buscar(HA_MCP_URL, os.environ["FRIDAY_HA_TOKEN"]),
-        ms.music_fact_for(satelite_id, _cadastro, _estado_do_player, sm.music_fact) if eh_satelite else _vazio()
+        ms.music_fact_for(satelite_id, _cadastro, _estado_do_player, sm.music_fact) if eh_satelite else _vazio(),
+        _alarmes_de_fora() if eh_satelite else _vazio(),
     )
     # spec 2026-11-24: a palavra dita com timers tocando leva a lista deles; a conversa fica sabendo quais tocam (aqui e
     # nos outros satélites). Fato no contexto, não uma fala de abertura: ela não começa a falar sozinha.
-    alarmes_fato = ""
-    if eh_satelite and sm.timers_tocando(corpo):
-        try:
-            outros = await pt.alarmes_nas_casas(DepsAnuncio(REGISTRO_SATELITES.current()), excluir=satelite_id)
-        except Exception:
-            outros = []
-        alarmes_fato = sm.fato_alarmes(sm.timers_tocando(corpo), outros)
+    # (também quando só OUTRO satélite toca: a palavra pode ter sido ouvida onde não toca nada)
+    alarmes_fato = sm.fato_alarmes(sm.timers_tocando(corpo), outros or []) if eh_satelite else ""
     inventario = ic.sem_frase_de_grupo(inventario)  # 23/10: a frase do HA que manda pedir o cômodo competia com as diretrizes
     if eh_satelite:  # só o satélite tem a ferramenta timer; a página segue com o texto do HA como veio
         inventario = ic.sem_frase_de_timers(inventario)

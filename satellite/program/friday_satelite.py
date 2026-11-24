@@ -558,7 +558,8 @@ class Satelite:
     def _wav_legivel(caminho):
         try:
             with wave.open(caminho) as w:
-                return w.getnframes() > 0
+                # o alto-falante recebe os quadros crus em 48 kHz, estéreo, 16 bits: outro formato tocaria como ruído
+                return w.getnframes() > 0 and (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (48000, 2, 2)
         except (OSError, EOFError, wave.Error):
             return False
 
@@ -645,7 +646,7 @@ class Satelite:
                 self._contagem(*arg)
             elif nome == "timers_parar":
                 parados, acoes = self.maestro.parar_alarmes(time.monotonic(), arg)
-                for tipo, a in acoes:
+                for tipo, a in self.maestro._filtrar(acoes):
                     self._agir(tipo, a)
                 resposta = dict(resposta, parados=parados, tocando=bool(self.maestro._timers_tocando()))
             elif nome == "teste_palavra":

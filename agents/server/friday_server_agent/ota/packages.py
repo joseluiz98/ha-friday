@@ -139,6 +139,13 @@ def pack_satellite(tar: tarfile.TarFile, raw: bytes, tag: str, sha: str, vault, 
                 tar.add(p, arcname=f"program/{name}", recursive=False, filter=pv._public)
             elif os.path.isdir(p) and name == "vendor":
                 pv._add_tree(tar, p, "program/vendor")
+        taken = {arc for _, arc in vault_files}
+        sons = os.path.join(prog, "sons")
+        if os.path.isdir(sons):  # sounds kept in git (the generic timer clip) ship too; a vault sound of the same name wins
+            for name in sorted(os.listdir(sons)):
+                arc = f"program/sons/{name}"
+                if name.endswith(".wav") and arc not in taken and os.path.isfile(os.path.join(sons, name)):
+                    tar.add(os.path.join(sons, name), arcname=arc, recursive=False, filter=pv._public)
         for local, arc in vault_files:
             tar.add(local, arcname=arc, recursive=False, filter=pv._public)
         for src_dir, arc in (("agents/satellite/friday_satellite_agent", "agent/friday_satellite_agent"),
