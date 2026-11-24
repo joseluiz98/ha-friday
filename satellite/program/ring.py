@@ -64,6 +64,10 @@ COR_GIRO_BASE = escalar(0x0000FF, COR_RESPOSTA_FATOR)
 COR_SISTEMA_FATOR = 0.4
 COR_SISTEMA = escalar(0xFF8000, COR_SISTEMA_FATOR)
 SPEED_UPDATING = 2
+# 24/11 (dono): o alarme do timer é roxo, a 40% e pulsando rápido; o laranja fica só para o sistema. O não perturbe
+# segue como estava (roxo fixo a 25% e um respiro de brilho cheio de tempos em tempos)
+COR_ALARME_FATOR = 0.4
+COR_ALARME = escalar(0x8000FF, COR_ALARME_FATOR)
 COR_GIRO = (escalar(0x00C8FF, COR_RESPOSTA_FATOR), escalar(0x00C8FF, 0.4), escalar(0x00C8FF, 0.15))  # cabeça, meio, cauda
 
 
@@ -276,7 +280,7 @@ class JabraRing(_Composto):
 
 # estado -> (efeito, cor, velocidade). velocidade None = sem respiração (cor fixa)
 _XVF = {"speak": (3, 0x0000FF, None), "respond": (1, escalar(0x00C8FF, COR_RESPOSTA_FATOR), SPEED_RESPOND), "think": (5, COR_GIRO_BASE, None), "dnd": (1, 0x8000FF, SPEED_SLOW),
-        "alarm": (1, 0xFF8000, SPEED_FAST), "setup": (1, COR_SISTEMA, SPEED_SLOW), "updating": (1, COR_SISTEMA, SPEED_UPDATING),
+        "alarm": (1, COR_ALARME, SPEED_FAST), "setup": (1, COR_SISTEMA, SPEED_SLOW), "updating": (1, COR_SISTEMA, SPEED_UPDATING),
         "error": (1, 0xFF0000, SPEED_SLOW), "muted": (3, 0xFF0000, None),
         "net_error": (1, 0xFF0000, SPEED_SLOW), "update_pending": (1, COR_SISTEMA, SPEED_SLOW)}
 

@@ -43,10 +43,12 @@ On 24/11 the "almoço" timer rang on MK2 and the owner, on the sofa with the TV 
    phrase, in that same turn (this is the "feedback por voz ao encerrar o timer" idea). The stop reaches other
    satellites through a bot tool that fans the command out to every registered satellite (same path as the
    announcements).
-7. **Ring.** The alarm state is **purple**, pulsing **faster** than do-not-disturb; both share brightness **40 %**
-   (do-not-disturb dims from 100 % to 40 %: designer's reading of "ambos podem compartilhar o brilho", confirm on the
-   alpha). Orange stays reserved for system states (setup, update). The ring shows the alarm color for the whole
-   delivery since there is no conversation to cover it. Jabra unchanged.
+7. **Ring.** The alarm state is **purple** (`0x8000FF`) at **40 %**, pulsing fast. Do-not-disturb is unchanged (steady
+   purple at 25 % with a full-brightness breath for 2 s every 30 s, the owner's 17/11 choice): the alarm pulses, the
+   do-not-disturb mostly does not, so the two read apart. Orange stays reserved for system states (setup, update). The
+   ring shows the alarm color for the whole delivery since there is no conversation to cover it. Jabra unchanged.
+   (The first draft of this goal said do-not-disturb would dim from 100 % to 40 %; that described the code wrongly and
+   was dropped on 24/11 while building.)
 
 ## Non-goals
 - Any change to the ramp or to who gets promoted/when (nothing else in OTA).
