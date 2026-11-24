@@ -15,6 +15,8 @@ import tempfile
 import time
 import wave
 
+import tts_saude
+
 MAX_TEXTO = 500
 TTS_TIMEOUT_S = 15.0
 RETRY_CADA_S = 15.0
@@ -259,7 +261,13 @@ async def anunciar(corpo, deps) -> dict:
     if wav is None:
         t_tts = time.monotonic()
         try:
-            pcm, uso = await asyncio.wait_for(deps.tts(ajustes, texto), getattr(deps, "tts_timeout_s", TTS_TIMEOUT_S))
+            try:
+                pcm, uso = await asyncio.wait_for(deps.tts(ajustes, texto),
+                                                  getattr(deps, "tts_timeout_s", TTS_TIMEOUT_S))
+            except Exception as e:  # spec 2026-11-24: falhas de TTS seguidas viram um problema no HA
+                tts_saude.registrar(False, "anuncio", type(e).__name__)
+                raise
+            tts_saude.registrar(True, "anuncio")
             wav = wav_48k_estereo(pcm)
             deps.cache.gravar(k, wav)
         except Exception as e:

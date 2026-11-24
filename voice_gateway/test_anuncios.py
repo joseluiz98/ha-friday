@@ -81,6 +81,11 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.deps = Deps(os.path.join(self._tmp.name, "cache"))
+        self.saude = os.path.join(self._tmp.name, "tts-health.json")  # o contador de falhas de TTS (spec 2026-11-24)
+        antes = os.environ.get("FRIDAY_TTS_HEALTH")
+        os.environ["FRIDAY_TTS_HEALTH"] = self.saude
+        self.addCleanup(lambda: os.environ.__setitem__("FRIDAY_TTS_HEALTH", antes) if antes is not None
+                        else os.environ.pop("FRIDAY_TTS_HEALTH", None))
 
     async def anunciar(self, corpo=None, **kw):
         r = await an.anunciar(corpo or {"text": "O jantar está pronto"}, self.deps)
@@ -295,6 +300,30 @@ class TestAnunciar(Base):
         self.assertEqual(r["satelites"], {"sat-0a1b2c": "erro", "sat-0d1e2f": "erro"})
         self.assertEqual(self.deps.enviados, [])
         self.assertEqual(self.deps.registros[0]["tts_erro"], "RuntimeError")
+
+    async def test_tts_failures_count_in_the_streak_and_a_success_clears_it(self):
+        import tts_saude
+        self.deps.tts_erro = RuntimeError("boom")
+        for i in range(3):
+            await self.anunciar({"text": f"aviso {i}"})
+        self.assertTrue(tts_saude.estado()["falhando"])
+        self.assertEqual(tts_saude.estado()["origem"], "anuncio")
+        self.deps.tts_erro = None
+        await self.anunciar({"text": "agora vai"})
+        self.assertFalse(tts_saude.estado()["falhando"])
+
+    async def test_tts_timeout_counts_as_a_failure(self):
+        import tts_saude
+        self.deps.tts_atraso, self.deps.tts_timeout_s = 5, 0.05
+        await self.anunciar()
+        self.assertEqual(tts_saude.estado()["seguidas"], 1)
+
+    async def test_cache_hit_does_not_touch_the_streak(self):
+        import tts_saude
+        await self.anunciar()  # miss: TTS ok
+        tts_saude.registrar(False, "timer", "E", agora=time.time())
+        await self.anunciar()  # hit: não chama o TTS, não limpa nem soma
+        self.assertEqual(tts_saude.estado()["seguidas"], 1)
 
     async def test_tts_estoura_o_prazo(self):
         self.deps.tts_atraso, self.deps.tts_timeout_s = 5, 0.05
