@@ -59,6 +59,7 @@ import gemini_watch as gw
 import speech_cut
 import canal_casa as cc
 import anuncios as an
+import timer_voz as tvz
 from arbitration import Arbiter, load_offsets
 import whisper_mode as wm
 import memory_views as mv
@@ -504,6 +505,9 @@ def _cliente_tts_anuncio():
     return _cliente_anuncio
 
 
+_tarefas_timer_voz: set = set()  # referência forte: uma tarefa solta pode ser coletada no meio
+
+
 class DepsAnuncio:
     """IO real de anuncios.anunciar (POST /announce)."""
     cache = ANNOUNCE_CACHE
@@ -534,6 +538,18 @@ class DepsAnuncio:
                     return (await resp.json(content_type=None)).get("resposta")
                 except Exception:
                     return "erro"
+
+    async def enviar_voz_timer(self, ip, senha, timer_id, wav):
+        """POST /timer_voice (spec 2026-11-24): "ok", "sem_timer" (404: já acabou ou foi cancelado) ou "erro"; só falha
+        de conexão/prazo levanta."""
+        conectar, total = an.prazo_envio(len(wav))
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=conectar, total=total)) as session:
+            async with session.post(f"http://{ip}:8700/timer_voice", data=wav,
+                                    headers={"Authorization": f"Bearer {senha}", "X-Timer-Id": timer_id,
+                                             "Content-Type": "audio/wav"}) as resp:
+                if resp.status == 404:
+                    return "sem_timer"
+                return "ok" if resp.status == 200 else "erro"
 
     def registrar(self, linha):
         logger.info("entrega: " + json.dumps(linha, ensure_ascii=False))
@@ -1623,6 +1639,12 @@ async def bot(runner_args: RunnerArguments):
             return
         r = sm.resultado_timer(await comandar_pi(comando))
         logger.info(f"[{sessao}] {params.function_name} {comando} -> {r}")
+        criado = tvz.timer_criado(r) if params.function_name == "criar_timer" and eh_satelite else None
+        if criado and criado[1]:  # spec 2026-11-24: o aviso falado do timer com nome é feito já, em segundo plano
+            tarefa = asyncio.create_task(tvz.avisar_voz_do_timer(
+                DepsAnuncio(REGISTRO_SATELITES.current()), satelite_id, criado[0], criado[1]))
+            _tarefas_timer_voz.add(tarefa)
+            tarefa.add_done_callback(_tarefas_timer_voz.discard)
         await params.result_callback(r)
 
     trava_aprendizagem = sm.TravaAprendizagem()
