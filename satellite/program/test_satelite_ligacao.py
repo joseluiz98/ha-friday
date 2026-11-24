@@ -785,6 +785,12 @@ class TestProvisionamento(Base):
         self._wav(fs.TIMER_GENERICO)
         self.assertEqual(self._aviso({"id": "t1ab852", "nome": None}), ["timer_generico.wav"])
 
+    async def test_status_lists_the_ringing_timers_for_the_bot(self):
+        self.s.maestro.mudo = False
+        for tid, nome in (("t111111", "arroz"), ("t222222", None)):
+            self.s.maestro.evento("timer_venceu", 0.0, {"id": tid, "nome": nome, "duracao_s": 60, "termino": 0.0})
+        self.assertEqual(self.s.estado_publico()["alarmes"], [{"id": "t111111", "nome": "arroz"}, {"id": "t222222", "nome": None}])
+
     async def test_apresentacao_recusada_com_mudo(self):
         self.s.maestro.mudo = True
         r = self.s.comando_porta({"acao": "open_presentation", "facts": {}})

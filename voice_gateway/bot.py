@@ -60,6 +60,7 @@ import speech_cut
 import canal_casa as cc
 import anuncios as an
 import timer_voz as tvz
+import parar_timers as pt
 from arbitration import Arbiter, load_offsets
 import whisper_mode as wm
 import memory_views as mv
@@ -377,7 +378,14 @@ CANCELAR_TIMER_FUNCTION = FunctionSchema(
     },
     required=[],
 )
-TIMER_FUNCTIONS = [CRIAR_TIMER_FUNCTION, CONSULTAR_TIMERS_FUNCTION, CANCELAR_TIMER_FUNCTION]
+PARAR_TIMERS_FUNCTION = FunctionSchema(
+    name="parar_timers",
+    description=sm.DESCRICAO_PARAR_TIMERS,
+    properties={"nome": _NOME_TIMER_PROP,
+                "comodo": {"type": "string", "description": "Cômodo do satélite onde o timer toca, como 'escritório'."}},
+    required=[],
+)
+TIMER_FUNCTIONS = [CRIAR_TIMER_FUNCTION, CONSULTAR_TIMERS_FUNCTION, CANCELAR_TIMER_FUNCTION, PARAR_TIMERS_FUNCTION]
 
 # Spec 2026-10-15 D15: programa de aprendizagem de voz (só no satélite). Duas ferramentas: a trava "roteiro antes de
 # gravar" precisa de duas chamadas, e uma ferramenta com parâmetro que troca a ação seria um enum (D28).
@@ -538,6 +546,19 @@ class DepsAnuncio:
                     return (await resp.json(content_type=None)).get("resposta")
                 except Exception:
                     return "erro"
+
+    async def comandar(self, ip, senha, comando):
+        """POST /command (spec 2026-11-24): um comando ao programa do satélite (timers_parar); só falha de conexão
+        ou prazo levanta."""
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=1.5, total=3.0)) as session:
+            async with session.post(f"http://{ip}:8700/command", json=comando,
+                                    headers={"Authorization": f"Bearer {senha}"}) as resp:
+                return await resp.json(content_type=None)
+
+    async def status(self, ip, senha):
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=1.0, total=1.0)) as session:
+            async with session.get(f"http://{ip}:8700/status", headers={"Authorization": f"Bearer {senha}"}) as resp:
+                return await resp.json(content_type=None)
 
     async def enviar_voz_timer(self, ip, senha, timer_id, wav):
         """POST /timer_voice (spec 2026-11-24): "ok", "sem_timer" (404: já acabou ou foi cancelado) ou "erro"; só falha
@@ -1280,6 +1301,15 @@ async def bot(runner_args: RunnerArguments):
         ic.buscar(HA_MCP_URL, os.environ["FRIDAY_HA_TOKEN"]),
         ms.music_fact_for(satelite_id, _cadastro, _estado_do_player, sm.music_fact) if eh_satelite else _vazio()
     )
+    # spec 2026-11-24: a palavra dita com timers tocando leva a lista deles; a conversa fica sabendo quais tocam (aqui e
+    # nos outros satélites). Fato no contexto, não uma fala de abertura: ela não começa a falar sozinha.
+    alarmes_fato = ""
+    if eh_satelite and sm.timers_tocando(corpo):
+        try:
+            outros = await pt.alarmes_nas_casas(DepsAnuncio(REGISTRO_SATELITES.current()), excluir=satelite_id)
+        except Exception:
+            outros = []
+        alarmes_fato = sm.fato_alarmes(sm.timers_tocando(corpo), outros)
     inventario = ic.sem_frase_de_grupo(inventario)  # 23/10: a frase do HA que manda pedir o cômodo competia com as diretrizes
     if eh_satelite:  # só o satélite tem a ferramenta timer; a página segue com o texto do HA como veio
         inventario = ic.sem_frase_de_timers(inventario)
@@ -1292,7 +1322,7 @@ async def bot(runner_args: RunnerArguments):
         "voice": vs_cfg.voz(cfg_voz),
         "language": Language.PT_BR,
         "system_instruction": SYSTEM_INSTRUCTION
-        + ("\n\n" + sm.contexto_satelite(satelite_id, comodo, nao_perturbe[0], fato_musica) if eh_satelite else "")
+        + ("\n\n" + sm.contexto_satelite(satelite_id, comodo, nao_perturbe[0], fato_musica, alarmes_fato) if eh_satelite else "")
         + ("\n\n" + preferencias if preferencias else "")
         + ("\n\n" + catalogo if catalogo else "")
         + ("\n\n" + briefing if briefing else "")
@@ -1647,6 +1677,16 @@ async def bot(runner_args: RunnerArguments):
             tarefa.add_done_callback(_tarefas_timer_voz.discard)
         await params.result_callback(r)
 
+    async def parar_timers(params: FunctionCallParams):
+        try:
+            a = pt.args_parar_timers(params.arguments)
+        except ValueError as e:
+            await params.result_callback({"ok": False, "erro": str(e)})
+            return
+        r = await pt.parar_em_todos(DepsAnuncio(REGISTRO_SATELITES.current()), **a)
+        logger.info(f"[{sessao}] parar_timers {a} -> {r}")
+        await params.result_callback(r)
+
     trava_aprendizagem = sm.TravaAprendizagem()
 
     async def aprendizagem_de_voz(params: FunctionCallParams):
@@ -1689,6 +1729,8 @@ async def bot(runner_args: RunnerArguments):
         llm.register_function("volume_do_satelite", volume_do_satelite, cancel_on_interruption=False)
         for nome_da_ferramenta in sm.ACAO_DA_FERRAMENTA:
             llm.register_function(nome_da_ferramenta, timer_do_satelite)
+        # um "ok" dito por cima não pode cancelar o comando depois de ele já ter ido aos satélites
+        llm.register_function("parar_timers", parar_timers, cancel_on_interruption=False)
         llm.register_function("aprendizagem_de_voz", aprendizagem_de_voz)
         # um "ok" dito por cima não pode cancelar o comando depois de a Pi já ter agendado (D28)
         llm.register_function("comecar_aprendizagem_de_voz", comecar_aprendizagem_de_voz, cancel_on_interruption=False)

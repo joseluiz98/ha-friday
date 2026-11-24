@@ -133,7 +133,9 @@ class TestFiacao(unittest.TestCase):
     def test_bot_wires_the_notice_after_a_created_timer(self):  # bot.py não importa sem o pipecat: confere o texto
         fonte = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")).read()
         for trecho in ("import timer_voz as tvz", "tvz.timer_criado(r)", "tvz.avisar_voz_do_timer(",
-                       "async def enviar_voz_timer(", "/timer_voice"):
+                       "async def enviar_voz_timer(", "/timer_voice",
+                       "PARAR_TIMERS_FUNCTION", 'register_function("parar_timers"', "pt.parar_em_todos(",
+                       "pt.alarmes_nas_casas(", "sm.fato_alarmes(", "async def comandar(", "async def status("):
             self.assertIn(trecho, fonte)
 
 
