@@ -28,11 +28,11 @@ class TestWakeWord(unittest.TestCase):
     def test_botao_nao_tem_palavra(self):
         self.assertIsNone(conectar(self.m.evento("botao", 0.0)))
 
-    def test_palavra_encerra_alarme_e_abre_com_ela(self):
-        self.m.estado, self.m._alarme = "alarme", {"timer": {"id": "t1"}, "inicio": 0.0, "atendido": False}
+    def test_palavra_pausa_o_alarme_e_abre_com_ela(self):  # 24/11: quem para o timer é o comando, não a palavra
+        self.m.estado, self.m._alarme = "alarme", {"timer": {"id": "t1"}, "inicio": 0.0}
         self.m.mudo = False
         acoes = self.m.evento("palavra", 1.0, {"wake_word": "friday"})
-        self.assertEqual(conectar(acoes), {"wake_word": "friday"})
+        self.assertEqual(conectar(acoes), {"wake_word": "friday", "timers_tocando": [{"id": "t1", "nome": None}]})
 
 
 class TestPalavraAgiria(unittest.TestCase):
@@ -45,7 +45,7 @@ class TestPalavraAgiria(unittest.TestCase):
         if estado in (CONECTANDO, OUVINDO, CORTADA, AGUARDANDO):
             m._abertura = {"inicio": 0.0, "como_abriu": "palavra"}
         if estado == ALARME:
-            m._alarme = {"timer": {"id": "t1"}, "inicio": 0.0, "atendido": False}
+            m._alarme = {"timer": {"id": "t1"}, "inicio": 0.0}
         if estado == TESTE_PALAVRA:
             m._teste = {"contagem": 0}
         if estado == CADASTRO:

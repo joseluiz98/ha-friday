@@ -69,13 +69,6 @@ class TestAlarme(Base):
         self.assertEqual(nomes(acoes), ["alarme:parar", "volume_alerta:False", "luz:parada"])
         self.assertEqual(achar(acoes, "registrar_timer")["como_parou"], "botao")
 
-    def test_palavra_para_o_alarme_e_abre_conversa_normal(self):
-        self.alarme()
-        acoes = self.m.evento("palavra", 1.0)
-        self.assertEqual(nomes(acoes), ["alarme:parar", "volume_alerta:False", "luz:parada", "som:inicio",
-                                        "luz:ouvindo", "conectar"])
-        self.assertIsNone(achar(acoes, "conectar"))
-
     def test_timer_no_meio_de_conversa_encerra_a_conversa(self):
         self.m.evento("palavra", 0.0)
         self.m.evento("conectou", 1.0)
@@ -112,6 +105,78 @@ class TestAlarme(Base):
     def test_publico_mostra_o_alarme(self):
         self.alarme()
         self.assertEqual(self.m.publico()["alarme"], "arroz")
+
+
+class TestPalavraNoAlarme(Base):
+    """24/11: a palavra pausa o alarme e abre uma conversa que já sabe quais timers tocam; quem para o timer é o
+    comando `parar` (a ferramenta do bot), não a palavra."""
+    def setUp(self):
+        super().setUp()
+        self.m.mudo = False
+
+    def dois(self):
+        self.alarme(); self.alarme(1.0, T2)
+
+    def test_wake_word_pauses_alarm_and_opens_conversation_with_timers_in_extras(self):
+        self.dois()
+        acoes = self.m.evento("palavra", 3.0, {"wake_word": "friday"})
+        self.assertEqual(nomes(acoes), ["alarme:pausar", "volume_alerta:False", "som:inicio", "luz:ouvindo", "conectar"])
+        self.assertEqual(achar(acoes, "conectar"), {"wake_word": "friday", "timers_tocando": [
+            {"id": "t1", "nome": "arroz"}, {"id": "t2", "nome": None}]})
+        self.assertEqual(self.m.publico()["alarmes"], [{"id": "t1", "nome": "arroz"}, {"id": "t2", "nome": None}])
+
+    def test_alarm_resumes_when_the_conversation_ends_without_stopping(self):
+        self.alarme()
+        self.m.evento("palavra", 3.0, {"wake_word": "friday"}); self.m.evento("conectou", 3.5)
+        acoes = self.m.evento("encerrar", 20.0)
+        self.assertEqual(nomes(acoes)[-3:], ["volume_alerta:True", "alarme:tocar", "luz:alarme"])
+        self.assertEqual(self.m.estado, "alarme")
+        self.assertEqual(self.m.evento("tique", 20.0 + 7.9), [])  # o aviso (ainda não tocou) conta de novo
+        self.assertEqual(self.m.evento("tique", 20.0 + 8.0), [("aviso_timer", T)])
+
+    def test_notice_already_played_is_not_repeated_after_resume(self):
+        self.alarme()
+        self.assertEqual(self.m.evento("tique", 8.0), [("aviso_timer", T)])
+        self.m.evento("palavra", 9.0, {"wake_word": "friday"}); self.m.evento("conectou", 9.5)
+        self.m.evento("encerrar", 12.0)
+        self.assertEqual(self.m.evento("tique", 100.0), [])
+
+    def test_resume_past_the_cap_ends_as_not_answered(self):
+        self.alarme()
+        self.m.evento("palavra", 299.0, {"wake_word": "friday"}); self.m.evento("conectou", 299.5)
+        acoes = self.m.evento("encerrar", 302.0)
+        self.assertEqual(achar(acoes, "registrar_timer")["como_parou"], "nao_atendido")
+        self.assertEqual(self.m.estado, "parada")
+
+    def test_stop_by_name_only_stops_that_timer(self):
+        self.dois()
+        parados, acoes = self.m.parar_alarmes(2.0, "Arroz")
+        self.assertEqual(parados, [{"id": "t1", "nome": "arroz"}])
+        self.assertEqual(achar(acoes, "registrar_timer")["como_parou"], "palavra")
+        self.assertEqual(self.m.estado, "parada")
+        self.assertEqual(nomes(self.m.evento("tique", 2.2)), ["volume_alerta:True", "alarme:tocar", "luz:alarme"])  # o outro segue
+
+    def test_stop_all_clears_queue(self):
+        self.dois()
+        parados, acoes = self.m.parar_alarmes(2.0)
+        self.assertEqual(parados, [{"id": "t1", "nome": "arroz"}, {"id": "t2", "nome": None}])
+        self.assertEqual([a[1]["id"] for a in acoes if a[0] == "registrar_timer"], ["t1", "t2"])
+        self.assertEqual(self.m.evento("tique", 3.0), [])
+        self.assertEqual(self.m.estado, "parada")
+
+    def test_stop_during_the_conversation_keeps_it_and_the_alarm_does_not_come_back(self):
+        self.alarme()
+        self.m.evento("palavra", 3.0, {"wake_word": "friday"}); self.m.evento("conectou", 3.5)
+        parados, acoes = self.m.parar_alarmes(5.0)
+        self.assertEqual(parados, [{"id": "t1", "nome": "arroz"}])
+        self.assertEqual(self.m.estado, "ouvindo")
+        self.assertNotIn(("luz", "parada"), acoes)
+        depois = self.m.evento("encerrar", 8.0)
+        self.assertNotIn(("alarme", "tocar"), depois)
+
+    def test_stop_with_nothing_ringing_returns_empty(self):
+        self.assertEqual(self.m.parar_alarmes(1.0), ([], []))
+        self.assertEqual(self.m.parar_alarmes(1.0, "arroz"), ([], []))
 
 
 class TestEntrega(Base):

@@ -605,6 +605,11 @@ class Satelite:
                 self.anel.set_pending(arg)
             elif nome == "contagem":
                 self._contagem(*arg)
+            elif nome == "timers_parar":
+                parados, acoes = self.maestro.parar_alarmes(time.monotonic(), arg)
+                for tipo, a in acoes:
+                    self._agir(tipo, a)
+                resposta = dict(resposta, parados=parados, tocando=bool(self.maestro._timers_tocando()))
             elif nome == "teste_palavra":
                 self.evento("teste_palavra", arg)
             elif nome == "apresentacao":

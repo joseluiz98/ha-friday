@@ -111,6 +111,12 @@ def executar(cmd: dict, ctl, timers, agora: float, vozes=None, sons_dir=None, es
                 raise ValueError("parametro_invalido")
             r = {"ligado": ligado}
             efeitos.append(("update_pendente", ligado))
+        elif acao == "timers_parar":  # 24/11: a ferramenta `parar_timers` do bot; quem para é o maestro (efeito)
+            nome = cmd.get("nome")
+            if nome is not None and not isinstance(nome, str):
+                raise ValueError("nome é texto")
+            r = {}
+            efeitos.append(("timers_parar", nome))
         elif acao == "wake_word_test":
             t = cmd.get("timeout_s", 30)
             if isinstance(t, bool) or not isinstance(t, (int, float)) or not 5 <= t <= 120:

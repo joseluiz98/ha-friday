@@ -710,6 +710,17 @@ class TestProvisionamento(Base):
         self.assertTrue(r["ok"])
         self.assertEqual(F.conexoes[-1].dados["presentation"], fatos)
 
+    async def test_timers_parar_stops_ringing_timers_and_answers_who(self):
+        self.s.maestro.mudo = False
+        self.s.maestro.evento("timer_venceu", 0.0, {"id": "t1", "nome": "arroz", "duracao_s": 60, "termino": 0.0})
+        r = self.s.comando_porta({"acao": "timers_parar", "nome": "arroz"})
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["parados"], [{"id": "t1", "nome": "arroz"}])
+        self.assertFalse(r["tocando"])
+        self.assertEqual(self.s.maestro.estado, "parada")
+        vazio = self.s.comando_porta({"acao": "timers_parar"})
+        self.assertEqual((vazio["parados"], vazio["tocando"]), ([], False))
+
     async def test_apresentacao_recusada_com_mudo(self):
         self.s.maestro.mudo = True
         r = self.s.comando_porta({"acao": "open_presentation", "facts": {}})
