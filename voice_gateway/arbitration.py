@@ -9,6 +9,10 @@ The winning criterion lives in `pick` only, so it can be swapped without touchin
 import asyncio, json, logging, math, time, uuid
 
 TIE_DB = 1.0  # voice gap below this counts as a tie, decided by the wake-word score
+# How long a round waits for the other satellites. Satellites up to v0.4.4 give up on the answer after 0.3 s and act as
+# `go` (network time included), so this stays under that budget until they all run a newer program. Measured 24/11:
+# 24 two-satellite rounds closed in 27-194 ms, so the old 0.2 s cut the tail off (a real activation lost the round).
+WINDOW_S = 0.25
 
 
 def _num(value, default: float) -> float:
@@ -44,7 +48,7 @@ class _Round:
 
 
 class Arbiter:
-    def __init__(self, clock=time.monotonic, window_s=0.2, same_activation_s=1.5, online_s=30.0,
+    def __init__(self, clock=time.monotonic, window_s=WINDOW_S, same_activation_s=1.5, online_s=30.0,
                  offsets: dict | None = None, log=None):
         self._clock = clock
         self.window_s, self.same_activation_s, self.online_s = window_s, same_activation_s, online_s
@@ -102,6 +106,10 @@ class Arbiter:
             last = self._last
             if (last is not None and sid not in last.candidates
                     and self._clock() - last.start < self.same_activation_s):
+                self._emit({"event": "late_claim", "ts": time.time(), "round_id": last.id, "sid": sid,
+                            "winner": last.winner, "delay_ms": round((self._clock() - last.start) * 1000),
+                            "score": _num(claim.get("score"), 0.0),
+                            "voice_dbfs": _num(claim.get("voice_dbfs"), -120.0)})
                 return {"verdict": "lost", "reason": "late", "round_id": last.id}
             if not (self._online() - {sid}):
                 round_id = uuid.uuid4().hex[:12]

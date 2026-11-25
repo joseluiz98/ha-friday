@@ -79,7 +79,7 @@ scp -q -p "$W/$MODEL.onnx" "$W/$VERIF" $VM:$MD/
 [ "$(ssh $PI "md5sum modelos/$MODEL.onnx" | cut -d' ' -f1)" = "$(ssh $VM "md5sum $MD/$MODEL.onnx" | cut -d' ' -f1)" ] \
   || { echo "modelo da VM difere do da Pi" >&2; exit 1; }
 ssh $VM "ls $W/wav/*.wav | sed s#^$W#/d# > $W/list.txt"
-(ssh $VM "sudo docker run --rm --name wwt-asr --cpus 2 --memory 3g -v /var/cache/friday-asr:/models -v $W:/d friday-asr:1 /d/wav /d/transcricoes.ndjson small" > "$W/asr.log" 2>&1; echo $? > "$W/asr.rc") &
+(ssh $VM "sudo docker run --rm --name wwt-asr --cpus 2 --memory 3g -v /var/cache/friday-asr:/models -v $W:/d friday-asr:1 /d/wav /d/transcricoes.ndjson medium" > "$W/asr.log" 2>&1; echo $? > "$W/asr.rc") &
 ssh $VM "sudo docker run --rm --name wwt-score --cpus 2 --memory 2g -v $W:/d -v $MD:/m:ro -v /mnt/haos/config/tools/satelite/wakeword-training:/code:ro wakeword-trainer:1 python /code/score.py /d/scores.ndjson $MODEL /m @/d/list.txt" > "$W/score.log" 2>&1
 echo $? > "$W/score.rc"
 wait
