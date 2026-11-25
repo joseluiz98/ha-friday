@@ -1307,6 +1307,18 @@ class TestFalaEmAndamento(unittest.TestCase):
         self.assertNotIn(("desconectar", None), self.m.evento("tique", 9.5))
         self.assertEqual(self.m.estado, "ouvindo")
 
+    def test_conversa_das_18h03_com_o_teto_desligado(self):
+        """MK1 runs with speech_max_s 0 (10/11: a 15 s dictation was cut): the fix must not depend on the cutoff."""
+        m = Maestro(Ajustes(only_wake_word_interrupts=True, continuacao_s=5.0, speech_max_s=0))
+        m.evento("fala_comecou", -0.5)
+        m.evento("palavra", 0.0); m.evento("conectou", 0.25)
+        m.evento("ela_comecou", 2.6); m.evento("ela_parou", 2.75); m.evento("resposta_completa", 2.8)
+        for t in (4.5, 7.9, 20.0, 60.0):  # he keeps dictating: nothing closes over him
+            self.assertNotIn(("desconectar", None), m.evento("tique", t))
+        m.evento("fala_parou", 61.0)
+        m.evento("ela_comecou", 62.0)  # and she answers the whole request
+        self.assertEqual(m.estado, "ouvindo")
+
     def test_teto_de_som_continuo_vale_para_a_fala_herdada(self):
         self.m.evento("fala_comecou", -30.0)  # noise running long before the word
         self.m.evento("palavra", 0.0); self.m.evento("conectou", 0.5)
