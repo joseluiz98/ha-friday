@@ -920,3 +920,37 @@ class TestInstalarAtualizacao(unittest.TestCase):
         self.assertIn("conversa terminar", d)
         for proibido in ("diga", "responda", "fale", "canal"):
             self.assertNotIn(proibido, d.lower())
+
+class TestAlarmesTocando(unittest.TestCase):
+    """Spec 2026-11-24 goal 6: a palavra durante o alarme leva a lista dos timers que tocam; ela fica sabendo quais."""
+    def test_timers_tocando_parses_the_connection_extras(self):
+        corpo = {"timers_tocando": [{"id": "t111111", "nome": "arroz"}, {"id": "t222222", "nome": None}]}
+        self.assertEqual(sm.timers_tocando(corpo), [{"id": "t111111", "nome": "arroz"}, {"id": "t222222", "nome": None}])
+
+    def test_timers_tocando_ignores_garbage(self):
+        for ruim in (None, {}, {"timers_tocando": "x"}, {"timers_tocando": [{"id": "../x"}]}, {"timers_tocando": ["t1"]}):
+            self.assertEqual(sm.timers_tocando(ruim), [], ruim)
+        self.assertEqual(sm.timers_tocando({"timers_tocando": [{"id": "t111111", "nome": 5}]}),
+                         [{"id": "t111111", "nome": None}])  # nome inválido vira "sem nome", o timer continua na lista
+
+    def test_fato_alarmes_states_facts_and_that_nothing_was_stopped(self):
+        t = sm.fato_alarmes([{"id": "t111111", "nome": "arroz"}, {"id": "t222222", "nome": None}],
+                            [{"nome": "pizza", "comodo": "Escritório"}])
+        for trecho in ("«arroz»", "sem nome", "«pizza»", "Escritório", "em pausa", "Nada foi parado ainda"):
+            self.assertIn(trecho, t)
+        self.assertNotIn("deve", t.lower())  # fato, não ordem
+
+    def test_fato_alarmes_empty_is_empty(self):
+        self.assertEqual(sm.fato_alarmes([], []), "")
+
+    def test_the_context_carries_the_fact(self):
+        self.assertIn("«arroz»", sm.contexto_satelite("sat-1", "Sala", False, "", sm.fato_alarmes([{"id": "t111111", "nome": "arroz"}], [])))
+
+    def test_stop_tool_description_is_about_ringing_timers_and_cancel_points_to_it(self):
+        self.assertIn("todos os satélites", sm.DESCRICAO_PARAR_TIMERS)
+        self.assertIn("tocando", sm.DESCRICAO_PARAR_TIMERS)
+        self.assertIn("parar_timers", sm.DESCRICAO_CANCELAR_TIMER)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -103,7 +103,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.p = mock.patch.multiple(fs, CFG=os.path.join(self.d, "config.json"), ID=os.path.join(self.d, "id"),
                                      TIMERS=os.path.join(self.d, "estado", "timers.json"), SONS=self.d,
-                                     ANUNCIOS=os.path.join(self.d, "anuncios"))
+                                     ANUNCIOS=os.path.join(self.d, "anuncios"), TIMER_VOZ=os.path.join(self.d, "timer_voz"),
+                                     TIMER_GENERICO=os.path.join(self.d, "timer_generico.wav"))
         self.p.start()
         self.p_placa = mock.patch.object(fs.placa, "ler_placa", return_value="jabra")  # never the host's audio_board
         self.p_placa.start()
@@ -710,6 +711,105 @@ class TestProvisionamento(Base):
         self.assertTrue(r["ok"])
         self.assertEqual(F.conexoes[-1].dados["presentation"], fatos)
 
+    async def test_timers_parar_stops_ringing_timers_and_answers_who(self):
+        self.s.maestro.mudo = False
+        self.s.maestro.evento("timer_venceu", 0.0, {"id": "t1", "nome": "arroz", "duracao_s": 60, "termino": 0.0})
+        r = self.s.comando_porta({"acao": "timers_parar", "nome": "arroz"})
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["parados"], [{"id": "t1", "nome": "arroz"}])
+        self.assertFalse(r["tocando"])
+        self.assertEqual(self.s.maestro.estado, "parada")
+        vazio = self.s.comando_porta({"acao": "timers_parar"})
+        self.assertEqual((vazio["parados"], vazio["tocando"]), ([], False))
+
+    async def test_timers_parar_under_the_button_mute_leaves_the_ring_alone(self):  # review I3
+        self.s.maestro.mudo = False
+        self.s.maestro.evento("timer_venceu", 0.0, {"id": "t1", "nome": "arroz", "duracao_s": 60, "termino": 0.0})
+        self.s.maestro.mudo = True  # the button muted the mic: the ring belongs to the Jabra
+        feitos = []
+        self.s._agir = lambda tipo, arg=None: feitos.append(tipo)
+        self.s.comando_porta({"acao": "timers_parar"})
+        self.assertIn("alarme", feitos)
+        self.assertNotIn("luz", feitos)
+
+    def _voz(self, tid):
+        os.makedirs(fs.TIMER_VOZ, exist_ok=True)
+        with open(self.s.timer_voz_path(tid), "wb") as f:
+            f.write(b"RIFF")
+
+    async def test_cancel_deletes_the_timer_notice_file(self):
+        r = self.s.comando_porta({"acao": "timer_criar", "duracao_s": 600, "nome": "arroz"})
+        tid = r["timer"]["id"]
+        self._voz(tid)
+        self.assertTrue(self.s.timer_ativo(tid))
+        self.s.comando_porta({"acao": "timer_cancelar", "timer_id": tid})
+        self.assertFalse(os.path.exists(self.s.timer_voz_path(tid)))
+        self.assertFalse(self.s.timer_ativo(tid))
+
+    async def test_boot_cleanup_removes_orphan_files_and_keeps_active_ones(self):
+        ativo = self.s.comando_porta({"acao": "timer_criar", "duracao_s": 600, "nome": "arroz"})["timer"]["id"]
+        self._voz(ativo); self._voz("t999999")
+        self.s._limpar_timer_voz()
+        self.assertTrue(os.path.exists(self.s.timer_voz_path(ativo)))
+        self.assertFalse(os.path.exists(self.s.timer_voz_path("t999999")))
+
+    async def test_notice_file_survives_expiry_and_goes_when_the_alarm_ends(self):
+        self.s.maestro.mudo = False
+        tid = self.s.comando_porta({"acao": "timer_criar", "duracao_s": 1, "nome": "arroz"})["timer"]["id"]
+        self._voz(tid)
+        vencido, = self.s.timers.vencidos(time.time() + 10)  # o laço do programa tira do arquivo o que venceu
+        self.s.maestro.evento("timer_venceu", 0.0, vencido)
+        self.s._limpar_timer_voz()  # vencido e tocando: o arquivo fica para o aviso
+        self.assertTrue(os.path.exists(self.s.timer_voz_path(tid)))
+        for tipo, arg in self.s.maestro.evento("botao", 1.0):
+            self.s._agir(tipo, arg)
+        self.assertFalse(os.path.exists(self.s.timer_voz_path(tid)))
+
+    def _wav(self, caminho):
+        import wave
+        os.makedirs(os.path.dirname(caminho), exist_ok=True)
+        with wave.open(caminho, "wb") as w:
+            w.setnchannels(2); w.setsampwidth(2); w.setframerate(48000); w.writeframes(b"\x00" * 4800)
+
+    def _aviso(self, timer):
+        F.sons.clear()
+        self.s._agir("aviso_timer", timer)
+        return list(F.sons)
+
+    async def test_notice_plays_the_timer_file_when_present(self):
+        self._wav(self.s.timer_voz_path("t1ab852")); self._wav(fs.TIMER_GENERICO)
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), ["t1ab852.wav"])
+
+    async def test_notice_falls_back_to_generic_when_file_missing(self):
+        self._wav(fs.TIMER_GENERICO)
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), ["timer_generico.wav"])
+
+    async def test_notice_falls_back_to_generic_when_file_is_not_a_wav(self):
+        self._voz("t1ab852"); self._wav(fs.TIMER_GENERICO)  # _voz grava só "RIFF": cabeçalho incompleto
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), ["timer_generico.wav"])
+
+    async def test_notice_falls_back_to_generic_when_file_is_in_another_format(self):  # review minor: would play as noise
+        import wave
+        caminho = self.s.timer_voz_path("t1ab852")
+        os.makedirs(os.path.dirname(caminho), exist_ok=True)
+        with wave.open(caminho, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(24000); w.writeframes(b"\x00" * 4800)
+        self._wav(fs.TIMER_GENERICO)
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), ["timer_generico.wav"])
+
+    async def test_notice_silent_when_both_missing(self):
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": "arroz"}), [])
+
+    async def test_unnamed_timer_uses_generic_clip(self):
+        self._wav(fs.TIMER_GENERICO)
+        self.assertEqual(self._aviso({"id": "t1ab852", "nome": None}), ["timer_generico.wav"])
+
+    async def test_status_lists_the_ringing_timers_for_the_bot(self):
+        self.s.maestro.mudo = False
+        for tid, nome in (("t111111", "arroz"), ("t222222", None)):
+            self.s.maestro.evento("timer_venceu", 0.0, {"id": tid, "nome": nome, "duracao_s": 60, "termino": 0.0})
+        self.assertEqual(self.s.estado_publico()["alarmes"], [{"id": "t111111", "nome": "arroz"}, {"id": "t222222", "nome": None}])
+
     async def test_apresentacao_recusada_com_mudo(self):
         self.s.maestro.mudo = True
         r = self.s.comando_porta({"acao": "open_presentation", "facts": {}})
@@ -1211,6 +1311,14 @@ class TestPausaGuardada(Base):
         self.assertTrue(self.s._ajustes().only_wake_word_interrupts)
         self.s.cfg["only_wake_word_interrupts"] = False
         self.assertFalse(self.s._ajustes().only_wake_word_interrupts)
+
+    async def test_ajustes_carry_the_alarm_ramp_and_the_loop_length(self):  # 24/11: o aviso do timer segue a rampa
+        self.s.cfg["alarm_ramp_s"] = 3.0
+        a = self.s._ajustes()
+        self.assertEqual(a.rampa_s, 3.0)
+        self.assertEqual(a.volta_alarme_s, self.s._duracao_wav(self.s._som("alarme")))
+        self.s.cfg["alarm_ramp_s"] = 0
+        self.assertEqual(self.s._ajustes().rampa_s, 0.0)
 
 
 class TestPararFala(Base):

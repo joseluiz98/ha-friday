@@ -120,6 +120,47 @@ def test_wakeword_pipeline_stamps():
         assert m == {"wakeword_cache_last_ok": None, "wakeword_cache_last_ok_attributes": {"satellites": {}}}, bad
 
 
+def test_tts_failing_on_at_three_in_a_row():
+    st = {"seguidas": 3, "desde": 1000.0, "ultimo_erro": "ClientError", "origem": "timer", "ultima_tentativa": 5000.0}
+    m = c.tts_health_metrics(st, now=6000.0)
+    assert m["tts_failing"] is True
+    assert m["tts_failing_attributes"] == {"consecutive": 3, "since": "1970-01-01T00:16:40+00:00",
+                                           "last_error": "ClientError", "origin": "timer"}
+    assert c.tts_health_metrics(dict(st, seguidas=2), now=6000.0)["tts_failing"] is False
+
+
+def test_tts_failing_off_when_expired():
+    st = {"seguidas": 5, "desde": 1000.0, "ultimo_erro": "E", "origem": "anuncio", "ultima_tentativa": 5000.0}
+    assert c.tts_health_metrics(st, now=5000.0 + 6.9 * 86400)["tts_failing"] is True
+    assert c.tts_health_metrics(st, now=5000.0 + 7.1 * 86400)["tts_failing"] is False
+
+
+def test_tts_failing_unknown_when_file_unreadable_and_off_when_absent():
+    assert c.tts_health_metrics(None, now=1.0)["tts_failing"] is None  # corrupt/unreadable: never a false "ok"
+    assert c.tts_health_metrics({}, now=1.0)["tts_failing"] is False  # no attempt ever recorded: nothing failing
+    for bad in ([], "x", {"seguidas": "3", "ultima_tentativa": 1.0}):
+        assert c.tts_health_metrics(bad, now=1.0)["tts_failing"] is None, bad
+
+
+def test_tts_thresholds_match_the_bot_module():
+    """The agent cannot import voice_gateway: the two constants are copied, so a test keeps them equal."""
+    src = (Path(__file__).resolve().parents[2] / "voice_gateway" / "tts_saude.py").read_text()
+    assert f"LIMITE_SEGUIDAS = {c.TTS_LIMITE_SEGUIDAS}" in src
+    assert f"EXPIRA_S = {c.TTS_EXPIRA_S // 86400} * 86400" in src
+
+
+def test_sample_vm_wires_the_tts_sensor(monkeypatch, tmp_path):
+    """sample_vm had no test: a missing import there would take the whole VM sampler down."""
+    from friday_server_agent import __main__ as m
+    arq = tmp_path / "tts-health.json"
+    monkeypatch.setattr(m, "TTS_HEALTH_FILE", str(arq))
+    assert m.sample_vm()["tts_failing"] is False  # no file yet: no TTS attempt ever
+    arq.write_text("{not json")
+    assert m.sample_vm()["tts_failing"] is None
+    arq.write_text('{"seguidas": 3, "desde": 1.0, "ultimo_erro": "E", "origem": "timer", "ultima_tentativa": %s}' % __import__("time").time())
+    assert m.sample_vm()["tts_failing"] is True
+
+
 def test_wakeword_sync_sensor_is_gone():
     """18/11: each satellite reports its own upload; the office-only sync stamp left the server."""
     assert "wakeword_sync_last_ok" not in {d["key"] for d in c.capabilities(proxmox=True)}
@@ -130,10 +171,15 @@ def test_capabilities_keys_match_metrics():
     keys = {d["key"] for d in c.capabilities(proxmox=True)}
     produced = set(c.status_metrics({})) | set(c.proxmox_metrics({}, {}, {})) | set(
         c.vm_metrics(MEMINFO, "0 0 0", (1, 1, 1, 1), "1 1", 1)) | set(
-        c.wakeword_pipeline_metrics(None, None))
+        c.wakeword_pipeline_metrics(None, None)) | set(c.tts_health_metrics({}, 0.0))
     attrs = {k for k in produced if k.endswith("_attributes")}
     assert produced - attrs <= keys
     assert {k.removesuffix("_attributes") for k in attrs} <= keys
+
+
+def test_tts_failing_is_a_problem_binary_sensor():
+    d = {x["key"]: x for x in c.capabilities(proxmox=False)}["tts_failing"]
+    assert d["platform"] == "binary_sensor" and d["device_class"] == "problem" and d["name"] == "TTS failing"
 
 
 def test_proxmox_unavailable_without_token():

@@ -47,6 +47,9 @@ CFG = "/etc/friday-satelite/config.json"
 ID = "/etc/friday-satelite/id"
 SONS = "/home/jose/satelite/sons"
 TIMERS = "/home/jose/satelite/estado/timers.json"  # spec 2026-10-12 §2: sobrevive a reinício
+TIMER_VOZ = os.environ.get("FRIDAY_TIMER_VOICE_DIR", "/home/jose/timer_voz")  # spec 2026-11-24: <id>.wav do aviso de cada timer
+# spec 2026-11-24: o aviso genérico de timer vem junto do programa (imagem e OTA), nunca depende do que o bot mandou
+TIMER_GENERICO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sons", "timer_generico.wav")
 ANUNCIOS = os.environ.get("FRIDAY_ANNOUNCE_DIR", "/home/jose/anuncios")  # spec 2026-11-20: <id>.wav, apagado depois
 MODELO_VERIFICADOR = "/home/jose/modelos/friday_verificador.pkl"  # spec 2026-10-15 D13
 # D16: sem os WAVs das falas da aprendizagem, a Pi usa os sons de sempre
@@ -211,7 +214,15 @@ class Satelite:
                        keep_listening_while_speaking=self.cfg.get("keep_listening_while_speaking", True) is not False,
                        no_follow_up_while_music=self.cfg.get("no_follow_up_while_music", True) is not False,
                        no_follow_up_after_home_commands=self.cfg.get("no_follow_up_after_home_commands", True) is not False,
-                       only_wake_word_interrupts=self.cfg.get("only_wake_word_interrupts", True) is not False)
+                       only_wake_word_interrupts=self.cfg.get("only_wake_word_interrupts", True) is not False,
+                       rampa_s=float(self.cfg.get("alarm_ramp_s", 0) or 0), volta_alarme_s=self._volta_do_alarme())
+
+    def _volta_do_alarme(self):
+        """Duração de uma volta do som do alarme (o maestro conta as voltas até o aviso falado do timer)."""
+        try:
+            return self._duracao_wav(self._som("alarme"))
+        except (OSError, EOFError, wave.Error, KeyError, ZeroDivisionError):
+            return Ajustes.volta_alarme_s
 
     async def _musica_agora(self) -> bool:
         """Há música tocando no Sendspin? Qualquer erro, saída estranha ou demora = não (nunca derruba o programa)."""
@@ -482,8 +493,14 @@ class Satelite:
                 self.emissor.emitir("conversa", {"estado": "fechada"})
         elif tipo == "registrar":
             print(json.dumps({"abertura": arg, "satelite": self.sid}), flush=True)
+        elif tipo == "aviso_timer":  # spec 2026-11-24: uma vez, depois da rampa e das voltas do alarme
+            caminho, qual = self._aviso_do_timer(arg)
+            print(json.dumps({"timer_aviso": qual, "id": arg.get("id"), "satelite": self.sid}), flush=True)
+            if caminho:
+                self.alto.tocar_wav(caminho)
         elif tipo == "registrar_timer":
             print(json.dumps({"timer": arg, "satelite": self.sid}), flush=True)
+            self._limpar_timer_voz()  # o alarme acabou: o aviso falado desse timer não serve mais
         elif tipo == "registrar_espera":  # D4: quanto ela levou para começar a falar
             print(json.dumps({"espera": arg, "satelite": self.sid}), flush=True)
         elif tipo == "cadastro":
@@ -529,6 +546,36 @@ class Satelite:
             self._tocar_frases([f"{SONS}/onboarding/{arg}.wav"])
         elif tipo == "onboarding":
             self.emissor.emitir("onboarding", arg)
+
+    @staticmethod
+    def timer_voz_path(timer_id):
+        return os.path.join(TIMER_VOZ, f"{timer_id}.wav")
+
+    def timer_ativo(self, timer_id):
+        return any(t["id"] == timer_id for t in self.timers.consultar(time.time()))
+
+    @staticmethod
+    def _wav_legivel(caminho):
+        try:
+            with wave.open(caminho) as w:
+                # o alto-falante recebe os quadros crus em 48 kHz, estéreo, 16 bits: outro formato tocaria como ruído
+                return w.getnframes() > 0 and (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (48000, 2, 2)
+        except (OSError, EOFError, wave.Error):
+            return False
+
+    def _aviso_do_timer(self, timer):
+        """O aviso falado de um timer: o arquivo dele, senão o genérico do programa, senão nada (os beeps seguem)."""
+        proprio = self.timer_voz_path(timer.get("id"))
+        if self._wav_legivel(proprio):
+            return proprio, "proprio"
+        if self._wav_legivel(TIMER_GENERICO):
+            return TIMER_GENERICO, "generico"
+        return None, "sem_arquivo"
+
+    def _limpar_timer_voz(self):
+        """Apaga o aviso falado de todo timer que não está ativo nem tocando (partida, cancelamento, fim do alarme)."""
+        manter = {t["id"] for t in self.timers.consultar(time.time())} | {t["id"] for t in self.maestro._timers_tocando()}
+        tm.limpar_voz(TIMER_VOZ, manter)
 
     @staticmethod
     def _arquivo_anuncio(anuncio_id):
@@ -597,6 +644,11 @@ class Satelite:
                 self.anel.set_pending(arg)
             elif nome == "contagem":
                 self._contagem(*arg)
+            elif nome == "timers_parar":
+                parados, acoes = self.maestro.parar_alarmes(time.monotonic(), arg)
+                for tipo, a in self.maestro._filtrar(acoes):
+                    self._agir(tipo, a)
+                resposta = dict(resposta, parados=parados, tocando=bool(self.maestro._timers_tocando()))
             elif nome == "teste_palavra":
                 self.evento("teste_palavra", arg)
             elif nome == "apresentacao":
@@ -615,6 +667,8 @@ class Satelite:
         if "bip_volume" in efeitos:
             self.alto.tocar_wav(self._som("volume"))
         resposta = self._efeitos_provisionamento(efeitos, resposta)
+        if cmd.get("acao") == "timer_cancelar":
+            self._limpar_timer_voz()
         print(json.dumps({"comando_porta": cmd.get("acao"), "ok": resposta.get("ok")}), flush=True)
         return resposta
 
@@ -695,6 +749,8 @@ class Satelite:
         resposta, efeitos = comandos.executar(cmd, self.volume, self.timers, time.time(), self.vozes,
                                               sons_dir=SONS, estado_maestro=self.maestro.estado)
         resposta = self._efeitos_provisionamento(efeitos, resposta)
+        if cmd.get("acao") == "timer_cancelar":
+            self._limpar_timer_voz()
         if self.volume.normal != volume_antes:
             self.emissor.emitir("config", {"mudancas": {"volume": self.volume.normal}, "origem": "voz"})
         if "bip_volume" in efeitos:
@@ -1371,9 +1427,11 @@ async def principal():
     await porta_local.iniciar(CFG, s.estado_publico, s.ao_mudar_config, s.cfg["porta_local"], s.campainha,
                              palavras_fn=s.palavras_carregadas, comando_fn=s.comando_porta, musica_fn=s._musica_agora,
                              anuncio_fn=s.anuncio, anuncio_dir=ANUNCIOS,
-                             anuncio_tem_fn=s.maestro.tem_anuncio)
+                             anuncio_tem_fn=s.maestro.tem_anuncio, timer_voz_dir=TIMER_VOZ,
+                             timer_ativo_fn=s.timer_ativo)
     print(json.dumps({"iniciado": s.sid}), flush=True)
     s.carregar_timers()
+    s._limpar_timer_voz()
     while not morreu.is_set():
         s.tique()
         try:

@@ -66,6 +66,18 @@ def _members(path):
         return {m.name: (t.extractfile(m).read() if m.isfile() else None) for m in t.getmembers()}
 
 
+def test_satellite_package_ships_the_generic_timer_clip(src):
+    """The generic timer clip lives in git (program/sons), not in the vault: it must reach the OTA bundle (and the image)."""
+    archive, _, tmp = src
+    sons = tmp / "release/satellite/program/sons"
+    sons.mkdir()
+    (sons / "timer_generico.wav").write_bytes(b"RIFFgen")
+    (sons / "notes.md").write_text("not a sound")
+    out = tmp / "pkg"
+    files = _members(pk.build_satellite(archive, "v9.9.9", SHA, pv._vault(), str(out))["path"])
+    assert files["program/sons/timer_generico.wav"] == b"RIFFgen" and "program/sons/notes.md" not in files
+
+
 def test_satellite_package_layout(src):
     archive, _, tmp = src
     out = tmp / "pkg"

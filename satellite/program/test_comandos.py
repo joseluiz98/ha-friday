@@ -16,6 +16,22 @@ class Base(unittest.TestCase):
         return comandos.executar(dict(cmd, id="c1"), self.vol, self.tim, 1000.0)
 
 
+class TestTimersParar(Base):
+    def test_all(self):
+        r, ef = self.run_(acao="timers_parar")
+        self.assertTrue(r["ok"])
+        self.assertEqual(ef, [("timers_parar", None)])
+
+    def test_by_name(self):
+        r, ef = self.run_(acao="timers_parar", nome="arroz")
+        self.assertEqual(ef, [("timers_parar", "arroz")])
+
+    def test_non_string_name_is_rejected(self):
+        r, ef = self.run_(acao="timers_parar", nome=5)
+        self.assertFalse(r["ok"])
+        self.assertEqual(ef, [])
+
+
 class TestVolume(Base):
     def test_numero(self):
         r, ef = self.run_(acao="volume", numero=10)

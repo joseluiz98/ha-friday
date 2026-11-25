@@ -117,7 +117,8 @@ def music_fact(player, estado) -> str:
     return t
 
 
-def contexto_satelite(sid: str, comodo_: str = None, nao_perturbe_: bool = False, music_fact: str = "") -> str:
+def contexto_satelite(sid: str, comodo_: str = None, nao_perturbe_: bool = False, music_fact: str = "",
+                      alarmes_fact: str = "") -> str:
     # Informação, não ordem (regra de autonomia da Friday): ela decide como lidar.
     onde = f"Este satélite fica no cômodo {comodo_} da casa. " if comodo_ else ""
     return (f"Esta conversa vem do satélite de voz {sid}, um alto-falante com microfone num cômodo da casa. "
@@ -131,7 +132,8 @@ def contexto_satelite(sid: str, comodo_: str = None, nao_perturbe_: bool = False
             "desnecessária. "
             + f"O não perturbe deste satélite está {'ligado' if nao_perturbe_ else 'desligado'}. "
             + FATO_APRENDIZAGEM
-            + (" " + music_fact if music_fact else ""))
+            + (" " + music_fact if music_fact else "")
+            + (" " + alarmes_fact if alarmes_fact else ""))
 
 
 def pedido_com_origem(pedido: str, sid: str) -> str:
@@ -311,7 +313,13 @@ DESCRICAO_CONSULTAR_TIMERS = (
 DESCRICAO_CANCELAR_TIMER = (
     _TIMERS_BASE + "Cancela timers: pelo id (um timer só), pelo nome, ou todos=true (todos os timers); sem nenhum dos "
     "três, cancela o único ativo. Se houver mais de um timer ativo (ou mais de um com o mesmo nome) e o pedido não disser "
-    "qual, nada é cancelado e a resposta traz a lista dos candidatos, cada um com id, nome, duração e quanto falta.")
+    "qual, nada é cancelado e a resposta traz a lista dos candidatos, cada um com id, nome, duração e quanto falta. "
+    "Um timer que já venceu e está tocando não é cancelado por aqui: para esse existe parar_timers.")
+DESCRICAO_PARAR_TIMERS = (
+    "Para os timers que estão tocando agora (o alarme de um timer vencido), em todos os satélites da casa. Sem nome nem "
+    "cômodo, para todos os que tocam; com nome, só o timer com esse nome; com cômodo, só os daquele cômodo. Devolve cada "
+    "timer parado e o cômodo dele, e os cômodos que não responderam. Um timer que ainda está contando não é afetado "
+    "por esta ferramenta: esse é o cancelar_timer.")
 ACAO_DA_FERRAMENTA = {"criar_timer": "criar", "consultar_timers": "consultar", "cancelar_timer": "cancelar"}
 _ID_ENTREGA = re.compile(r"^[a-z0-9]{8,32}$")
 _ID_TIMER = re.compile(r"^t[0-9a-f]{6}$")
@@ -478,6 +486,42 @@ def resultado_timer(resposta) -> dict:
 def entrega(body):
     eid = body.get("entrega") if isinstance(body, dict) else None
     return eid if isinstance(eid, str) and _ID_ENTREGA.match(eid) else None
+
+
+def timers_tocando(body) -> list:
+    """Spec 2026-11-24: a palavra dita com timers tocando leva a lista deles ({"id", "nome"}); lixo vira lista vazia."""
+    lista = body.get("timers_tocando") if isinstance(body, dict) else None
+    r = []
+    for t in (lista[:10] if isinstance(lista, list) else []):
+        if not isinstance(t, dict) or not isinstance(t.get("id"), str) or not _ID_TIMER.match(t["id"]):
+            continue
+        nome = t.get("nome")
+        nome = nome.strip() if isinstance(nome, str) and _NOME_TIMER.match(nome.strip()) else None
+        r.append({"id": t["id"], "nome": nome})
+    return r
+
+
+def fato_alarmes(locais: list, outros: list) -> str:
+    """O fato (sem ordem) de que há timers tocando quando a pessoa disse a palavra. `locais`: os deste satélite
+    ({"id","nome"}); `outros`: os de outros cômodos ({"nome","comodo"})."""
+    if not locais and not outros:
+        return ""
+
+    def rotulo(nome):
+        return f"«{nome}»" if nome else "um timer sem nome"
+
+    partes = []
+    if locais:
+        partes.append("neste satélite, " + ", ".join(rotulo(t.get("nome")) for t in locais))
+    por_comodo = {}
+    for t in outros:
+        por_comodo.setdefault(t.get("comodo") or "outro cômodo", []).append(rotulo(t.get("nome")))
+    for comodo_, nomes in por_comodo.items():
+        partes.append(f"no cômodo {comodo_}, " + ", ".join(nomes))
+    t = "Timers vencidos tocando agora: " + "; ".join(partes) + "."
+    if locais:
+        t += " O alarme deste satélite está em pausa enquanto a conversa dura e volta a tocar se nada for parado."
+    return t + " Nada foi parado ainda (a ferramenta parar_timers para os que tocam)."
 
 
 def timer_vencido(body):

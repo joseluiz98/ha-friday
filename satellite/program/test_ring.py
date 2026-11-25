@@ -82,7 +82,7 @@ class TestXvf(unittest.TestCase):
         self.assertEqual(self.t.chamadas, [])
 
     def test_respirando(self):
-        casos = {"alarm": (0xFF8000, ring.SPEED_FAST),
+        casos = {"alarm": (ring.COR_ALARME, ring.SPEED_FAST),
                  "setup": (ring.COR_SISTEMA, ring.SPEED_SLOW), "updating": (ring.COR_SISTEMA, ring.SPEED_UPDATING),
                  "error": (0xFF0000, ring.SPEED_SLOW)}
         for estado, (cor, vel) in casos.items():
@@ -591,6 +591,13 @@ class TestComposicaoXvf(unittest.TestCase):
         proximo = self.timers[-1]
         self.r.show_maestro("listen")
         self.assertTrue(proximo.cancelado)
+
+    def test_alarm_is_purple_at_40_percent_and_pulses_faster_than_dnd(self):  # 24/11 (dono): laranja é só do sistema
+        self.assertEqual(ring.COR_ALARME, ring.escalar(0x8000FF, 0.4))
+        self.assertEqual(ring._XVF["alarm"][1], ring.COR_ALARME)
+        self.assertGreater(ring._XVF["alarm"][2], ring._XVF["dnd"][2])
+        self.assertNotEqual(ring._XVF["alarm"][1], ring.COR_SISTEMA)
+        self.assertEqual(ring._XVF["dnd"][1], 0x8000FF)  # o não perturbe segue como estava (25% fixo + respiro)
 
     def test_dnd_values(self):
         self.assertEqual((ring.DND_LOW, ring.DND_PULSE_EVERY_S, ring.DND_PULSE_S), (0.25, 30.0, 2.0))

@@ -32,5 +32,18 @@ class TestVozDasFalas(unittest.TestCase):
         self.assertIn("Sexta-feira", g.FALAS["aprendizagem_intro_sexta_feira"])
 
 
+class TestTimerGenerico(unittest.TestCase):
+    def test_refuses_to_run_without_the_paid_confirmation(self):
+        import tempfile, gerar_timer_generico as g
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(g.main([d]), 2)  # nada de rede nem de arquivo sem --confirm-paid
+            self.assertEqual(os.listdir(d), [])
+
+    def test_text_does_not_expose_the_mechanism(self):
+        import gerar_timer_generico as g
+        for interno in ("satélite", "cérebro", "modelo", "servidor"):
+            self.assertNotIn(interno, g.TEXTO.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

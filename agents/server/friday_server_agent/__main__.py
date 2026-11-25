@@ -8,6 +8,7 @@ import logging
 import os
 import ssl
 import subprocess
+import time
 import urllib.parse
 import urllib.request
 
@@ -54,6 +55,7 @@ PVE_BACKUP_STORAGE = os.environ.get("FRIDAY_PVE_BACKUP_STORAGE", "backup")  # th
 ACTIVITY_FILE = os.environ.get("FRIDAY_ACTIVITY_FILE", "/srv/friday/state/activity.json")
 # 09/11/2026: nightly wake-word cache. featcache_nightly.sh touches the stamp only after caching every pending day of
 # every satellite, and keeps {"<sat_id>": "<YYYY-MM-DD>"} of each satellite's newest cached day in the registry (18-19/11).
+TTS_HEALTH_FILE = os.environ.get("FRIDAY_TTS_HEALTH", "/srv/friday/state/tts-health.json")  # written by the bot (tts_saude.py)
 WAKEWORD_CACHE_STAMP = os.environ.get("FRIDAY_WAKEWORD_CACHE_STAMP", "/srv/friday/state/wwt-featcache.ok")
 WAKEWORD_CACHE_REGISTRY = os.environ.get("FRIDAY_WAKEWORD_CACHE_REGISTRY", "/srv/friday/state/wwt-featcache.json")
 
@@ -81,6 +83,13 @@ def _read_json(path: str):
         return None
 
 
+def _tts_state():
+    """The bot's TTS streak: {} while the file does not exist yet (no TTS attempt ever), None when unreadable."""
+    if not os.path.exists(TTS_HEALTH_FILE):
+        return {}
+    return _read_json(TTS_HEALTH_FILE)
+
+
 def _get(url: str, header: str, insecure: bool = False) -> dict:
     ctx = ssl._create_unverified_context() if insecure else None
     req = urllib.request.Request(url, headers={"Authorization": header})
@@ -101,7 +110,8 @@ def sample_vm() -> dict:
     return {**c.vm_metrics(_proc("meminfo"), _proc("loadavg"),
                            (v.f_frsize, v.f_blocks, v.f_bfree, v.f_bavail),
                            _proc("uptime"), os.cpu_count() or 1, cpu_pct=CPU.update(_proc("stat"))),
-            **c.wakeword_pipeline_metrics(_mtime(WAKEWORD_CACHE_STAMP), _read_json(WAKEWORD_CACHE_REGISTRY))}
+            **c.wakeword_pipeline_metrics(_mtime(WAKEWORD_CACHE_STAMP), _read_json(WAKEWORD_CACHE_REGISTRY)),
+            **c.tts_health_metrics(_tts_state(), time.time())}
 
 
 def _log_tail() -> str:
