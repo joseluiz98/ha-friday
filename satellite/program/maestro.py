@@ -105,6 +105,9 @@ class Maestro:
         self._prazo = None  # (motivo, instante)
         self._alguem_falando = False
         self._fala_desde = None  # R13: instante em que a fala contínua atual começou
+        # 25/11: what the speech detector hears now, in any state (even while a recado ignores it), and since when; a
+        # conversation opening or a mic reopening inherits it, and her own close waits for speech begun after she stopped
+        self._detector_falando, self._detector_desde, self._ela_parou_em = False, None, None
         self._ela_falando = False
         self._abertura = None
         self._motivo_corte = None
@@ -238,8 +241,11 @@ class Maestro:
         acoes = [("som", "inicio"), ("luz", "ouvindo")]
         if self.estado == PARADA:
             # conversa nova: nada herdado de uma conexão anterior (revisão final I1)
-            self.pendentes, self._ela_falando, self._alguem_falando = 0, False, False
-            self._fala_desde = None
+            self.pendentes, self._ela_falando, self._ela_parou_em = 0, False, None
+            # 25/11: "Friday, <request>" in one breath: the detector's segment began with the word and emits no new
+            # fala_comecou, so the speech already running counts (the continuous sound cutoff counts from here)
+            self._alguem_falando = self._detector_falando
+            self._fala_desde = agora if self._alguem_falando else None
             if self.whisper:  # a captura começa o DetectorFala "falando" (a frase segue depois da palavra)
                 self._alguem_falando, self._fala_desde = True, agora
             self.estado = CONECTANDO
@@ -650,6 +656,7 @@ class Maestro:
             # conversa do timer que falhou: o alarme volta sozinho, sem o som de erro por cima
             return self._fechar(agora, "falha", som=None if self._alarme is not None else "erro")
         if nome == "fala_comecou":
+            self._detector_falando, self._detector_desde = True, agora
             if self._recado and e in ABERTO:  # 19/11 (revisão I2): fala da sala no recado não chega a ela nem conta prazo
                 return []
             self._completa = False  # a new utterance: a leftover `resposta_completa` must not reopen the next answer
@@ -659,6 +666,7 @@ class Maestro:
                 self._prazo = None
             return self._aviso(e, "speech_started")
         if nome == "fala_parou":
+            self._detector_falando = False
             self._alguem_falando = False
             self._fala_desde = None
             if self._recado and e in ABERTO:  # 19/11 (revisão I2): idem; nem mede espera nem fecha o microfone
@@ -712,6 +720,7 @@ class Maestro:
             return []
         if nome == "ela_parou":
             self._ela_falando = False
+            self._ela_parou_em = agora
             if self._recado and e in ABERTO:  # pausa ou fim do recado: o mic abre se ela não voltar logo (_tique)
                 if not self.a.only_wake_word_interrupts:  # switch off: the recado as before 21/11
                     self._recado_fim = agora + RECADO_PAUSA_S
@@ -746,6 +755,9 @@ class Maestro:
                 return []
             if valor == "comando_casa" and (not self.a.no_follow_up_after_home_commands or self._alguem_falando):
                 return []  # 04/11: switch desligado ou alguém já falando: a conversa segue normal
+            if valor in (None, "agradecimento") and self._fala_nova():  # 25/11: she closed over a new sentence
+                self._abertura["encerrar_ignorado"] = self._abertura.get("encerrar_ignorado", 0) + 1
+                return []
             if valor == "agradecimento" and self.pendentes > 0:  # revisão final I1: a resposta do cérebro ainda vem
                 return [] if e == AGUARDANDO else self._aguardar_cerebro()
             return self._fechar(agora, valor or "encerrar", som=None if e == CORTADA else "fim")
@@ -763,7 +775,11 @@ class Maestro:
         """End of a recado (21/11): the mic opens as before v0.3.7 and the program learns the answer ended (the beam lock
         releases). `parou` = when she really stopped: the follow-up deadlines count from there."""
         self._recado, self._recado_fim, self._resposta_normal, self._completa = False, None, False, False
-        acoes = [("microfone", True), ("luz", "ouvindo")] + self._trata("ela_parou", parou, None)
+        herdada = []
+        if self._detector_falando and not self._alguem_falando:  # 25/11: speech begun during the recado now counts
+            self._alguem_falando, self._fala_desde = True, parou
+            herdada = [("avisar_bot", "speech_started")] if self.whisper else []
+        acoes = [("microfone", True), ("luz", "ouvindo")] + herdada + self._trata("ela_parou", parou, None)
         if ("fim_da_resposta", None) not in acoes:
             acoes.append(("fim_da_resposta", None))
         return acoes
@@ -785,6 +801,12 @@ class Maestro:
         próximo `fala_parou` rearma o prazo. Os prazos de resposta só seguravam com keep_listening_while_speaking."""
         return self._alguem_falando and (motivo not in ("resposta", "resposta_curta")
                                          or self.a.keep_listening_while_speaking)
+
+    def _fala_nova(self):
+        """25/11: someone began speaking after her last answer ended and is still speaking (sound already running
+        when she stopped, such as TV, does not count)."""
+        return (self._detector_falando and not self._ela_falando and self._abertura is not None
+                and self._ela_parou_em is not None and self._detector_desde >= self._ela_parou_em)
 
     def _aguardar_cerebro(self):
         self.estado = AGUARDANDO

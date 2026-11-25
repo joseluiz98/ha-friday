@@ -1271,3 +1271,90 @@ class TestSoAPalavraInterrompe(unittest.TestCase):
         m.evento("fala_comecou", 8.0); m.evento("fala_parou", 9.0)
         m.evento("ela_comecou", 10.0)
         self.assertEqual(tipos(m.evento("ela_parou", 11.0)), ["guardar_pausa:True"])
+
+
+class TestFalaEmAndamento(unittest.TestCase):
+    """25/11 (MK1 18:03): the speech the detector already hears when the conversation opens, or that started while
+    her answer held the mic closed, is still someone speaking: the short deadlines must not close over it. The
+    continuous sound cutoff (speech_max_s) is the ceiling."""
+
+    def setUp(self):
+        self.m = Maestro(Ajustes(only_wake_word_interrupts=True, continuacao_s=5.0))
+
+    def test_fala_que_comecou_antes_da_palavra_segura_a_espera_inicial(self):
+        self.m.evento("fala_comecou", -0.5)  # "Friday, ..." in one breath: the segment starts with the word
+        self.m.evento("palavra", 0.0); self.m.evento("conectou", 0.6)
+        self.assertNotIn(("desconectar", None), self.m.evento("tique", 4.5))
+        self.assertEqual(self.m.estado, "ouvindo")
+
+    def test_conversa_das_18h03(self):
+        self.m.evento("fala_comecou", -0.5)
+        self.m.evento("palavra", 0.0); self.m.evento("conectou", 0.25)
+        self.m.evento("ela_comecou", 2.6)  # a blip at a pause
+        self.m.evento("ela_parou", 2.75)
+        self.m.evento("resposta_completa", 2.8)  # mic reopens
+        self.assertNotIn(("desconectar", None), self.m.evento("tique", 7.9))  # was "silencio" here
+        self.assertEqual(self.m.estado, "ouvindo")
+        acoes = self.m.evento("fala_parou", 9.3)  # he finishes: the reply deadline starts as usual
+        self.assertNotIn(("desconectar", None), acoes)
+
+    def test_fala_iniciada_durante_a_resposta_conta_quando_o_microfone_reabre(self):
+        self.m.evento("palavra", 0.0); self.m.evento("conectou", 0.5)
+        self.m.evento("fala_comecou", 1.0); self.m.evento("fala_parou", 2.0)
+        self.m.evento("ela_comecou", 3.0)
+        self.assertEqual(self.m.evento("fala_comecou", 3.5), [])  # 19/11 rule kept: nothing while she answers
+        self.m.evento("resposta_completa", 4.0); self.m.evento("ela_parou", 4.1)
+        self.assertNotIn(("desconectar", None), self.m.evento("tique", 9.5))
+        self.assertEqual(self.m.estado, "ouvindo")
+
+    def test_teto_de_som_continuo_vale_para_a_fala_herdada(self):
+        self.m.evento("fala_comecou", -30.0)  # noise running long before the word
+        self.m.evento("palavra", 0.0); self.m.evento("conectou", 0.5)
+        self.assertNotIn(("desconectar", None), self.m.evento("tique", 14.9))  # counts from the opening
+        acoes = self.m.evento("tique", 15.1)
+        self.assertEqual(registro(acoes)["como_fechou"], "fala_longa")
+
+    def test_fala_que_parou_antes_da_palavra_nao_e_herdada(self):
+        self.m.evento("fala_comecou", -3.0); self.m.evento("fala_parou", -1.0)
+        self.m.evento("palavra", 0.0); self.m.evento("conectou", 0.5)
+        self.assertEqual(registro(self.m.evento("tique", 4.0))["como_fechou"], "sem_fala")
+
+
+class TestEncerrarComFalaNova(unittest.TestCase):
+    """25/11 (MK1 18:12): she ended the conversation 20 ms after the person started a new sentence. Her own close
+    (encerrar_conversa or a thank-you) waits while someone who started speaking after her answer is still speaking;
+    TV or chatter that was already running when she stopped does not hold it."""
+
+    def setUp(self):
+        self.m = Maestro(Ajustes(only_wake_word_interrupts=True))
+        self.m.evento("palavra", 0.0); self.m.evento("conectou", 0.5)
+        self.m.evento("fala_comecou", 1.0); self.m.evento("fala_parou", 2.0)
+        self.m.evento("ela_comecou", 3.0); self.m.evento("resposta_completa", 4.0)
+        self.m.evento("ela_parou", 4.1)
+
+    def test_fala_nova_segura_o_encerrar(self):
+        self.m.evento("fala_comecou", 4.3)
+        self.assertEqual(self.m.evento("encerrar", 4.32), [])
+        self.assertEqual(self.m.estado, "ouvindo")
+        self.m.evento("fala_parou", 6.0)
+        acoes = self.m.evento("tique", 30.0)  # nothing else came: the usual deadlines still close it
+        self.assertIn(("desconectar", None), acoes)
+        self.assertEqual(registro(acoes)["encerrar_ignorado"], 1)
+
+    def test_agradecimento_tambem_espera(self):
+        self.m.evento("fala_comecou", 4.3)
+        self.assertEqual(self.m.evento("encerrar", 4.4, "agradecimento"), [])
+
+    def test_sem_fala_nova_fecha_na_hora(self):
+        self.assertIn(("desconectar", None), self.m.evento("encerrar", 4.5))
+
+    def test_fala_ja_terminada_nao_segura(self):
+        self.m.evento("fala_comecou", 4.3); self.m.evento("fala_parou", 4.8)
+        self.assertIn(("desconectar", None), self.m.evento("encerrar", 5.0))
+
+    def test_som_que_ja_rolava_quando_ela_parou_nao_segura(self):
+        m = Maestro(Ajustes(only_wake_word_interrupts=False))
+        m.evento("palavra", 0.0); m.evento("conectou", 0.5)
+        m.evento("fala_comecou", 1.0)  # TV, never stops
+        m.evento("ela_comecou", 3.0); m.evento("ela_parou", 4.0)
+        self.assertIn(("desconectar", None), m.evento("encerrar", 4.5))
