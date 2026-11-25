@@ -160,7 +160,7 @@
             "record_activations": "Record activations"
           },
           "data_description": {
-            "continuous_speech_limit": "Closes the conversation when the satellite hears sound with no pause for this many seconds, while she is not speaking and nothing is pending with the brain. It stops TV, music or noise that the speech detector takes for a voice from keeping the microphone open. Speech that was already going on when the conversation opened, or that began during her answer, holds the conversation open up to this limit. Normal speech has pauses that restart the count, so a long dictation is only cut if it never pauses. 0 = off: a sound that never stops then keeps the conversation open with no limit. Recommended: 15 s.",
+            "continuous_speech_limit": "Closes the conversation when the satellite hears sound with no pause for this many seconds, while she is not speaking and nothing is pending with the brain. It stops TV, music or noise that the speech detector takes for a voice from keeping the microphone open. Speech that was already going on when the conversation opened, or that began during her answer, holds the conversation open up to this limit. A pause restarts the count, but the detector may not notice the short pauses of a long dictation (on 10/11 a 15 s reminder dictation was cut). 0 = off: no dictation is cut, but a sound that never stops keeps the conversation open with no limit. Default: 15 s.",
             "ducking_restore": "How long until the music volume comes back",
             "ota_channel": "alpha gets pre-releases first; stable gets them after the alpha soak",
             "record_ambient": "Records from 08:00 to 22:00 to train the wake words; it goes to the VM overnight",
