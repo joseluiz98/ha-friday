@@ -160,7 +160,7 @@
             "record_activations": "Gravar ativações"
           },
           "data_description": {
-            "continuous_speech_limit": "Encerra a conversa quando o satélite ouve som sem pausa por esse tempo, com ela calada e nada pendente no cérebro. Impede que TV, música ou ruído que o detector de fala confunde com voz deixem o microfone aberto. A fala que já estava em andamento quando a conversa abriu, ou que começou durante a resposta dela, segura a conversa aberta até esse limite. Uma pausa recomeça a contagem, mas o detector pode não perceber as pausas curtas de um ditado longo (em 10/11 um lembrete ditado de 15 s foi cortado). 0 = desligado: nenhum ditado é cortado, mas um som que não para mantém a conversa aberta sem limite. Padrão: 15 s.",
+            "continuous_speech_limit": "Encerra a conversa após esse tempo de som sem pausa (TV, música, ruído) com ela calada. Também pode cortar um ditado longo sem pausas. 0 = desligado: nada é cortado, mas som contínuo deixa o microfone aberto. Padrão: 15 s.",
             "ducking_restore": "Quanto tempo até o volume da música voltar",
             "ota_channel": "alpha recebe as pre-releases primeiro; stable recebe depois da prova do alpha",
             "record_ambient": "Grava das 08:00 às 22:00 para treinar as palavras; vai para a VM de madrugada",
