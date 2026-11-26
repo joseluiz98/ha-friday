@@ -247,6 +247,30 @@ def dois_feixes_permitido(cfg: dict, placa: str) -> bool:
             and cfg.get("only_wake_word_interrupts") is not False)
 
 
+def motivo_v046(cfg: dict, placa: str, arg) -> str:
+    """Por que uma conversa NÃO tenta dois feixes (None = pode tentar): `not_permitted`, `whisper` ou `no_wake_word`."""
+    if not dois_feixes_permitido(cfg, placa):
+        return "not_permitted"
+    if arg and arg.get("whisper"):
+        return "whisper"
+    return None if arg and arg.get("wake_word") else "no_wake_word"
+
+
+CHAVES_DOIS_FEIXES = ("two_beam_listening", "tv_azimuth_deg", "tv_elevation_deg", "caller_margin_db", "tv_margin_db",
+                      "caller_silence_s", "turn_max_s", "only_wake_word_interrupts")
+
+
+def resumo_dois_feixes(cfg: dict, placa: str) -> dict:
+    """Corpo do `two_beam_config` (rastreabilidade): o que está ligado e, se não pode, por quê."""
+    permitido = dois_feixes_permitido(cfg, placa)
+    por_que = (None if permitido else "board" if placa != "xvf3800"
+               else "off" if cfg.get("two_beam_listening") is False else "only_word_off")
+    return {"enabled": cfg.get("two_beam_listening") is not False, "permitted": permitido, "why_not": por_que,
+            "tv_azimuth_deg": cfg.get("tv_azimuth_deg"), "tv_elevation_deg": cfg.get("tv_elevation_deg"),
+            "caller_margin_db": cfg.get("caller_margin_db"), "tv_margin_db": cfg.get("tv_margin_db"),
+            "caller_silence_s": cfg.get("caller_silence_s"), "turn_max_s": cfg.get("turn_max_s")}
+
+
 def validar_mudancas(atual: dict, mudancas: dict) -> dict:
     if not isinstance(mudancas, dict):
         raise ValueError("corpo precisa ser um objeto")
