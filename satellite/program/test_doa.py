@@ -334,3 +334,83 @@ class TestLerContinuoDoisFeixes(unittest.TestCase):
             d.alimentar(t, math.radians(90))
         self.assertAlmostEqual(math.degrees(doa.direcao_da_palavra(d, 10.0, None)), 90, delta=1)
         self.assertIsNone(doa.direcao_da_palavra(d, 10.0, (math.radians(100), 0.0)))
+
+
+class TestAprenderTv(unittest.TestCase):
+    class Placa:
+        """Fake board: a clock the sleeps advance; azimuth/energy by phase; optional failure on the Nth write."""
+        def __init__(self, az_deg=12.0, espalhado=False, pico=45, falha_na_escrita=None, parar_na_elev=None):
+            self.t, self.az, self.espalhado, self.pico = 0.0, az_deg, espalhado, pico
+            self.escritas, self.falha, self.phi = [], falha_na_escrita, 0
+            self.parar_na_elev, self.n = parar_na_elev, 0
+
+        def agora(self): return self.t
+        def dormir(self, s): self.t += s
+
+        def write(self, nome, valores):
+            self.escritas.append((nome, list(valores)))
+            if self.falha is not None and len(self.escritas) == self.falha:
+                raise OSError("usb")
+            if nome == "AEC_FIXEDBEAMSELEVATION_VALUES":
+                self.phi = round(math.degrees(valores[0]))
+                self.n += 1
+            return True
+
+        def read_bounded(self, nome):
+            if nome == "AEC_AZIMUTH_VALUES":
+                off = (int(self.t * 8) % 5 - 2) * (30 if self.espalhado else 1)
+                return [0.0, 0.0, math.radians(self.az + off) % (2 * math.pi), 0.0]
+            return [1.0 - abs(self.phi - self.pico) / 100, 1.0, 1.0, 0.0]
+
+        def parar(self):
+            return self.parar_na_elev is not None and self.n >= self.parar_na_elev
+
+    def rodar(self, p, hist=None):
+        return doa.aprender_tv(p, p.agora, p.dormir, p.parar, hist)
+
+    def fim_liberado(self, p):
+        self.assertEqual(p.escritas[-4:], [("AEC_FIXEDBEAMSONOFF", [0]), ("AEC_FIXEDBEAMSELEVATION_VALUES", [0.0, 0.0]),
+                                           ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])])
+
+    def test_calibration_stores_median_and_best_elevation(self):
+        p = self.Placa()
+        r = self.rodar(p)
+        self.assertEqual((r["result"], r["elevation_deg"]), ("stored", 45))
+        self.assertAlmostEqual(r["azimuth_deg"], 12, delta=1)
+        self.assertGreaterEqual(r["frames"], 150)
+        self.assertEqual(len(r["energy_by_elevation"]), 6)
+        self.fim_liberado(p)
+
+    def test_calibration_refuses_spread(self):
+        r = self.rodar(self.Placa(espalhado=True))
+        self.assertEqual((r["result"], r["reason"]), ("refused", "spread"))
+
+    def test_calibration_refuses_near_caller(self):
+        r = self.rodar(self.Placa(), hist=rad(40))
+        self.assertEqual((r["result"], r["reason"]), ("refused", "near_caller"))
+        self.assertEqual(self.rodar(self.Placa(), hist=rad(200))["result"], "stored")
+
+    def test_calibration_refuses_too_few_frames(self):
+        p = self.Placa()
+        p.read_bounded = lambda nome: [0.0, 0.0, 0.0, 0.0]  # no energy on the free beam
+        self.assertEqual(self.rodar(p)["reason"], "too_few_frames")
+
+    def test_calibration_abort_releases(self):
+        p = self.Placa(parar_na_elev=3)
+        r = self.rodar(p)
+        self.assertEqual((r["result"], r["reason"]), ("refused", "aborted"))
+        self.fim_liberado(p)
+
+    def test_calibration_always_ends_released(self):
+        p = self.Placa()
+        p.falha = 1 + 3 * 3 + 1  # inside the sweep, after a few elevations
+        r = self.rodar(p)
+        self.assertEqual((r["result"], r["reason"]), ("refused", "error"))
+        self.fim_liberado(p)
+
+    def test_busy_regra_does_not_lock(self):
+        trava = doa.TravaFeixe(Link(), lambda m: None)
+        regra = doa.Regra(doa.Direcao(), trava, lambda: True)
+        regra.ocupada = True
+        self.assertIsNone(regra.palavra(1.0))
+        self.assertFalse(trava.travado)

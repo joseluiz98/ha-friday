@@ -22,7 +22,7 @@ The settings dialog of each satellite (gear → Advanced) keeps its help texts s
 
 **When it falls back to v0.4.6 behavior.** With no direction lock on the caller, with no wake word starting the conversation, in whisper mode, or on a Jabra (which has no beams), the satellite behaves as in v0.4.6: the continuous sound cutoff applies and nothing is filtered by direction.
 
-**Learn TV direction.** The "Learn TV direction" button listens for a short time while the TV is playing and stores `tv_azimuth` (degrees as the board sees it; -1 = no TV) and `tv_elevation`. The `TV direction learning` event reports `stored` or `refused`. It refuses when the room is too quiet, when the sound has no stable direction, or when the direction is too close to where the caller usually stands. Set the values by hand if you prefer.
+**Learn TV direction.** The "Learn TV direction" button listens for a short time while the TV is playing and stores `tv_azimuth` (degrees as the board sees it; -1 = no TV) and `tv_elevation`. The `TV direction learning` event reports `stored` or `refused`. It refuses with one of these reasons: `too_few_frames` (the room is too quiet), `spread` (the sound has no stable direction), `near_caller` (the direction is too close to where the caller usually stands), `aborted` (a conversation started meanwhile) or `error` (a USB failure). The board is always released at the end. Set the values by hand if you prefer.
 
 **The margins.**
 - `caller_margin` (dB): how much louder the caller's beam must be than the TV beam for the sound to count as the caller.

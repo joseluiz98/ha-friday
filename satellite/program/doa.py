@@ -183,9 +183,13 @@ class Regra:
         self._dois_feixes, self._tv = dois_feixes, tv
         self.dois_feixes_ativo = False
         self.ultima_decisao = ""
+        self.ocupada = False  # the TV calibration owns the board: no lock on a wake word meanwhile
 
     def palavra(self, agora: float):
         """Na palavra: trava se a direção for consistente; devolve os graus para o anel."""
+        if self.ocupada:
+            self.ultima_decisao = "board_busy"
+            return None
         if self._dois_feixes():
             return self._palavra_dois_feixes(agora)
         if not self._ligada():
@@ -288,4 +292,87 @@ def ler_continuo(link, direcao: Direcao, parar: threading.Event, relogio=time.mo
             try:
                 ao_ciclo(t)
             except Exception:  # noqa: BLE001 - the poll thread never dies from the re-aim
+                pass
+
+
+CALIB_AZIMUTE_S = 20.0
+CALIB_ELEVACAO_S = 3.0
+CALIB_MIN_QUADROS = 40
+CALIB_DISPERSAO_MAX_GRAUS = 30.0
+CALIB_PERTO_DO_FALANTE_GRAUS = 45.0
+CALIB_ELEVACOES = (0, 15, 30, 45, 60, 75)
+
+
+def _mediana_circular(rads):
+    return min(rads, key=lambda c: sum(_dif_graus(c, r) for r in rads)) % (2 * math.pi)
+
+
+def _percentil90(valores):
+    v = sorted(valores)
+    return v[max(0, math.ceil(0.9 * len(v)) - 1)]
+
+
+def aprender_tv(link, agora, dormir, parar, historico_rad):
+    """Learn where the TV is (spec D5). Blocking: the program runs it in a thread. Free beam azimuth for 20 s (circular
+    median of the frames with energy), then a sweep of the fixed beam's elevation (3 s each, highest mean energy wins).
+    Always releases the board at the end. Returns result/reason/azimuth_deg/elevation_deg/spread_deg/frames and
+    energy_by_elevation (the means, rounded; empty if the sweep did not run)."""
+    r = {"result": "refused", "reason": None, "azimuth_deg": None, "elevation_deg": None, "spread_deg": None,
+         "frames": 0, "energy_by_elevation": []}
+    try:
+        link.write("AEC_FIXEDBEAMSONOFF", [0])
+        azimutes, t0 = [], agora()
+        while agora() - t0 < CALIB_AZIMUTE_S:
+            if parar():
+                r["reason"] = "aborted"
+                return r
+            e, az = link.read_bounded("AEC_SPENERGY_VALUES"), link.read_bounded("AEC_AZIMUTH_VALUES")
+            if e and az and len(e) > 2 and len(az) > 2 and e[2] > 0 and not math.isnan(az[2]):
+                azimutes.append(az[2] % (2 * math.pi))
+            dormir(PERIODO_LEITURA_S)
+        r["frames"] = len(azimutes)
+        if len(azimutes) < CALIB_MIN_QUADROS:
+            r["reason"] = "too_few_frames"
+            return r
+        theta = _mediana_circular(azimutes)
+        dispersao = _percentil90([_dif_graus(a, theta) for a in azimutes])
+        r["azimuth_deg"], r["spread_deg"] = round(math.degrees(theta) % 360, 1), round(dispersao, 1)
+        if dispersao > CALIB_DISPERSAO_MAX_GRAUS:
+            r["reason"] = "spread"
+            return r
+        if historico_rad is not None and _dif_graus(theta, historico_rad) <= CALIB_PERTO_DO_FALANTE_GRAUS:
+            r["reason"] = "near_caller"
+            return r
+        medias = []
+        for fi in CALIB_ELEVACOES:
+            if parar():
+                r["reason"] = "aborted"
+                return r
+            phi = math.radians(fi)
+            link.write("AEC_FIXEDBEAMSAZIMUTH_VALUES", [theta, theta])
+            link.write("AEC_FIXEDBEAMSELEVATION_VALUES", [phi, phi])
+            link.write("AEC_FIXEDBEAMSONOFF", [1])
+            soma, n, t1 = 0.0, 0, agora()
+            while agora() - t1 < CALIB_ELEVACAO_S:
+                if parar():
+                    r["reason"] = "aborted"
+                    return r
+                e = link.read_bounded("AEC_SPENERGY_VALUES")
+                if e:
+                    soma, n = soma + e[0], n + 1
+                dormir(PERIODO_LEITURA_S)
+            medias.append(soma / n if n else 0.0)
+            r["energy_by_elevation"] = [round(m, 4) for m in medias]
+        r["elevation_deg"] = CALIB_ELEVACOES[max(range(len(medias)), key=medias.__getitem__)]
+        r["result"] = "stored"
+        return r
+    except Exception:  # noqa: BLE001 - a USB failure ends the routine; the cleanup below still runs
+        r.update(result="refused", reason="error", elevation_deg=None)
+        return r
+    finally:
+        for nome, valores in (("AEC_FIXEDBEAMSONOFF", [0]), ("AEC_FIXEDBEAMSELEVATION_VALUES", [0.0, 0.0]),
+                              ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])):
+            try:
+                link.write(nome, valores)
+            except Exception:  # noqa: BLE001
                 pass
