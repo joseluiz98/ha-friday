@@ -160,7 +160,7 @@
             "record_activations": "Gravar ativações"
           },
           "data_description": {
-            "continuous_speech_limit": "0 = desligado",
+            "continuous_speech_limit": "Encerra a conversa após esse tempo de som sem pausa (TV, música, ruído) com ela calada. Também pode cortar um ditado longo sem pausas. 0 = desligado: nada é cortado, mas som contínuo deixa o microfone aberto. Padrão: 15 s.",
             "ducking_restore": "Quanto tempo até o volume da música voltar",
             "ota_channel": "alpha recebe as pre-releases primeiro; stable recebe depois da prova do alpha",
             "record_ambient": "Grava das 08:00 às 22:00 para treinar as palavras; vai para a VM de madrugada",
