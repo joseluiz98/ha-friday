@@ -156,3 +156,16 @@ The VM runs the v0.3.9 server agent, which has neither gate B nor `built_by`.
 - [ ] MK1 updates to v0.3.10 by itself: voice program running, wake word, music, volume, mute.
 - [ ] v0.3.10 image builds, and a card flashed with it on the XVF3800 Pi speaks its onboarding.
 - [ ] Forced rollback test on MK1 is deferred to v0.3.11, the first activation run by the new apply.
+
+## Amendment, 26/11/2026: an unchanged server agent is not an old one
+
+v0.4.6 changed no server agent file, so the installer kept the agent and its version stayed v0.4.5. The `built_by`
+rule compared version labels only, refused the package (`server_older`) and MK1 got nothing, with no log or alert.
+
+- An older-labelled agent now packs and serves a release when its code is the release's: the installer's own rule
+  (`server_install.needs_install` on the release's `server-agent` paths) would keep it. Anything not proven (unknown
+  agent sha, unreadable repo, no `server-agent` paths in the manifest) is still refused.
+- No file hashing was added: `git diff` between the two commits already compares content by hash, and a second rule
+  could disagree with the installer again. Hand edits on a host are `scripts/drift.py`'s job.
+- `changed_paths` runs with `--no-renames`, so a file moved out of a component counts as a change.
+- `server_older` and `package_missing` are logged and listed in `ota_waiting_server`, like `waiting_server`.
