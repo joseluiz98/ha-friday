@@ -681,6 +681,8 @@ class Maestro:
             self._fala_desde = agora
             if self._prazo and self._prazo[0] in ("espera_inicial", "continuacao"):
                 self._prazo = None
+            if self.pi_turns and self._mic_fechado:  # the mic is cut: no audio would reach a window opened now
+                return []
             return self._aviso(e, "speech_started")
         if nome == "fala_parou":
             self._detector_falando = False
@@ -712,8 +714,13 @@ class Maestro:
                 self._recado, self._resposta_normal = True, True  # 21/11: toda resposta fecha o mic; só a palavra corta
             if self._recado:
                 self._mic_fechado = False
+                if self.pi_turns and self._alguem_falando:
+                    # two-beam: her answer closes the mic over a turn still open at the bot: close it here, so the
+                    # maestro knows nobody is "speaking" for the bot; `_reabrir`/the word reopen it if she is still talking
+                    reabrir = [("avisar_bot", "speech_stopped")]
+                    self._alguem_falando, self._fala_desde = False, None
                 # 19/11 (revisão I1): a luz acompanha o mic
-                reabrir = [("microfone", False), ("luz", "respondendo" if self._resposta_normal else "falando")]
+                reabrir += [("microfone", False), ("luz", "respondendo" if self._resposta_normal else "falando")]
             elif self._mic_fechado:  # 04/11: ela vai responder: o microfone volta (interrupção e continuação)
                 self._mic_fechado = False
                 reabrir = [("microfone", True), ("luz", "respondendo")]

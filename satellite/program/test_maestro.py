@@ -1442,6 +1442,33 @@ class TestPiTurns(unittest.TestCase):
         m.evento("fala_comecou", 3.9)  # the word begins the segment; the detector hears speech
         self.assertEqual(_bot(m.evento("palavra", 4.0)), ["speech_started"])
 
+    def test_pi_turns_close_mic_awaiting_reply_leaves_no_orphan_window(self):
+        m = self.novo(close_mic_awaiting_reply=True)
+        self.assertEqual(_bot(m.evento("fala_comecou", 1.0)), ["speech_started"])
+        self.assertEqual(_bot(m.evento("fala_parou", 2.0)), ["speech_stopped"])  # the mic is cut now
+        self.assertEqual(_bot(m.evento("fala_comecou", 3.0)), [])  # a follow-up with the mic cut: no window
+        self.assertEqual(_bot(m.evento("fala_parou", 4.0)), [])  # and no stop either
+
+    def test_pi_turns_answer_starting_over_the_caller_closes_the_turn_and_reopens_it(self):
+        m = self.novo(only_wake_word_interrupts=True)
+        self.assertEqual(_bot(m.evento("fala_comecou", 1.0)), ["speech_started"])
+        acoes = m.evento("ela_comecou", 1.5)  # her answer closes the mic while the caller is still talking
+        self.assertEqual(_bot(acoes), ["speech_stopped"])
+        self.assertLess(acoes.index(("avisar_bot", "speech_stopped")), acoes.index(("microfone", False)))
+        self.assertEqual(_bot(m.evento("fala_parou", 2.0)), [])  # swallowed by the recado: no orphan stop
+        self.assertEqual(_bot(m.evento("fala_comecou", 2.5)), [])  # she is still answering
+        m.evento("resposta_completa", 3.0)
+        acoes = m.evento("ela_parou", 3.2)  # the recado ends while the caller talks: the window reopens
+        self.assertEqual(_bot(acoes), ["speech_started"])
+        self.assertEqual(_bot(m.evento("fala_parou", 4.0)), ["speech_stopped"])
+
+    def test_pi_turns_caller_resuming_across_a_recado_keeps_a_window(self):
+        m = self.novo(only_wake_word_interrupts=True)
+        m.evento("fala_comecou", 1.0)
+        m.evento("ela_comecou", 1.5)  # stop sent by the maestro, caller still talking
+        acoes = m.evento("palavra", 2.0)  # the word cuts her: the speech that is running starts a new window
+        self.assertEqual(_bot(acoes), ["speech_started"])
+
     def test_whisper_speech_events_unchanged(self):
         m = Maestro(Ajustes())
         m.evento("palavra", 0.0, {"whisper": True})

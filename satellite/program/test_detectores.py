@@ -549,8 +549,28 @@ class TestQuemChamou(unittest.TestCase):
         self.assertEqual(e.ultimas(), (None, None))
         e.atualizar(1.0, [1, 2, 3, 4])
         self.assertEqual(e.ultimas(), ((1.0, 2.0, 3.0), 1.0))
-        e.atualizar(2.0, None)
-        self.assertEqual(e.ultimas(), (None, None))
+        e.atualizar(2.0, None)  # a failed read keeps the last good values and instant (I6)
+        self.assertEqual(e.ultimas(), ((1.0, 2.0, 3.0), 1.0))
+
+    def test_one_failed_read_is_not_stale_before_one_second(self):
+        o = OuvidoDoisFeixes(DetectorQuemChamou(True), EnergiaFeixes(), ResumoDoisFeixes())
+        o.energia.atualizar(10.0, [4.0, 1.0, 1.0, 1.0])
+        o.energia.atualizar(10.125, None)  # one transient failure
+        linhas = []
+        for i in range(8):  # 0.64 s later the energies are still valid: still `caller`, no pass-through, no line
+            eff, _, l = o.alimentar(0.9, 10.2 + i * 0.08, True, True, "ouvindo")
+            linhas += l
+            self.assertEqual(o.det.motivo_passagem, None)
+            self.assertEqual(eff, 1.0)
+        self.assertEqual(linhas, [])
+        eff, _, l = o.alimentar(0.9, 11.2, True, True, "ouvindo")  # failing for over 1 s: stale
+        self.assertEqual(o.det.motivo_passagem, "stale")
+
+    def test_both_zero_is_unclear(self):
+        d = DetectorQuemChamou(True)
+        self.assertEqual(_q(d, 0.9, 0, 0, 0.0), (0.9, "unclear"))
+        self.assertEqual(_q(d, 0.9, 0.5, 0, 0.1), (1.0, "caller"))  # a silent TV beam with a live caller beam is still the caller
+        self.assertEqual(_q(d, 0.9, 0, 1, 0.2), (0.0, "tv"))
 
 
 class TestTeto(unittest.TestCase):
@@ -579,10 +599,9 @@ class TestResumoDoisFeixes(unittest.TestCase):
 
     def test_summary_counts_turns_by_reason(self):
         r = ResumoDoisFeixes(falhas_ini=2)
-        r.turno("pause", self.STATS)
-        r.turno("pause", self.STATS)
-        r.turno("ceiling", self.STATS)
-        r.turno("caller_voice", self.STATS)
+        for por in ("pause", "pause", "ceiling", "caller_voice"):
+            r.turno(por)
+            r.somar(self.STATS)
         r.reapontou()
         r.energia_ruim(2.04)
         f = r.fechar(falhas=5, lock_s=12.34, release="closed")
@@ -611,14 +630,13 @@ class TestResumoDoisFeixes(unittest.TestCase):
 
 
 class TestJanelaPi(unittest.TestCase):
-    def test_window_closes_before_the_mic_does(self):
+    def test_window_tracks_started_and_stopped(self):
         j = JanelaPi()
-        self.assertFalse(j.mic_fechou())
+        self.assertFalse(j.aberta)
         j.enviou("speech_started")
-        self.assertTrue(j.mic_fechou())
-        self.assertFalse(j.mic_fechou())
-        j.enviou("speech_started"); j.enviou("speech_stopped")
-        self.assertFalse(j.mic_fechou())
+        self.assertTrue(j.aberta)
+        j.enviou("speech_stopped")
+        self.assertFalse(j.aberta)
 
 
 class _Energia:

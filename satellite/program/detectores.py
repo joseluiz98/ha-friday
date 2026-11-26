@@ -171,12 +171,12 @@ class EnergiaFeixes:
         self._valores, self._t = None, None
 
     def atualizar(self, t, valores):
-        """`valores` None = a leitura falhou (descarta o que havia)."""
+        """`valores` None = a leitura falhou: o último valor bom e seu instante ficam, e quem lê decide pela
+        validade (1 s) se já está velho; uma falha isolada não vira passagem."""
         with self._lock:
             if valores is None or len(valores) < 3:
-                self._valores, self._t = None, None
-            else:
-                self._valores, self._t = (float(valores[0]), float(valores[1]), float(valores[2])), t
+                return
+            self._valores, self._t = (float(valores[0]), float(valores[1]), float(valores[2])), t
 
     def ultimas(self):
         with self._lock:
@@ -243,7 +243,9 @@ class DetectorQuemChamou:
         else:
             eA, eT = energias[0], energias[1]
             razao = 10 * math.log10(eA / eT) if eA > 0 and eT > 0 else None
-            if eT <= 0 or (razao is not None and razao >= self.margem_quem_chamou_db):
+            if eA <= 0 and eT <= 0:  # the board reports no speech energy in either beam: nothing says who is talking
+                classe, eff = "unclear", prob
+            elif eT <= 0 or (razao is not None and razao >= self.margem_quem_chamou_db):
                 classe, eff = "caller", 1.0
             elif eA <= 0 or (razao is not None and razao <= -self.margem_tv_db):
                 classe, eff = "tv", 0.0
@@ -298,11 +300,6 @@ class JanelaPi:
         elif tipo == "speech_stopped":
             self.aberta = False
 
-    def mic_fechou(self) -> bool:
-        """True when the window is open and must be closed before the mic closes (and marks it closed)."""
-        aberta, self.aberta = self.aberta, False
-        return aberta
-
 
 class ResumoDoisFeixes:
     """Accumulates one two-beam conversation for the single `two_beam_summary` line (pure, no I/O, no clock)."""
@@ -321,10 +318,10 @@ class ResumoDoisFeixes:
             self.frames[k] = self.frames.get(k, 0) + n
         self.tv_runs += stats.get("tv_runs", 0)
 
-    def turno(self, por, stats):
+    def turno(self, por):
+        """A speech_stopped really went to the bot (a swallowed `fala_parou` is not a turn)."""
         self.turnos += 1
         self.por[por] += 1
-        self.somar(stats)
 
     def reapontou(self):
         self.reaims += 1
@@ -428,7 +425,7 @@ class OuvidoDoisFeixes:
         if por == "ceiling":
             dur = 0.0 if self._t_turno is None else agora - self._t_turno
             linhas.append({"two_beam_turn_ceiling": {"turn_s": r1(dur), "frames": stats["frames"]}})
-        self.resumo.turno(por, stats)
+        self.resumo.somar(stats)  # the frames count whether or not the stop reaches the bot; the turn does not
         self.det.zerar_estatisticas()
         return payload, linhas
 

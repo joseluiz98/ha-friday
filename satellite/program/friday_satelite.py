@@ -89,6 +89,7 @@ class Satelite:
             xvf_link.apply_startup(self.xvf, self.cfg, mudo=bool(self.cfg.get("mudo")))
         # 17/11 (DOA v0): direção e trava de feixe só no XVF; a regra lê o switch Beam lock a cada palavra
         self.doa_dir = doa.Direcao() if self.xvf is not None else None
+        self.doa_livre = doa.Direcao() if self.xvf is not None else None  # free-running beam azimuth (two-beam re-aim)
         self.doa_trava = doa.TravaFeixe(self.xvf, log=self._log_doa) if self.xvf is not None else None
         # two-beam listening (spec 2026-11-26): decided per conversation at connect (`_travar_na_palavra`)
         self.dois_feixes, self._dois_feixes_pedido = False, False
@@ -425,17 +426,25 @@ class Satelite:
         self.janela_pi.aberta, self._fim_payload, self._reaim_ativo = False, None, False
         self.dois_feixes = True
 
+    def _escuta_dois_feixes(self):
+        """The poll reads the beam energies only while the beams are locked: after the 90 s ceiling released them the
+        energies come from the auto-tracking beams, not caller/TV, so the detector must pass through (stale)."""
+        return bool(self.dois_feixes and self.doa_trava is not None and self.doa_trava.travado)
+
     def _ciclo_doa(self, t):
         """Roda na thread da DoA, a cada leitura em dois feixes: entre o fim da resposta e a próxima fala, re-aponta o feixe A."""
         trava = self.doa_trava
         if not self._reaim_ativo or not trava.travado or trava.theta_a is None:
             return
         theta = self.reaponta.decidir(t, trava.theta_a, trava.theta_t)
-        if theta is not None:
-            self._reaim_ativo = False
+        if theta is not None:  # `_reapontar` closes the window (one re-aim per window), after re-checking it on the loop
             self.loop.call_soon_threadsafe(self._reapontar, theta, self.reaponta.ultimo_polls, "follow_up")
 
     def _reapontar(self, theta, polls, causa):
+        if causa == "follow_up" and not self._reaim_ativo:  # a turn began (or the window closed) since the poll decided
+            return
+        if causa == "follow_up":
+            self._reaim_ativo = False
         if self.dois_feixes and self.doa_trava.reapontar(theta, causa, polls):
             self.anel.fixar_direcao(math.degrees(theta) % 360)
 
@@ -452,14 +461,15 @@ class Satelite:
             if ouvido is not None:
                 agora = time.monotonic()
                 release = self.doa_trava.motivo_soltura or "closed"
-                print(json.dumps(ouvido.fechar(agora, 0.0 if desde is None else agora - desde, release)), flush=True)
+                fim = self.doa_trava.soltada_em or agora  # after the 90 s ceiling the lock was already over
+                print(json.dumps(ouvido.fechar(agora, 0.0 if desde is None else max(0.0, fim - desde), release)), flush=True)
             self.dois_feixes, self.ouvido, self._fim_payload, self._reaim_ativo = False, None, None, False
             self.janela_pi.aberta = False
         if not self.doa_trava.travado:
             self.anel.fixar_direcao(None)
 
     def _despachar(self, nome, valor=None):
-        if nome != "tique":  # 06/10: rastro no journal para entender fechamentos (sem áudio)
+        if nome not in ("tique", "fala_quem_chamou"):  # 06/10: rastro no journal para entender fechamentos (sem áudio)
             print(json.dumps({"evento": nome, "valor": valor, "estado": self.maestro.estado}), flush=True)
         palavra_corta = (nome == "palavra" and self.dois_feixes and self.maestro.estado in ESTADOS_DE_CONVERSA
                          and self.maestro.palavra_agiria(valor))
@@ -470,7 +480,7 @@ class Satelite:
         for tipo, arg in self.maestro.evento(nome, time.monotonic(), valor):
             self._agir(tipo, arg)
         if palavra_corta:  # the word cut her answer inside a two-beam conversation: beam A goes to who said it
-            theta = doa.direcao_da_palavra(self.doa_dir, time.monotonic(), self._tv_cfg())
+            theta = doa.direcao_da_palavra(self.doa_livre, time.monotonic(), self._tv_cfg(), self.doa_trava.theta_a)
             if theta is not None:
                 self._reapontar(theta, 0, "wake_word")
         if nome == "ela_comecou" and self.cfg.get("no_follow_up_while_music", True):
@@ -555,6 +565,9 @@ class Satelite:
         elif tipo == "cortar":
             if self.conexao:
                 self.conexao.enviar_silencio(1.5)
+            if self.dois_feixes and self.janela_pi.aberta:  # the green button during her speech: the window must close
+                self._fim_payload = None
+                self._agir("avisar_bot", "speech_stopped")
             self.microfone_aberto = False
         elif tipo == "microfone":
             if arg:  # 21/11: abre o microfone mandando antes o que se guardou na pausa
@@ -654,6 +667,7 @@ class Satelite:
                     else:  # the payload the capture thread took when the detector stopped, or one built now
                         dados = self._fim_payload or self.ouvido.fim_agora(agora, *self._beam_deg())[0]
                         self._fim_payload = None
+                        self.ouvido.resumo.turno(dados["by"])
                     self.janela_pi.enviou(arg)
                 self.conexao.enviar_mensagem(arg, dados)
         elif tipo == "frase":  # spec 2026-11-05: frase pré-gravada do primeiro boot
@@ -1515,7 +1529,8 @@ class Satelite:
                 agora = time.monotonic()
                 prob_fala, postar, linhas = ouvido.alimentar(prob_fala, agora, self.microfone_aberto, df.falando,
                                                              self.maestro.estado)
-                df.max_quadros = round(self.cfg["turn_max_s"] / 0.08)
+                # no ceiling split while the mic is cut waiting for her reply: a split would open a window with no audio
+                df.max_quadros = None if self.maestro._mic_fechado else round(self.cfg["turn_max_s"] / 0.08)
                 for linha in linhas:
                     print(json.dumps(linha), flush=True)
                 if postar:
@@ -1594,8 +1609,8 @@ async def principal():
     em_thread(s.captura); em_thread(s.botao)
     if s.doa_dir is not None:  # 17/11: DOA v0 — leitura contínua da direção (só no XVF)
         threading.Thread(target=doa.ler_continuo, args=(s.xvf, s.doa_dir, threading.Event()), daemon=True,
-                         kwargs={"energia": s.energia, "reaponta": s.reaponta, "ativo": lambda: s.dois_feixes,
-                                 "ao_ciclo": s._ciclo_doa}).start()
+                         kwargs={"energia": s.energia, "reaponta": s.reaponta, "ativo": s._escuta_dois_feixes,
+                                 "ao_ciclo": s._ciclo_doa, "livre": s.doa_livre}).start()
     presenca = asyncio.ensure_future(s.disputa.laco_presenca())  # spec 2026-11-16: quantos outros satélites estão online
     threading.Thread(target=s.teclas, daemon=True).start()
     threading.Thread(target=s.duck_laco, daemon=True).start()

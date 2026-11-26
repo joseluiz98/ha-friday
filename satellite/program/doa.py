@@ -103,6 +103,7 @@ class TravaFeixe:
         self.travado, self._desde = False, None
         self.theta_a, self.theta_t = None, None
         self.travada_desde, self.motivo_soltura = None, None
+        self.soltada_em = None  # when the beams were last released (the lock duration ends there, not at the close)
 
     def _sufixo_tv(self) -> str:
         return "" if self.theta_t is None else f", beam_t_deg={math.degrees(self.theta_t) % 360:.0f}"
@@ -128,7 +129,7 @@ class TravaFeixe:
             return False
         self.theta_a, self.theta_t = theta_a, theta_t
         self.travado, self._desde = True, self._relogio()
-        self.travada_desde, self.motivo_soltura = self._desde, None
+        self.travada_desde, self.motivo_soltura, self.soltada_em = self._desde, None, None
         self._log(f"trava de feixe: travada em {math.degrees(theta_a) % 360:.0f}°{self._sufixo_tv()}")
         return True
 
@@ -163,7 +164,7 @@ class TravaFeixe:
         ok = self._link.write("AUDIO_MGR_OP_L", [8, 0]) and ok
         self.travado, self._desde = False, None
         self.theta_a, self.theta_t = None, None
-        self.motivo_soltura = motivo
+        self.motivo_soltura, self.soltada_em = motivo, self._relogio()
         self._log("trava de feixe: solta" + sufixo + ("" if ok else " (com falha de USB)"))
         return ok
 
@@ -264,15 +265,21 @@ def mediana_direcoes(caminho: str, agora: float):
     return math.radians(melhor) % (2 * math.pi)
 
 
-def direcao_da_palavra(direcao: Direcao, agora: float, tv=None):
-    """Direction (radians) of a wake word said inside a two-beam conversation: the TV sector never counts."""
+def direcao_da_palavra(direcao: Direcao, agora: float, tv=None, theta_a=None):
+    """Direction (radians) of a wake word said inside a two-beam conversation: the TV sector never counts. `direcao` is
+    fed by the free-running beam (the fixed beams only ever report theta_a or theta_t). Within REAPONTA_DISTANCIA_GRAUS
+    of the current beam A there is nothing to re-aim: None."""
     if tv is not None:
-        return direcao.decidir(agora, excluir=(tv[0], TV_SETOR_GRAUS))
-    return direcao.decidir(agora)
+        theta = direcao.decidir(agora, excluir=(tv[0], TV_SETOR_GRAUS))
+    else:
+        theta = direcao.decidir(agora)
+    if theta is not None and theta_a is not None and _dif_graus(theta, theta_a) < REAPONTA_DISTANCIA_GRAUS:
+        return None
+    return theta
 
 
 def ler_continuo(link, direcao: Direcao, parar: threading.Event, relogio=time.monotonic,
-                 periodo_s: float = PERIODO_LEITURA_S, energia=None, reaponta=None, ativo=None, ao_ciclo=None) -> None:
+                 periodo_s: float = PERIODO_LEITURA_S, energia=None, reaponta=None, ativo=None, ao_ciclo=None, livre=None) -> None:
     """Thread de leitura (só com XVF): alimenta o buffer; falha de USB vira silêncio (o link já registra).
     Dois feixes (`ativo()` verdadeiro): lê também as energias e o azimute livre, com leitura de prazo, e alimenta
     `energia` e `reaponta`; `ao_ciclo(t)` roda a cada leitura nesse modo (o programa decide o re-aim ali)."""
@@ -286,8 +293,12 @@ def ler_continuo(link, direcao: Direcao, parar: threading.Event, relogio=time.mo
         az = link.read_bounded("AEC_AZIMUTH_VALUES")
         if energia is not None:
             energia.atualizar(t, e)
+        az_livre = az[2] if az and len(az) > 2 else None
+        e_livre = e[2] if e and len(e) > 2 else None
         if reaponta is not None:
-            reaponta.alimentar(t, az[2] if az and len(az) > 2 else None, e[2] if e and len(e) > 2 else None)
+            reaponta.alimentar(t, az_livre, e_livre)
+        if livre is not None:  # the free-running beam: the only source that still follows a second speaker
+            livre.alimentar(t, az_livre if e_livre is not None and e_livre > 0 else None)
         if ao_ciclo is not None:
             try:
                 ao_ciclo(t)
@@ -336,7 +347,7 @@ def aprender_tv(link, agora, dormir, parar, historico_rad):
             return r
         theta = _mediana_circular(azimutes)
         dispersao = _percentil90([_dif_graus(a, theta) for a in azimutes])
-        r["azimuth_deg"], r["spread_deg"] = round(math.degrees(theta) % 360, 1), round(dispersao, 1)
+        r["azimuth_deg"], r["spread_deg"] = round(math.degrees(theta) % 360, 1) % 360, round(dispersao, 1)
         if dispersao > CALIB_DISPERSAO_MAX_GRAUS:
             r["reason"] = "spread"
             return r

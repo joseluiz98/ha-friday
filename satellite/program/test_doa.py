@@ -323,6 +323,16 @@ class TestLerContinuoDoisFeixes(unittest.TestCase):
         self.assertEqual(ciclos, [5.0, 5.0])
         self.assertEqual(list(re._polls)[-1], (5.0, 0.3, 2.0))
 
+    def test_two_beam_feeds_the_free_beam_direction_only_with_energy(self):
+        link, livre = self.LinkLeitura(), doa.Direcao()
+        doa.ler_continuo(link, doa.Direcao(), self.Parar(2), relogio=lambda: 5.0, ativo=lambda: True, livre=livre)
+        self.assertAlmostEqual(livre.decidir(5.0, 1.0) or 0.0, 0.0)  # fewer than 3 samples: no decision, but they are in
+        self.assertEqual([a for _, a in livre._amostras], [0.3, 0.3])
+        link.read_bounded = lambda nome: [1.0, 1.0, 0.0, 3.0] if nome == "AEC_SPENERGY_VALUES" else [0.1, 0.2, 0.3, 0.4]
+        livre2 = doa.Direcao()
+        doa.ler_continuo(link, doa.Direcao(), self.Parar(1), relogio=lambda: 6.0, ativo=lambda: True, livre=livre2)
+        self.assertEqual([a for _, a in livre2._amostras], [None])  # no energy on the free beam: no direction
+
     def test_inactive_does_not_touch_the_bounded_reads(self):
         link = self.LinkLeitura()
         doa.ler_continuo(link, doa.Direcao(), self.Parar(2), relogio=lambda: 5.0, ativo=lambda: False)
@@ -334,6 +344,33 @@ class TestLerContinuoDoisFeixes(unittest.TestCase):
             d.alimentar(t, math.radians(90))
         self.assertAlmostEqual(math.degrees(doa.direcao_da_palavra(d, 10.0, None)), 90, delta=1)
         self.assertIsNone(doa.direcao_da_palavra(d, 10.0, (math.radians(100), 0.0)))
+
+
+class TestDirecaoDaPalavraReaponta(unittest.TestCase):
+    def _livre(self, graus):
+        d = doa.Direcao()
+        for t in (9.4, 9.6, 9.8, 10.0):
+            d.alimentar(t, math.radians(graus))
+        return d
+
+    def test_word_from_another_corner_gives_its_direction(self):
+        theta = doa.direcao_da_palavra(self._livre(300), 10.0, (math.radians(200), 0.0), math.radians(45))
+        self.assertAlmostEqual(math.degrees(theta) % 360, 300, delta=1)
+
+    def test_word_within_30_degrees_of_beam_a_is_no_reaim(self):
+        self.assertIsNone(doa.direcao_da_palavra(self._livre(60), 10.0, (math.radians(200), 0.0), math.radians(45)))
+        self.assertIsNotNone(doa.direcao_da_palavra(self._livre(80), 10.0, (math.radians(200), 0.0), math.radians(45)))
+
+    def test_release_time_is_kept_for_the_lock_duration(self):
+        t = [100.0]
+        trava = doa.TravaFeixe(Link(), lambda m: None, teto_s=90.0, relogio=lambda: t[0])
+        trava.travar(1.0)
+        t[0] = 191.0
+        trava.tique()  # ceiling90
+        self.assertEqual((trava.motivo_soltura, trava.soltada_em), ("ceiling90", 191.0))
+        t[0] = 400.0
+        trava.soltar("closed")  # already released: the first release time stands
+        self.assertEqual(trava.soltada_em, 191.0)
 
 
 class TestAprenderTv(unittest.TestCase):
@@ -380,6 +417,12 @@ class TestAprenderTv(unittest.TestCase):
         self.assertGreaterEqual(r["frames"], 150)
         self.assertEqual(len(r["energy_by_elevation"]), 6)
         self.fim_liberado(p)
+
+    def test_calibration_azimuth_near_360_stays_below_360(self):
+        r = self.rodar(self.Placa(az_deg=359.97))
+        self.assertEqual(r["result"], "stored")
+        self.assertLess(r["azimuth_deg"], 360.0)
+        self.assertEqual(r["azimuth_deg"], 0.0)
 
     def test_calibration_refuses_spread(self):
         r = self.rodar(self.Placa(espalhado=True))
