@@ -296,3 +296,41 @@ class TestDoisFeixes(unittest.TestCase):
                 self.assertEqual(len(f.read().splitlines()), 11)
             self.assertAlmostEqual(math.degrees(doa.mediana_direcoes(caminho, now)), 140, delta=3)
             self.assertIsNone(doa.mediana_direcoes(caminho, now + 9 * 86400))  # all too old
+
+
+class TestLerContinuoDoisFeixes(unittest.TestCase):
+    class LinkLeitura:
+        def __init__(self): self.limitadas = []
+        def read(self, nome): return [1.0]
+        def read_bounded(self, nome):
+            self.limitadas.append(nome)
+            return [1.0, 1.0, 2.0, 3.0] if nome == "AEC_SPENERGY_VALUES" else [0.1, 0.2, 0.3, 0.4]
+
+    class Parar:
+        def __init__(self, n): self.n = n
+        def wait(self, _):
+            self.n -= 1
+            return self.n < 0
+
+    def test_two_beam_reads_energy_and_feeds_reaim(self):
+        import threading
+        from detectores import EnergiaFeixes
+        link, en, re, ciclos = self.LinkLeitura(), EnergiaFeixes(), doa.Reaponta(), []
+        doa.ler_continuo(link, doa.Direcao(), self.Parar(2), relogio=lambda: 5.0, energia=en, reaponta=re,
+                         ativo=lambda: True, ao_ciclo=ciclos.append)
+        self.assertEqual(link.limitadas, ["AEC_SPENERGY_VALUES", "AEC_AZIMUTH_VALUES"] * 2)
+        self.assertEqual(en.ultimas(), ((1.0, 1.0, 2.0), 5.0))
+        self.assertEqual(ciclos, [5.0, 5.0])
+        self.assertEqual(list(re._polls)[-1], (5.0, 0.3, 2.0))
+
+    def test_inactive_does_not_touch_the_bounded_reads(self):
+        link = self.LinkLeitura()
+        doa.ler_continuo(link, doa.Direcao(), self.Parar(2), relogio=lambda: 5.0, ativo=lambda: False)
+        self.assertEqual(link.limitadas, [])
+
+    def test_wake_word_direction_excludes_the_tv_sector(self):
+        d = doa.Direcao()
+        for t in (9.4, 9.6, 9.8, 10.0):
+            d.alimentar(t, math.radians(90))
+        self.assertAlmostEqual(math.degrees(doa.direcao_da_palavra(d, 10.0, None)), 90, delta=1)
+        self.assertIsNone(doa.direcao_da_palavra(d, 10.0, (math.radians(100), 0.0)))

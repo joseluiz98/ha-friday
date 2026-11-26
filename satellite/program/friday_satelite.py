@@ -13,8 +13,9 @@ import comandos
 import configuracao as cfgmod
 from arbitragem import ESPERA_DISPUTA_S, ClienteDisputa, novo_claim_id
 from conexao import ConexaoFriday
-from detectores import (DetectorBotaoTelefone, DetectorFala, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
-                        MedidorEco, PicoDaFala, escolher_acao, portao_eco, rms_dbfs, trecho_do_episodio)
+from detectores import (DetectorBotaoTelefone, DetectorFala, DetectorMudo, DetectorPalavra, DetectorQuemChamou, EnergiaFeixes,
+                        EpisodioVerificador, JanelaPi, OuvidoDoisFeixes, RejeicaoEpisodio, ResumoDoisFeixes,
+                        MedidorEco, r1, PicoDaFala, escolher_acao, portao_eco, rms_dbfs, trecho_do_episodio)
 from hardware import AltoFalante, Anel, Captura, CapturaDupla, TeclasVolume
 from maestro import Ajustes, Maestro
 from taxa_captura import TaxaCaptura
@@ -47,6 +48,7 @@ CFG = "/etc/friday-satelite/config.json"
 ID = "/etc/friday-satelite/id"
 SONS = "/home/jose/satelite/sons"
 TIMERS = "/home/jose/satelite/estado/timers.json"  # spec 2026-10-12 §2: sobrevive a reinício
+DIRECOES = "/home/jose/satelite/estado/direcoes.ndjson"  # two-beam: where the callers said the word (7 days, for the TV calibration)
 TIMER_VOZ = os.environ.get("FRIDAY_TIMER_VOICE_DIR", "/home/jose/timer_voz")  # spec 2026-11-24: <id>.wav do aviso de cada timer
 # spec 2026-11-24: o aviso genérico de timer vem junto do programa (imagem e OTA), nunca depende do que o bot mandou
 TIMER_GENERICO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sons", "timer_generico.wav")
@@ -87,10 +89,16 @@ class Satelite:
             xvf_link.apply_startup(self.xvf, self.cfg, mudo=bool(self.cfg.get("mudo")))
         # 17/11 (DOA v0): direção e trava de feixe só no XVF; a regra lê o switch Beam lock a cada palavra
         self.doa_dir = doa.Direcao() if self.xvf is not None else None
-        self.doa_trava = doa.TravaFeixe(self.xvf, log=lambda m: print(json.dumps({"doa": m}), flush=True)) \
+        self.doa_trava = doa.TravaFeixe(self.xvf, log=self._log_doa) if self.xvf is not None else None
+        # two-beam listening (spec 2026-11-26): decided per conversation at connect (`_travar_na_palavra`)
+        self.dois_feixes, self._dois_feixes_pedido = False, False
+        self.energia, self.reaponta = EnergiaFeixes(), doa.Reaponta()
+        self.ouvido, self.janela_pi = None, JanelaPi()
+        self._fim_payload, self._reaim_ativo = None, False
+        self.doa_regra = doa.Regra(self.doa_dir, self.doa_trava, ligada=lambda: bool(self.cfg.get("beam_lock", True)),
+                                   dois_feixes=lambda: self._dois_feixes_pedido, tv=self._tv_cfg) \
             if self.xvf is not None else None
-        self.doa_regra = doa.Regra(self.doa_dir, self.doa_trava, ligada=lambda: bool(self.cfg.get("beam_lock", True))) \
-            if self.xvf is not None else None
+        print(json.dumps({"two_beam_config": cfgmod.resumo_dois_feixes(self.cfg, self.placa)}), flush=True)
         camada = placa.montar(self.placa, link=self.xvf)
         self.mixer = camada["mixer"]
         if self.placa == "xvf3800" and not self.mixer.fixar_mestre():  # 18/11: PCM índice 1 em 0 dB a cada partida
@@ -356,28 +364,115 @@ class Satelite:
             return -120.0
 
     # ---- DOA v0 (spec 2026-11-17): regra do ESPHome, só no XVF
-    def _travar_na_palavra(self):
+    def _log_doa(self, m):
+        """Linha da trava: texto vira {"doa": texto}; um evento (dict, como `two_beam_reaim`) sai com a chave no topo."""
+        if isinstance(m, dict):
+            if "two_beam_reaim" in m and self.ouvido is not None:
+                self.ouvido.resumo.reapontou()
+            print(json.dumps(m), flush=True)
+        else:
+            print(json.dumps({"doa": m}), flush=True)
+
+    def _tv_cfg(self):
+        az = self.cfg.get("tv_azimuth_deg")
+        if az is None:
+            return None
+        return math.radians(az), math.radians(self.cfg.get("tv_elevation_deg") or 0)
+
+    def _beam_deg(self):
+        """(feixe A, feixe da TV) em graus, ou None; só vale com a trava ligada."""
+        t = self.doa_trava
+        if t is None or not t.travado or t.theta_a is None:
+            return None, None
+        return (math.degrees(t.theta_a) % 360, None if t.theta_t is None or self._tv_cfg() is None
+                else math.degrees(t.theta_t) % 360)
+
+    def _travar_na_palavra(self, dois_feixes=False):
+        """Trava na palavra; `dois_feixes` pede o modo dois feixes (a conversa que abre). Devolve True se travou nele."""
         if self.doa_regra is None:
-            return
+            return False
+        self._dois_feixes_pedido = dois_feixes
         graus = self.doa_regra.palavra(time.monotonic())
+        self._dois_feixes_pedido = False
         if graus is not None:
             self.anel.fixar_direcao(graus)
+        pi = bool(dois_feixes and graus is not None and self.doa_regra.dois_feixes_ativo)
+        if pi:
+            try:
+                doa.registrar_direcao(DIRECOES, math.radians(graus), time.time())
+            except OSError as e:
+                print(json.dumps({"two_beam_history_error": str(e)}), flush=True)
+        return pi
+
+    def _linha_modo(self, pi, motivo):
+        """`two_beam_mode`: one line per conversation, at connect."""
+        a, t = self._beam_deg() if pi else (None, None)
+        razao = motivo or (self.doa_regra.ultima_decisao if self.doa_regra is not None else "not_permitted")
+        print(json.dumps({"two_beam_mode": {"mode": "pi" if pi else "v046", "reason": razao, "beam_a_deg": r1(a),
+                                            "beam_t_deg": r1(t),
+                                            "tv_elev_deg": r1(self.cfg.get("tv_elevation_deg")) if t is not None else None}}),
+              flush=True)
+
+    def _comecar_dois_feixes(self):
+        """Per conversation: the detector and the summary exist only in a two-beam conversation."""
+        cfg = self.cfg
+        det = DetectorQuemChamou(tv_configurada=cfg.get("tv_azimuth_deg") is not None,
+                                 margem_quem_chamou_db=cfg["caller_margin_db"], margem_tv_db=cfg["tv_margin_db"],
+                                 silencio_quem_chamou_s=cfg["caller_silence_s"], pausa_s=cfg["end_of_speech_pause_s"])
+        falhas = lambda: getattr(self.xvf, "falhas_leitura", 0)
+        self.ouvido = OuvidoDoisFeixes(det, self.energia, ResumoDoisFeixes(falhas()), falhas)
+        self.reaponta.zerar()
+        self.janela_pi.aberta, self._fim_payload, self._reaim_ativo = False, None, False
+        self.dois_feixes = True
+
+    def _ciclo_doa(self, t):
+        """Roda na thread da DoA, a cada leitura em dois feixes: entre o fim da resposta e a próxima fala, re-aponta o feixe A."""
+        trava = self.doa_trava
+        if not self._reaim_ativo or not trava.travado or trava.theta_a is None:
+            return
+        theta = self.reaponta.decidir(t, trava.theta_a, trava.theta_t)
+        if theta is not None:
+            self._reaim_ativo = False
+            self.loop.call_soon_threadsafe(self._reapontar, theta, self.reaponta.ultimo_polls, "follow_up")
+
+    def _reapontar(self, theta, polls, causa):
+        if self.dois_feixes and self.doa_trava.reapontar(theta, causa, polls):
+            self.anel.fixar_direcao(math.degrees(theta) % 360)
 
     def _doa_evento(self, nome):
         if self.doa_regra is None:
             return
         if nome == "fim_da_resposta":  # 21/11: a primeira resposta terminou (mic reabriu ou a palavra a cortou)
             self.doa_regra.resposta_acabou()
+            self.reaponta.zerar()
+            self._reaim_ativo = self.dois_feixes  # re-aim window: until the next `fala_comecou`
         elif nome == "parada":
+            ouvido, desde = self.ouvido, self.doa_trava.travada_desde
             self.doa_regra.conversa_fechou()
+            if ouvido is not None:
+                agora = time.monotonic()
+                release = self.doa_trava.motivo_soltura or "closed"
+                print(json.dumps(ouvido.fechar(agora, 0.0 if desde is None else agora - desde, release)), flush=True)
+            self.dois_feixes, self.ouvido, self._fim_payload, self._reaim_ativo = False, None, None, False
+            self.janela_pi.aberta = False
         if not self.doa_trava.travado:
             self.anel.fixar_direcao(None)
 
     def _despachar(self, nome, valor=None):
         if nome != "tique":  # 06/10: rastro no journal para entender fechamentos (sem áudio)
             print(json.dumps({"evento": nome, "valor": valor, "estado": self.maestro.estado}), flush=True)
+        palavra_corta = (nome == "palavra" and self.dois_feixes and self.maestro.estado in ESTADOS_DE_CONVERSA
+                         and self.maestro.palavra_agiria(valor))
+        if nome == "fala_comecou" and self.dois_feixes:  # a caller's turn begins: the re-aim window closes, the lock stays
+            self.reaponta.zerar()
+            self._reaim_ativo = False
+            self.doa_trava.renovar()
         for tipo, arg in self.maestro.evento(nome, time.monotonic(), valor):
             self._agir(tipo, arg)
+        if palavra_corta:  # the word cut her answer inside a two-beam conversation: beam A goes to who said it
+            theta = doa.direcao_da_palavra(self.doa_dir, time.monotonic(), self._tv_cfg())
+            if theta is not None:
+                self._reapontar(theta, 0, "wake_word")
         if nome == "ela_comecou" and self.cfg.get("no_follow_up_while_music", True):
             asyncio.ensure_future(self._marcar_musica())  # 04/11: assíncrono, fora do laço de captura
         if nome == "ela_parou":
@@ -401,7 +496,8 @@ class Satelite:
                         print(json.dumps({"mudo_gravar_erro": str(e)}), flush=True)
                     self.emissor.emitir("config", {"mudancas": {"mudo": bool(valor)}, "origem": "botao"})
                 self.anel.set_muted(self._mudo_visivel())
-        if self.doa_trava is not None and self.doa_trava.travado and self.maestro.estado == "parada":
+        if (self.doa_trava is not None and (self.doa_trava.travado or self.dois_feixes)
+                and self.maestro.estado == "parada"):
             self._doa_evento("parada")  # a conversa fechou com a trava ainda ligada
 
     @staticmethod
@@ -434,8 +530,14 @@ class Satelite:
                 print(json.dumps({"undo_mute": "jabra"}), flush=True)
         elif tipo == "conectar":  # arg: None (palavra/botão) ou {"timer": ...}/{"entrega": id} (spec 2026-10-12)
             com_voz = arg is None or arg.get("whisper") or arg.get("wake_word")
+            motivo, pi = cfgmod.motivo_v046(self.cfg, self.placa, arg), False
             if arg is not None and arg.get("wake_word"):  # 17/11: DOA v0 — trava na direção de quem disse a palavra
-                self._travar_na_palavra()
+                pi = self._travar_na_palavra(motivo is None)
+                if pi:  # two-beam: the Pi drives the turns of this conversation
+                    arg = dict(arg, pi_turns=True)
+                    self.maestro.turnos_pi(True)
+                    self._comecar_dois_feixes()
+            self._linha_modo(pi, motivo)
             if self._claim_id and arg is not None:  # spec 2026-11-16: o bot cruza a conversa com o aviso da disputa
                 arg = dict(arg, claim_id=self._claim_id)
             self.conexao = ConexaoFriday(self.cfg["endereco_friday"], cfgmod.dados_conexao(self.sid, self.cfg, arg),
@@ -460,6 +562,9 @@ class Satelite:
                     self.conexao.soltar_audio(True)
                 self.microfone_aberto, self.guardando_pausa = True, False
             else:
+                if self.dois_feixes and self.janela_pi.aberta:  # a recado closes the mic: the open window must not stay open
+                    self._fim_payload = None
+                    self._agir("avisar_bot", "speech_stopped")
                 self.microfone_aberto = False  # a pausa guardada (se houver) segue guardada: só `guardar_pausa` a encerra
         elif tipo == "guardar_pausa":  # 21/11: pausa na fala dela: o áudio fica guardado até o microfone abrir
             if self.conexao:
@@ -541,7 +646,16 @@ class Satelite:
             asyncio.ensure_future(self._avisar_nao_atendido(arg))
         elif tipo == "avisar_bot":
             if self.conexao:
-                self.conexao.enviar_mensagem(arg, {})
+                dados = {}
+                if self.dois_feixes and self.ouvido is not None and arg in ("speech_started", "speech_stopped"):
+                    agora = time.monotonic()
+                    if arg == "speech_started":
+                        dados = {"tv_active": self.ouvido.tv_ativa(agora)}
+                    else:  # the payload the capture thread took when the detector stopped, or one built now
+                        dados = self._fim_payload or self.ouvido.fim_agora(agora, *self._beam_deg())[0]
+                        self._fim_payload = None
+                    self.janela_pi.enviou(arg)
+                self.conexao.enviar_mensagem(arg, dados)
         elif tipo == "frase":  # spec 2026-11-05: frase pré-gravada do primeiro boot
             self._tocar_frases([f"{SONS}/onboarding/{arg}.wav"])
         elif tipo == "onboarding":
@@ -1037,6 +1151,8 @@ class Satelite:
         mudou_volume = novo.get("volume") is not None and novo.get("volume") != self.volume.normal
         mudou_mudo = bool(novo.get("mudo")) != bool(self.cfg.get("mudo"))
         self.cfg = novo
+        if any(k in mudancas for k in cfgmod.CHAVES_DOIS_FEIXES):
+            print(json.dumps({"two_beam_config": cfgmod.resumo_dois_feixes(novo, self.placa)}), flush=True)
         if mudou_mudo:
             self._aplicar_mudo()
         if self.xvf is not None and "xvf_sys_delay" in mudancas:  # 17/11: atraso calibrado pelo HA vale na hora
@@ -1354,7 +1470,24 @@ class Satelite:
                 if r is not None and r >= limiar_ws:
                     prob_fala = 1.0
             df.para_apos = para_apos_de(self.cfg)
+            ouvido = self.ouvido
+            if ouvido is not None:  # two-beam: only the caller's voice counts as speech; turns have a ceiling
+                agora = time.monotonic()
+                prob_fala, postar, linhas = ouvido.alimentar(prob_fala, agora, self.microfone_aberto, df.falando,
+                                                             self.maestro.estado)
+                df.max_quadros = round(self.cfg["turn_max_s"] / 0.08)
+                for linha in linhas:
+                    print(json.dumps(linha), flush=True)
+                if postar:
+                    self.loop.call_soon_threadsafe(self.evento, "fala_quem_chamou")
+            else:
+                df.max_quadros = None
             fala = df.alimentar(prob_fala)
+            if ouvido is not None and fala:
+                payload, linhas = ouvido.fala(fala, agora, df.parou_por_teto, *self._beam_deg())
+                self._fim_payload = payload if payload is not None else self._fim_payload
+                for linha in linhas:
+                    print(json.dumps(linha), flush=True)
             t = pico.alimentar(fala, *quadro, extras=extras_pred or None)
             if t:
                 reg_falas.escrever(registro_palavra.linha_fala(t))
@@ -1420,7 +1553,9 @@ async def principal():
 
     em_thread(s.captura); em_thread(s.botao)
     if s.doa_dir is not None:  # 17/11: DOA v0 — leitura contínua da direção (só no XVF)
-        threading.Thread(target=doa.ler_continuo, args=(s.xvf, s.doa_dir, threading.Event()), daemon=True).start()
+        threading.Thread(target=doa.ler_continuo, args=(s.xvf, s.doa_dir, threading.Event()), daemon=True,
+                         kwargs={"energia": s.energia, "reaponta": s.reaponta, "ativo": lambda: s.dois_feixes,
+                                 "ao_ciclo": s._ciclo_doa}).start()
     presenca = asyncio.ensure_future(s.disputa.laco_presenca())  # spec 2026-11-16: quantos outros satélites estão online
     threading.Thread(target=s.teclas, daemon=True).start()
     threading.Thread(target=s.duck_laco, daemon=True).start()

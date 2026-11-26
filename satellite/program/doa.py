@@ -71,6 +71,7 @@ class Reaponta:
     """Re-aim helper (spec D4): quem fala fora dos dois feixes, com energia livre, 3 de 4 leituras, estável a ±20°."""
     def __init__(self):
         self._polls = collections.deque(maxlen=16)
+        self.ultimo_polls = 0  # how many polls backed the last positive decision (for `two_beam_reaim`)
 
     def alimentar(self, t: float, az_livre, e_livre) -> None:
         self._polls.append((t, az_livre, e_livre))
@@ -91,6 +92,7 @@ class Reaponta:
             return None
         if theta_t is not None and _dif_graus(media, theta_t) < REAPONTA_DISTANCIA_GRAUS:
             return None
+        self.ultimo_polls = len(validas)
         return media
 
 
@@ -258,9 +260,32 @@ def mediana_direcoes(caminho: str, agora: float):
     return math.radians(melhor) % (2 * math.pi)
 
 
+def direcao_da_palavra(direcao: Direcao, agora: float, tv=None):
+    """Direction (radians) of a wake word said inside a two-beam conversation: the TV sector never counts."""
+    if tv is not None:
+        return direcao.decidir(agora, excluir=(tv[0], TV_SETOR_GRAUS))
+    return direcao.decidir(agora)
+
+
 def ler_continuo(link, direcao: Direcao, parar: threading.Event, relogio=time.monotonic,
-                 periodo_s: float = PERIODO_LEITURA_S) -> None:
-    """Thread de leitura (só com XVF): alimenta o buffer; falha de USB vira silêncio (o link já registra)."""
+                 periodo_s: float = PERIODO_LEITURA_S, energia=None, reaponta=None, ativo=None, ao_ciclo=None) -> None:
+    """Thread de leitura (só com XVF): alimenta o buffer; falha de USB vira silêncio (o link já registra).
+    Dois feixes (`ativo()` verdadeiro): lê também as energias e o azimute livre, com leitura de prazo, e alimenta
+    `energia` e `reaponta`; `ao_ciclo(t)` roda a cada leitura nesse modo (o programa decide o re-aim ali)."""
     while not parar.wait(periodo_s):
         v = link.read("AUDIO_MGR_SELECTED_AZIMUTHS")
-        direcao.alimentar(relogio(), v[0] if v else None)
+        t = relogio()
+        direcao.alimentar(t, v[0] if v else None)
+        if ativo is None or not ativo():
+            continue
+        e = link.read_bounded("AEC_SPENERGY_VALUES")
+        az = link.read_bounded("AEC_AZIMUTH_VALUES")
+        if energia is not None:
+            energia.atualizar(t, e)
+        if reaponta is not None:
+            reaponta.alimentar(t, az[2] if az and len(az) > 2 else None, e[2] if e and len(e) > 2 else None)
+        if ao_ciclo is not None:
+            try:
+                ao_ciclo(t)
+            except Exception:  # noqa: BLE001 - the poll thread never dies from the re-aim
+                pass

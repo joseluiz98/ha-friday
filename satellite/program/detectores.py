@@ -282,6 +282,165 @@ class DetectorQuemChamou:
         return eff, classe
 
 
+def r1(x):
+    return None if x is None else round(float(x), 1)
+
+
+class JanelaPi:
+    """Two-beam: is a Pi-driven speech window open at the bot (`speech_started` sent, no `speech_stopped` yet)?
+    The maestro swallows `fala_parou` while a recado holds the mic, so the program closes the window itself."""
+    def __init__(self):
+        self.aberta = False
+
+    def enviou(self, tipo):
+        if tipo == "speech_started":
+            self.aberta = True
+        elif tipo == "speech_stopped":
+            self.aberta = False
+
+    def mic_fechou(self) -> bool:
+        """True when the window is open and must be closed before the mic closes (and marks it closed)."""
+        aberta, self.aberta = self.aberta, False
+        return aberta
+
+
+class ResumoDoisFeixes:
+    """Accumulates one two-beam conversation for the single `two_beam_summary` line (pure, no I/O, no clock)."""
+    CAIDO_S = 1.0  # a caller frame within this long after a TV run saves it from being a dropped candidate
+
+    def __init__(self, falhas_ini=0):
+        self.falhas_ini = falhas_ini
+        self.turnos, self.por = 0, {"pause": 0, "caller_voice": 0, "ceiling": 0}
+        self.frames = {"caller": 0, "tv": 0, "unclear": 0}
+        self.tv_runs = self.candidatos = self.reaims = 0
+        self.energia_stale_s = 0.0
+        self._pend = None
+
+    def somar(self, stats):
+        for k, n in stats["frames"].items():
+            self.frames[k] = self.frames.get(k, 0) + n
+        self.tv_runs += stats.get("tv_runs", 0)
+
+    def turno(self, por, stats):
+        self.turnos += 1
+        self.por[por] += 1
+        self.somar(stats)
+
+    def reapontou(self):
+        self.reaims += 1
+
+    def energia_ruim(self, s):
+        self.energia_stale_s += s
+
+    def trecho_tv(self, trecho, agora, mic_aberto, em_turno, estado):
+        """A finished run of >= 0.5 s of TV frames: a candidate only with the mic open and no turn in progress."""
+        if trecho is not None and mic_aberto and not em_turno:
+            self._pend = (agora, trecho, estado)
+
+    def quadro_quem_chamou(self):
+        self._pend = None
+
+    def candidato(self, agora):
+        """The pending candidate once a full second passed without a caller frame; None otherwise (never twice)."""
+        if self._pend is None or agora - self._pend[0] < self.CAIDO_S:
+            return None
+        _, trecho, estado = self._pend
+        self._pend = None
+        self.candidatos += 1
+        return {"s": r1(trecho["s"]), "ratio_db_median": r1(trecho["ratio_db_median"]), "state": estado}
+
+    def fechar(self, falhas, lock_s, release):
+        return {"turns": self.turnos, "by": dict(self.por), "frames": dict(self.frames), "tv_runs": self.tv_runs,
+                "dropped_candidates": self.candidatos, "reaims": self.reaims,
+                "energy_stale_s": r1(self.energia_stale_s), "failed_reads": max(0, falhas - self.falhas_ini),
+                "lock_s": r1(lock_s), "release": release}
+
+
+class OuvidoDoisFeixes:
+    """One two-beam conversation's listening, per frame (pure): wraps the caller detector, the energies shared with the
+    DoA poll thread and the summary. Returns what to print; never prints, never per frame."""
+    STALE_CARENCIA_S = 1.0  # at conversation start the first energy read is still on its way: not an episode yet
+
+    def __init__(self, detector, energia, resumo, falhas=lambda: 0, quem_chamou_cada_s=1.0):
+        self.det, self.energia, self.resumo, self._falhas = detector, energia, resumo, falhas
+        self._cada, self._ult_post = quem_chamou_cada_s, None
+        self._ult_tv, self._t_turno = None, None
+        self._estado, self._t0, self._t_stale = None, None, None
+
+    def tv_ativa(self, agora) -> bool:
+        return self._ult_tv is not None and agora - self._ult_tv <= 1.0
+
+    def alimentar(self, prob, agora, mic_aberto, em_turno, estado):
+        """-> (probabilidade efetiva, postar `fala_quem_chamou`, linhas a imprimir)."""
+        energias, t_en = self.energia.ultimas()
+        eff, classe = self.det.alimentar(prob, energias, t_en, agora)
+        linhas = []
+        if energias is not None and energias[1] > 0 and t_en is not None and agora - t_en <= self.det.validade_s:
+            self._ult_tv = agora
+        self._energia(agora, linhas)
+        self.resumo.trecho_tv(self.det.trecho_tv(), agora, mic_aberto, em_turno, estado)
+        postar = False
+        if classe == "caller":
+            self.resumo.quadro_quem_chamou()
+            if self._ult_post is None or agora - self._ult_post >= self._cada:
+                self._ult_post, postar = agora, True
+        cand = self.resumo.candidato(agora)
+        if cand is not None:
+            linhas.append({"two_beam_dropped_candidate": cand})
+        return eff, postar, linhas
+
+    def _energia(self, agora, linhas):
+        if self._t0 is None:
+            self._t0 = agora
+        velha = self.det.motivo_passagem == "stale"
+        if velha and self._estado != "stale":
+            if self._estado == "ok" or agora - self._t0 >= self.STALE_CARENCIA_S:
+                self._estado, self._t_stale = "stale", agora
+                linhas.append({"two_beam_energy": {"state": "stale", "failed_reads": self._falhas() - self.resumo.falhas_ini,
+                                                   "stale_s": 0.0}})
+        elif not velha:
+            if self._estado == "stale":
+                dur = agora - self._t_stale
+                self.resumo.energia_ruim(dur)
+                linhas.append({"two_beam_energy": {"state": "ok", "failed_reads": self._falhas() - self.resumo.falhas_ini,
+                                                   "stale_s": r1(dur)}})
+            self._estado = "ok"
+
+    def fala(self, evento, agora, teto, beam_a_deg, beam_t_deg):
+        """`fala_comecou`/`fala_parou` from the speech detector -> (payload do speech_stopped ou None, linhas)."""
+        if evento == "fala_comecou":
+            self._t_turno = agora
+            return None, []
+        if evento != "fala_parou":
+            return None, []
+        por = "ceiling" if teto else "caller_voice" if self.det.cortou_por_voz else "pause"
+        return self._fim(por, agora, beam_a_deg, beam_t_deg)
+
+    def fim_agora(self, agora, beam_a_deg, beam_t_deg):
+        """The program closes an open window by itself (the mic closed for a recado): same payload, counted as a pause."""
+        return self._fim("pause", agora, beam_a_deg, beam_t_deg)
+
+    def _fim(self, por, agora, beam_a_deg, beam_t_deg):
+        stats = self.det.estatisticas()
+        payload = {"frames": stats["frames"], "ratio_db_median": r1(stats["ratio_db_median"]),
+                   "tv_runs": stats["tv_runs"], "by": por, "beam_a_deg": r1(beam_a_deg), "beam_t_deg": r1(beam_t_deg)}
+        linhas = []
+        if por == "ceiling":
+            dur = 0.0 if self._t_turno is None else agora - self._t_turno
+            linhas.append({"two_beam_turn_ceiling": {"turn_s": r1(dur), "frames": stats["frames"]}})
+        self.resumo.turno(por, stats)
+        self.det.zerar_estatisticas()
+        return payload, linhas
+
+    def fechar(self, agora, lock_s, release):
+        """The single `two_beam_summary` line, at close."""
+        if self._estado == "stale" and self._t_stale is not None:
+            self.resumo.energia_ruim(agora - self._t_stale)
+        self.resumo.somar(self.det.estatisticas())
+        self.det.zerar_estatisticas()
+        return {"two_beam_summary": self.resumo.fechar(self._falhas(), lock_s, release)}
+
+
 class DetectorMudo:
     """Mudo físico do Jabra = zeros digitais exatos (medido em 04/10). Entra após `pedacos` pedaços só de
     zeros (6 × 80 ms ≈ 0,5 s) e sai no primeiro pedaço com qualquer amostra diferente de zero.
