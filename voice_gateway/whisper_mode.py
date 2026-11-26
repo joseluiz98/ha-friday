@@ -106,8 +106,9 @@ class PiSpeechTurns(FrameProcessor):
     (antes disso ele não manda activity_start e o áudio ficaria sem janela)."""
 
     def __init__(self, ready=None, ready_timeout_s=10.0, min_audio_s=0.2, stop_timeout_s=3.0, preroll=None,
-                 sat_id=None):
+                 sat_id=None, sink=None):
         super().__init__()
+        self._sink = sink  # shadow speaker gate: gets 16 kHz mono PCM while the Pi says the caller speaks
         # `preroll` = (llm, first_s, after_s): after the first stop the Live preroll drops to `after_s` (pi_turns)
         self._preroll, self._sat_id, self._ja_parou = preroll, sat_id, False
         self._ready, self._timeout = ready or (lambda: True), ready_timeout_s
@@ -179,6 +180,12 @@ class PiSpeechTurns(FrameProcessor):
         await self.push_frame(frame, direction)
         if isinstance(frame, InputAudioRawFrame) and direction == FrameDirection.DOWNSTREAM and self._falando:
             self._bytes_na_janela += len(frame.audio)
+            if self._sink is not None and getattr(frame, "sample_rate", 16000) == 16000 \
+                    and getattr(frame, "num_channels", 1) == 1:
+                try:
+                    self._sink(frame.audio)
+                except Exception:  # noqa: BLE001 - shadow only
+                    logger.exception("two-beam: speaker gate sink failed")
             if self._fim_pendente is not None and self._bytes_na_janela >= self._min_bytes:
                 await self._trocar(False)  # depois do áudio: o Live recebe o áudio antes do activity_end
 

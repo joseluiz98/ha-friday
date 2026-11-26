@@ -1751,7 +1751,10 @@ async def bot(runner_args: RunnerArguments):
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
     # D7/D8: conversa sussurrada = turnos dirigidos pela Pi e voz do TTS sussurrado (whisper_mode.py)
-    turnos_pi = wm.PiSpeechTurns(ready=lambda: bool(getattr(llm, "_ready_for_realtime_input", True)),
+    from speaker_gate_client import SombraPortao
+    sombra_portao = SombraPortao(satelite_id) if pi_turns else None
+    turnos_pi = wm.PiSpeechTurns(sink=sombra_portao.audio if sombra_portao else None,
+                                 ready=lambda: bool(getattr(llm, "_ready_for_realtime_input", True)),
                                  preroll=(llm, 1.5, 0.5) if pi_turns else None,
                                  sat_id=satelite_id) if turnos_pi_ativos else None
     sem_resposta = wm.SemResposta(10.0, satelite_id) if pi_turns else None
@@ -1823,6 +1826,8 @@ async def bot(runner_args: RunnerArguments):
                 await worker.queue_frames([_quadros.InterruptionWorkerFrame()])
             elif msg.type == "speech_started" and turnos_pi:  # D7: a Pi percebeu a fala (inclusive sussurrada)
                 turnos.dois_feixes(msg.data)
+                if sombra_portao:
+                    sombra_portao.comeco_do_turno(bool(isinstance(msg.data, dict) and msg.data.get("tv_active")))
                 await turnos_pi.started()
             elif msg.type == "speech_stopped" and turnos_pi:
                 turnos.dois_feixes(msg.data)
@@ -1830,6 +1835,11 @@ async def bot(runner_args: RunnerArguments):
                     sem_resposta.stopped(time.monotonic())
                     _manter(asyncio.create_task(_vigiar_sem_resposta()))
                 await turnos_pi.stopped()
+                if sombra_portao:
+                    try:
+                        turnos.portao_voz(await sombra_portao.fim_do_turno())
+                    except Exception:  # noqa: BLE001 - shadow only
+                        logger.exception("two-beam: speaker gate record failed")
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)
