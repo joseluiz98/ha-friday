@@ -19,7 +19,8 @@ VERSION = _version.installed_version(_version.FILE)
 WHISPER_DEFAULT_DB = 5.5
 DUCK_DEFAULT = 15
 FOLLOW_UP_DEFAULT = 5
-INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window", "continuous_speech_limit", "xvf_sys_delay"}
+INT_KEYS = {"ducking_level", "alarm_volume", "follow_up_window", "continuous_speech_limit", "xvf_sys_delay",
+            "turn_ceiling", "tv_azimuth", "tv_elevation"}
 AUDIO_BOARD_FILE = "/etc/friday-satelite/audio_board"
 XVF_DELAY_DEFAULT = 12  # AUDIO_MGR_SYS_DELAY de fábrica do XVF3800
 AMBIENT_WINDOW = "08:00-22:00"  # the factory ambient recording window; a custom window is kept as it is
@@ -116,6 +117,17 @@ def controls_from_config(cfg: dict, wakewords: list[dict], board: str | None = N
                icon="mdi:timer-cog-outline"),
             _d("beam_lock", "switch", "Beam lock", category=c, icon="mdi:crosshairs-gps"),
             # 17/11: USB watchdog (usb_watch.py): reboots of the Pi it made, and one event per reboot or exhausted hour
+            # 26/11: two-beam listening (spec 2026-11-26); settings live in the Advanced step (hidden)
+            _d("two_beam_listening", "switch", "Two-beam listening", category=c, icon="mdi:account-voice", hidden=True),
+            _d("tv_azimuth", "number", "TV direction", min=-1, max=359, step=1, unit="°", category=c, hidden=True),
+            _d("tv_elevation", "number", "TV elevation", min=0, max=80, step=5, unit="°", category=c, hidden=True),
+            _d("caller_margin", "number", "Caller margin", min=0, max=20, step=0.5, unit="dB", category=c, hidden=True),
+            _d("tv_margin", "number", "TV margin", min=0, max=20, step=0.5, unit="dB", category=c, hidden=True),
+            _d("caller_silence", "number", "Caller silence", min=0.5, max=5, step=0.5, unit="s", category=c, hidden=True),
+            _d("turn_ceiling", "number", "Turn ceiling", min=10, max=300, step=5, unit="s", category=c, hidden=True),
+            _d("learn_tv_direction", "button", "Learn TV direction", category=c, icon="mdi:television"),
+            _d("tv_direction_learn", "event", "TV direction learn", event_types=["stored", "refused"],
+               category="diagnostic", icon="mdi:television"),
             _d("usb_recoveries", "sensor", "USB recoveries", state_class="total_increasing", category="diagnostic",
                icon="mdi:usb"),
             _d("usb_recovery", "event", "USB recovery", event_types=["rebooted", "exhausted"], category="diagnostic",
@@ -232,6 +244,14 @@ class Mapper:
         if self.board == "xvf3800":
             st["xvf_sys_delay"] = cfg.get("xvf_sys_delay", XVF_DELAY_DEFAULT)
             st["beam_lock"] = cfg.get("beam_lock", True) is not False
+            az = cfg.get("tv_azimuth_deg")
+            st["two_beam_listening"] = cfg.get("two_beam_listening", True) is not False
+            st["tv_azimuth"] = -1 if az is None else az
+            st["tv_elevation"] = cfg.get("tv_elevation_deg", 0)
+            st["caller_margin"] = cfg.get("caller_margin_db", 3.0)
+            st["tv_margin"] = cfg.get("tv_margin_db", 6.0)
+            st["caller_silence"] = cfg.get("caller_silence_s", 1.5)
+            st["turn_ceiling"] = cfg.get("turn_max_s", 60)
         if pos is not None:
             st["volume"] = percent_from_position(pos)
         for w in wakewords:
@@ -254,7 +274,15 @@ class Mapper:
                   "close_mic_awaiting_reply": "close_mic_awaiting_reply",
                   "continuous_speech_limit": "speech_max_s",
                   "continue_listening_while_speaking": "keep_listening_while_speaking",
-                  "xvf_sys_delay": "xvf_sys_delay", "beam_lock": "beam_lock"}
+                  "xvf_sys_delay": "xvf_sys_delay", "beam_lock": "beam_lock",
+                  "two_beam_listening": "two_beam_listening", "tv_elevation": "tv_elevation_deg",
+                  "caller_margin": "caller_margin_db", "tv_margin": "tv_margin_db",
+                  "caller_silence": "caller_silence_s", "turn_ceiling": "turn_max_s"}
+        if key == "tv_azimuth":
+            value = None if value is None or value < 0 else value
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            return {"config": {"tv_azimuth_deg": value}}
         if key in simple:
             if key in INT_KEYS and isinstance(value, float) and value.is_integer():
                 value = int(value)  # HA number entities send 20.0; the program accepts only int here
@@ -403,6 +431,11 @@ class Tracker:
             if result not in ONBOARDING_RESULTS:
                 return None
             return {"event": ("onboarding", result, {k: v for k, v in dados.items() if k != "resultado"})}
+        if tipo == "tv_direction":
+            result = dados.get("result")
+            if result not in ("stored", "refused"):
+                return None
+            return {"event": ("tv_direction_learn", result, {k: v for k, v in dados.items() if k != "result"})}
         if tipo == "timer":
             return {"event": ("timer", "finished", {"name": dados.get("nome"), "id": dados.get("id"),
                                                     "duration_s": dados.get("duracao_s")})}
