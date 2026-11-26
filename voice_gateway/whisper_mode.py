@@ -78,13 +78,38 @@ async def stream_whisper_tts(client, tts: dict, text: str):
                     yield _reamostrar(dados, _rate_do_mime(blob.mime_type))
 
 
+class SemResposta:
+    """Two-beam traceability: after `stopped()` the model should answer (speech or tool call) within `prazo_s`.
+    Pure: feed `stopped(t)`, `respondeu()`, and poll `verificar(t)`; logs `two-beam: no answer` once per turn."""
+
+    def __init__(self, prazo_s=10.0, sat_id=None):
+        self.prazo_s, self._sat_id = prazo_s, sat_id
+        self._desde = None
+
+    def stopped(self, agora: float):
+        self._desde = agora
+
+    def respondeu(self):
+        self._desde = None
+
+    def verificar(self, agora: float) -> bool:
+        if self._desde is None or agora - self._desde < self.prazo_s:
+            return False
+        self._desde = None  # once per turn
+        logger.warning(f"two-beam: no answer {self.prazo_s:.0f}s after the end of speech (sat={self._sat_id})")
+        return True
+
+
 class PiSpeechTurns(FrameProcessor):
     """D7: transforma `speech_started`/`speech_stopped` da Pi em UserStarted/StoppedSpeakingFrame, para baixo, rumo ao
     Gemini Live (que então manda activity_start/activity_end). Idempotente. Com `ready`, espera o Live ficar pronto
     (antes disso ele não manda activity_start e o áudio ficaria sem janela)."""
 
-    def __init__(self, ready=None, ready_timeout_s=10.0, min_audio_s=0.2, stop_timeout_s=3.0):
+    def __init__(self, ready=None, ready_timeout_s=10.0, min_audio_s=0.2, stop_timeout_s=3.0, preroll=None,
+                 sat_id=None):
         super().__init__()
+        # `preroll` = (llm, first_s, after_s): after the first stop the Live preroll drops to `after_s` (pi_turns)
+        self._preroll, self._sat_id, self._ja_parou = preroll, sat_id, False
         self._ready, self._timeout = ready or (lambda: True), ready_timeout_s
         self._falando = False
         self._cadeia = None
@@ -120,7 +145,7 @@ class PiSpeechTurns(FrameProcessor):
 
     async def _fim_por_prazo(self):
         await asyncio.sleep(self._stop_timeout)
-        logger.warning("whisper: fim da fala sem áudio na janela; enviando assim mesmo")
+        logger.warning(f"whisper: fim da fala sem áudio na janela; enviando assim mesmo (sat={self._sat_id})")
         await self._trocar(False)
 
     async def _depois_de_pronto(self, anterior, falando):
@@ -143,6 +168,10 @@ class PiSpeechTurns(FrameProcessor):
         await self._pedir(True)
 
     async def stopped(self):
+        if self._preroll and not self._ja_parou:
+            self._ja_parou = True
+            llm, _primeiro, depois = self._preroll
+            llm._user_audio_preroll_secs = depois
         await self._pedir(False)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
