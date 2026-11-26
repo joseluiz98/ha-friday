@@ -1370,3 +1370,98 @@ class TestEncerrarComFalaNova(unittest.TestCase):
         m.evento("fala_comecou", 1.0)  # TV, never stops
         m.evento("ela_comecou", 3.0); m.evento("ela_parou", 4.0)
         self.assertIn(("desconectar", None), m.evento("encerrar", 4.5))
+
+
+def _bot(acoes):
+    return [a[1] for a in acoes if a[0] == "avisar_bot"]
+
+
+class TestPiTurns(unittest.TestCase):
+    """Two-beam: with `turnos_pi(True)` the Pi's speech start/stop go to the bot, as in whispered conversations."""
+
+    def novo(self, **kw):
+        m = Maestro(Ajustes(**kw))
+        m.evento("palavra", 0.0)
+        m.turnos_pi(True)
+        m.evento("conectou", 0.5)
+        return m
+
+    def test_pi_turns_sends_speech_events(self):
+        m = self.novo()
+        self.assertEqual(_bot(m.evento("fala_comecou", 1.0)), ["speech_started"])
+        self.assertEqual(_bot(m.evento("fala_parou", 2.0)), ["speech_stopped"])
+
+    def test_pi_turns_connect_with_speech_running_starts_turn(self):
+        m = Maestro(Ajustes())
+        m.evento("fala_comecou", -0.5)
+        m.evento("palavra", 0.0)
+        m.turnos_pi(True)
+        self.assertEqual(_bot(m.evento("conectou", 0.5)), ["speech_started"])
+
+    def test_pi_turns_connect_without_speech_sends_nothing(self):
+        m = Maestro(Ajustes())
+        m.evento("palavra", 0.0)
+        m.turnos_pi(True)
+        self.assertEqual(m.evento("conectou", 0.5), [])
+
+    def test_pi_turns_off_by_default_no_events(self):
+        m = Maestro(Ajustes())
+        m.evento("palavra", 0.0); m.evento("conectou", 0.5)
+        self.assertEqual(_bot(m.evento("fala_comecou", 1.0)), [])
+        self.assertEqual(_bot(m.evento("fala_parou", 2.0)), [])
+
+    def test_pi_turns_reset_when_the_conversation_ends(self):
+        m = self.novo()
+        m.evento("encerrar", 3.0)
+        self.assertFalse(m.pi_turns)
+
+    def test_pi_turns_repeat_during_her_pause_opens_turn(self):
+        m = self.novo(only_wake_word_interrupts=True)
+        m.evento("fala_comecou", 1.0); m.evento("fala_parou", 2.0)
+        m.evento("ela_comecou", 3.0)
+        m.evento("ela_parou", 4.0)  # her 1.5 s pause
+        self.assertEqual(m.evento("fala_comecou", 4.5), [])  # mic closed: nothing yet
+        acoes = m.evento("tique", 5.6)  # the pause ends: the mic reopens over the speech begun in it
+        self.assertIn(("microfone", True), acoes)
+        self.assertEqual(_bot(acoes), ["speech_started"])
+
+    def test_pi_turns_word_cuts_her_then_request_opens_turn(self):
+        m = self.novo(only_wake_word_interrupts=True)
+        m.evento("fala_comecou", 1.0); m.evento("fala_parou", 2.0)
+        m.evento("ela_comecou", 3.0)
+        acoes = m.evento("palavra", 4.0)
+        self.assertIn(("microfone", True), acoes)
+        self.assertEqual(_bot(acoes), [])  # nobody speaking yet
+        self.assertEqual(_bot(m.evento("fala_comecou", 4.5)), ["speech_started"])
+        self.assertEqual(_bot(m.evento("fala_parou", 6.0)), ["speech_stopped"])
+
+    def test_pi_turns_word_and_request_in_one_breath_opens_turn(self):
+        m = self.novo(only_wake_word_interrupts=True)
+        m.evento("fala_comecou", 1.0); m.evento("fala_parou", 2.0)
+        m.evento("ela_comecou", 3.0)
+        m.evento("fala_comecou", 3.9)  # the word begins the segment; the detector hears speech
+        self.assertEqual(_bot(m.evento("palavra", 4.0)), ["speech_started"])
+
+    def test_whisper_speech_events_unchanged(self):
+        m = Maestro(Ajustes())
+        m.evento("palavra", 0.0, {"whisper": True})
+        self.assertEqual(_bot(m.evento("conectou", 0.5)), ["speech_started"])
+        self.assertEqual(_bot(m.evento("fala_parou", 1.0)), ["speech_stopped"])
+
+    def test_caller_speech_never_hits_speech_max(self):
+        m = self.novo(speech_max_s=15)
+        m.evento("fala_comecou", 0.5)
+        for t in range(1, 41):
+            self.assertEqual(m.evento("fala_quem_chamou", float(t)), [])
+            self.assertNotIn(("desconectar", None), m.evento("tique", float(t)))
+        self.assertEqual(m.estado, "ouvindo")
+
+    def test_unclear_speech_still_hits_speech_max(self):
+        m = self.novo(speech_max_s=15)
+        m.evento("fala_comecou", 0.5)
+        self.assertEqual(registro(m.evento("tique", 15.6))["como_fechou"], "fala_longa")
+
+    def test_caller_speech_event_without_speech_is_noop(self):
+        m = self.novo()
+        self.assertEqual(m.evento("fala_quem_chamou", 1.0), [])
+        self.assertIsNone(m._fala_desde)

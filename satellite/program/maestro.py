@@ -103,6 +103,7 @@ class Maestro:
         self._completa = False
         self.mudo_software = False  # v0.3.7: mudo pela config; o anel leva o bit do mudo, então as luzes podem passar
         self._prazo = None  # (motivo, instante)
+        self.pi_turns = False  # two-beam: the Pi's speech start/stop drive the bot's turns (set by turnos_pi at connect)
         self._alguem_falando = False
         self._fala_desde = None  # R13: instante em que a fala contínua atual começou
         # 25/11: what the speech detector hears now, in any state (even while a recado ignores it), and since when; a
@@ -455,10 +456,14 @@ class Maestro:
     def _palavra(valor):
         return valor.get("wake_word") if isinstance(valor, dict) else None
 
+    def turnos_pi(self, ativo: bool) -> None:
+        """Two-beam: the program calls it right after deciding the mode at `conectar`; `_zerar` clears it."""
+        self.pi_turns = bool(ativo)
+
     def _aviso(self, e, tipo):
         """D7: em conversa sussurrada aberta, o início/fim da fala vai ao bot (o Live roda sem VAD do servidor)."""
         # revisão final (20/10): só com a conexão aberta; o que aconteceu antes vai no `conectou`
-        return [("avisar_bot", tipo)] if self.whisper and e == OUVINDO else []
+        return [("avisar_bot", tipo)] if (self.whisper or self.pi_turns) and e == OUVINDO else []
 
     def _da_conversa(self, como):
         return self._abertura is not None and self._abertura["como_abriu"] == como
@@ -627,7 +632,13 @@ class Maestro:
         if nome == "palavra":
             if self._recado and e in ABERTO and self.mudo is False:  # só a palavra ativa corta o recado
                 self._recado, self._recado_fim, self._resposta_normal, self._completa = False, None, False, False
-                return [("parar_fala", None), ("microfone", True), ("luz", "ouvindo"), ("fim_da_resposta", None)]
+                herdada = []
+                if self.pi_turns and self._detector_falando and not self._alguem_falando:
+                    # two-beam: "Friday, <request>" in one breath cuts her with the speech already running
+                    self._alguem_falando, self._fala_desde = True, agora
+                    herdada = [("avisar_bot", "speech_started")]
+                return [("parar_fala", None), ("microfone", True), ("luz", "ouvindo")] + herdada \
+                    + [("fim_da_resposta", None)]
             if self.mudo is not False or e in ABERTO:
                 return []
             return self._abrir(agora, "palavra" if e == PARADA else self._abertura["como_abriu"],
@@ -649,6 +660,12 @@ class Maestro:
                         self._prazo = None
                     return [("avisar_bot", "speech_started")]
                 return [("avisar_bot", "speech_started"), ("avisar_bot", "speech_stopped")]
+            if self.pi_turns and e in ABERTO:  # two-beam: the turn opens only if someone is speaking right now
+                return [("avisar_bot", "speech_started")] if self._alguem_falando else []
+            return []
+        if nome == "fala_quem_chamou":  # two-beam: the caller is speaking: never ages into the continuous-sound cutoff
+            if e in ABERTO and self._alguem_falando:
+                self._fala_desde = agora
             return []
         if nome in ("falha_conexao", "caiu"):
             if e == PARADA:
@@ -778,7 +795,7 @@ class Maestro:
         herdada = []
         if self._detector_falando and not self._alguem_falando:  # 25/11: speech begun during the recado now counts
             self._alguem_falando, self._fala_desde = True, parou
-            herdada = [("avisar_bot", "speech_started")] if self.whisper else []
+            herdada = [("avisar_bot", "speech_started")] if (self.whisper or self.pi_turns) else []
         acoes = [("microfone", True), ("luz", "ouvindo")] + herdada + self._trata("ela_parou", parou, None)
         if ("fim_da_resposta", None) not in acoes:
             acoes.append(("fim_da_resposta", None))
