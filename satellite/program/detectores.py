@@ -126,25 +126,160 @@ class PicoDaFala:
 
 class DetectorFala:
     """VAD com histerese, em pedaços de 80 ms: começa após `comeca_apos` pedaços de fala e para após
-    `para_apos` pedaços sem fala (padrão: 160 ms e 800 ms)."""
-    def __init__(self, limiar=0.5, comeca_apos=2, para_apos=10):
+    `para_apos` pedaços sem fala (padrão: 160 ms e 800 ms). `max_quadros` (opcional) é o teto de um turno:
+    depois desse tanto de pedaços seguidos falando, emite "fala_parou" com `parou_por_teto` e o turno se divide."""
+    def __init__(self, limiar=0.5, comeca_apos=2, para_apos=10, max_quadros=None):
         self.limiar, self.comeca_apos, self.para_apos = limiar, comeca_apos, para_apos
+        self.max_quadros = max_quadros
         self.falando, self._seq = False, 0
+        self.parou_por_teto, self._n_falando = False, 0
 
     def iniciar_falando(self):
         """Conversa sussurrada (spec 2026-10-20 §4.2): a fala já está em andamento; só o fim é emitido."""
         self.falando, self._seq = True, 0
+        self.parou_por_teto, self._n_falando = False, 0
 
     def alimentar(self, prob: float):
         e_fala = prob >= self.limiar
+        evento = None
         if e_fala != self.falando:
             self._seq += 1
             if self._seq >= (self.comeca_apos if e_fala else self.para_apos):
                 self.falando, self._seq = e_fala, 0
-                return "fala_comecou" if e_fala else "fala_parou"
+                evento = "fala_comecou" if e_fala else "fala_parou"
         else:
             self._seq = 0
-        return None
+        if self.max_quadros is None:
+            return evento
+        if evento == "fala_comecou":
+            self._n_falando, self.parou_por_teto = 0, False
+        elif evento == "fala_parou":
+            self.parou_por_teto = False
+        elif self.falando:
+            self._n_falando += 1
+            if self._n_falando >= self.max_quadros:
+                self.falando, self._seq, self._n_falando = False, 0, 0
+                self.parou_por_teto = True
+                return "fala_parou"
+        return evento
+
+
+class EnergiaFeixes:
+    """Guarda as últimas energias dos feixes (AEC_SPENERGY_VALUES); escrita pela leitura da DoA, leitura pelo VAD."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._valores, self._t = None, None
+
+    def atualizar(self, t, valores):
+        """`valores` None = a leitura falhou (descarta o que havia)."""
+        with self._lock:
+            if valores is None or len(valores) < 3:
+                self._valores, self._t = None, None
+            else:
+                self._valores, self._t = (float(valores[0]), float(valores[1]), float(valores[2])), t
+
+    def ultimas(self):
+        with self._lock:
+            return self._valores, self._t
+
+
+class DetectorQuemChamou:
+    """Classifica cada pedaço de 80 ms por quem fala (quem chamou / TV) com as energias dos dois feixes.
+    Puro: sem I/O nem relógio (`agora` vem de fora)."""
+    QUADRO_S = 0.08
+    TRECHO_TV_MIN_S = 0.5
+
+    def __init__(self, tv_configurada, margem_quem_chamou_db=3.0, margem_tv_db=6.0, silencio_quem_chamou_s=1.5,
+                 pausa_s=0.8, limiar=0.5, validade_s=1.0):
+        self.tv_configurada = tv_configurada
+        self.margem_quem_chamou_db, self.margem_tv_db = margem_quem_chamou_db, margem_tv_db
+        self.silencio_quem_chamou_s, self.pausa_s = silencio_quem_chamou_s, pausa_s
+        self.limiar, self.validade_s = limiar, validade_s
+        self.cortou_por_voz = False
+        self.em_passagem, self.motivo_passagem = not tv_configurada, None if tv_configurada else "no_tv"
+        self._em_segmento, self._t_ini_silencio, self._t_ult_caller = False, None, None
+        self._corrida_tv, self._razoes_corrida, self._trecho = 0, [], None
+        self.zerar_estatisticas()
+
+    def zerar_estatisticas(self):
+        self._frames = {"caller": 0, "tv": 0, "unclear": 0}
+        self._razoes, self._tv_runs = [], 0
+
+    def estatisticas(self):
+        r = sorted(self._razoes)
+        n = len(r)
+        mediana = None if not n else (r[n // 2] if n % 2 else (r[n // 2 - 1] + r[n // 2]) / 2)
+        return {"frames": dict(self._frames), "ratio_db_median": mediana, "tv_runs": self._tv_runs}
+
+    def trecho_tv(self):
+        t, self._trecho = self._trecho, None
+        return t
+
+    @staticmethod
+    def _mediana(v):
+        v = sorted(v)
+        n = len(v)
+        return None if not n else (v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2)
+
+    def _fim_corrida_tv(self):
+        s = self._corrida_tv * self.QUADRO_S
+        if s >= self.TRECHO_TV_MIN_S:
+            self._tv_runs += 1
+            self._trecho = {"s": s, "ratio_db_median": self._mediana(self._razoes_corrida)}
+        self._corrida_tv, self._razoes_corrida = 0, []
+
+    def alimentar(self, prob, energias, t_energias, agora):
+        motivo = None
+        if not self.tv_configurada:
+            motivo = "no_tv"
+        elif energias is None or t_energias is None or agora - t_energias > self.validade_s:
+            motivo = "stale"
+        self.motivo_passagem, self.em_passagem = motivo, motivo is not None
+        candidato = prob >= self.limiar
+        if not candidato:
+            classe, eff = "silence", 0.0
+        elif motivo is not None:
+            classe, eff = "unclear", prob
+        else:
+            eA, eT = energias[0], energias[1]
+            razao = 10 * math.log10(eA / eT) if eA > 0 and eT > 0 else None
+            if eT <= 0 or (razao is not None and razao >= self.margem_quem_chamou_db):
+                classe, eff = "caller", 1.0
+            elif eA <= 0 or (razao is not None and razao <= -self.margem_tv_db):
+                classe, eff = "tv", 0.0
+            else:
+                classe, eff = "unclear", prob
+            self._frames[classe] += 1
+            if razao is not None:
+                self._razoes.append(razao)
+            if classe == "tv":
+                self._corrida_tv += 1
+                if razao is not None:
+                    self._razoes_corrida.append(razao)
+            elif self._corrida_tv:
+                self._fim_corrida_tv()
+        if classe != "tv" and self._corrida_tv:  # silêncio/passagem também encerram a corrida
+            self._fim_corrida_tv()
+        # segmento: começa no 1º quadro de fala depois de >= pausa_s de silêncio (silêncio medido no bruto)
+        eff_bruto_fala = classe != "silence" and classe != "tv"
+        if classe == "tv" or classe == "silence":
+            if self._t_ini_silencio is None:
+                self._t_ini_silencio = agora
+            if agora - self._t_ini_silencio >= self.pausa_s:
+                self._em_segmento, self._t_ult_caller = False, None
+        else:
+            if self._t_ini_silencio is not None and agora - self._t_ini_silencio >= self.pausa_s:
+                self._em_segmento, self._t_ult_caller = False, None
+            self._t_ini_silencio = None
+            if not self._em_segmento:
+                self._em_segmento, self._t_ult_caller, self.cortou_por_voz = True, None, False
+        if classe == "caller":
+            self._t_ult_caller = agora
+            self.cortou_por_voz = False
+        elif (classe == "unclear" and eff_bruto_fala and self._em_segmento and self._t_ult_caller is not None
+              and agora - self._t_ult_caller >= self.silencio_quem_chamou_s):
+            eff, self.cortou_por_voz = 0.0, True
+        return eff, classe
 
 
 class DetectorMudo:

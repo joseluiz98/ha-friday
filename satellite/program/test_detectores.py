@@ -1,6 +1,6 @@
 """cd /homeassistant/tools/satelite/programa && python3 -m unittest test_detectores -v"""
 import unittest
-from detectores import (DetectorFala, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
+from detectores import (DetectorFala, DetectorQuemChamou, EnergiaFeixes, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
                         trecho_do_episodio)
 
 ZERO = bytes(2560)
@@ -453,3 +453,119 @@ class TestBotaoComBitDoMudo(unittest.TestCase):
         d2 = DetectorBotaoTelefone()
         d2.comandou(0x00 | 0x04, 0.0)
         self.assertEqual(d2.relatorio(0x05, 5.0), "verde")
+
+
+def _q(d, prob, eA, eT, t):
+    return d.alimentar(prob, (eA, eT, 0.0), t, t)
+
+
+class TestQuemChamou(unittest.TestCase):
+    def test_caller_frame_when_margin_met(self):
+        self.assertEqual(_q(DetectorQuemChamou(True), 0.9, 4, 1, 0.0), (1.0, "caller"))
+
+    def test_tv_frame_when_tv_dominates(self):
+        d = DetectorQuemChamou(True)
+        self.assertEqual(_q(d, 0.9, 1, 4.5, 0.0), (0.0, "tv"))
+        self.assertEqual(_q(d, 0.9, 0, 1, 0.1)[1], "tv")
+        self.assertEqual(_q(d, 0.9, 1, 3, 0.2)[1], "unclear")
+
+    def test_unclear_between_margins(self):
+        self.assertEqual(_q(DetectorQuemChamou(True), 0.8, 1.5, 1, 0.0), (0.8, "unclear"))
+
+    def test_tv_silent_means_caller(self):
+        self.assertEqual(_q(DetectorQuemChamou(True), 0.9, 0.5, 0, 0.0), (1.0, "caller"))
+
+    def test_below_limiar_is_silence(self):
+        self.assertEqual(_q(DetectorQuemChamou(True), 0.2, 4, 1, 0.0), (0.0, "silence"))
+
+    def test_passthrough_without_tv_direction(self):
+        d = DetectorQuemChamou(False)
+        self.assertEqual(d.alimentar(0.9, (4, 1, 0), 0.0, 0.0), (0.9, "unclear"))
+        self.assertEqual(d.motivo_passagem, "no_tv")
+        self.assertEqual(d.alimentar(0.2, None, None, 0.1), (0.0, "silence"))
+
+    def test_stale_energy_falls_back_to_passthrough(self):
+        d = DetectorQuemChamou(True)
+        self.assertEqual(d.alimentar(0.9, (1, 4.5, 0), 0.0, 1.2), (0.9, "unclear"))
+        self.assertEqual((d.em_passagem, d.motivo_passagem), (True, "stale"))
+        self.assertEqual(d.alimentar(0.9, None, None, 1.3), (0.9, "unclear"))
+        d.alimentar(0.9, (4, 1, 0), 1.3, 1.3)
+        self.assertEqual((d.em_passagem, d.motivo_passagem), (False, None))
+
+    def test_caller_silence_zeroes_unclear_tail(self):
+        d = DetectorQuemChamou(True)
+        t = 0.0
+        for _ in range(12):  # ~1 s de quem chamou
+            _q(d, 0.9, 4, 1, t)
+            t += 0.08
+        ultimo = t - 0.08
+        while t - ultimo < 1.5 - 1e-9:
+            self.assertEqual(_q(d, 0.9, 1.5, 1, t), (0.9, "unclear"))
+            self.assertFalse(d.cortou_por_voz)
+            t += 0.08
+        self.assertEqual(_q(d, 0.9, 1.5, 1, t), (0.0, "unclear"))
+        self.assertTrue(d.cortou_por_voz)
+        # pausa de >= 0.8 s zera o segmento
+        for _ in range(11):
+            t += 0.08
+            _q(d, 0.1, 1, 1, t)
+        t += 0.08
+        self.assertEqual(_q(d, 0.9, 1.5, 1, t), (0.9, "unclear"))
+        self.assertFalse(d.cortou_por_voz)
+
+    def test_stats_count_classes_and_median_ratio(self):
+        d = DetectorQuemChamou(True)
+        _q(d, 0.9, 4, 1, 0.0)      # 6.02 dB
+        _q(d, 0.9, 1.5, 1, 0.1)    # 1.76 dB
+        _q(d, 0.9, 1, 4.5, 0.2)    # -6.53 dB
+        e = d.estatisticas()
+        self.assertEqual(e["frames"], {"caller": 1, "tv": 1, "unclear": 1})
+        self.assertAlmostEqual(e["ratio_db_median"], 1.76, places=1)
+        d.zerar_estatisticas()
+        self.assertEqual(d.estatisticas()["ratio_db_median"], None)
+
+    def test_tv_run_reported_once_after_half_second(self):
+        d = DetectorQuemChamou(True)
+        t = 0.0
+        for _ in range(7):
+            _q(d, 0.9, 1, 4.5, t)
+            t += 0.08
+        self.assertIsNone(d.trecho_tv())
+        _q(d, 0.9, 4, 1, t)
+        r = d.trecho_tv()
+        self.assertAlmostEqual(r["s"], 0.56)
+        self.assertLess(r["ratio_db_median"], -6)
+        self.assertIsNone(d.trecho_tv())
+        self.assertEqual(d.estatisticas()["tv_runs"], 1)
+        for _ in range(3):  # corrida curta não conta
+            t += 0.08
+            _q(d, 0.9, 1, 4.5, t)
+        t += 0.08
+        _q(d, 0.9, 4, 1, t)
+        self.assertIsNone(d.trecho_tv())
+
+    def test_energia_feixes(self):
+        e = EnergiaFeixes()
+        self.assertEqual(e.ultimas(), (None, None))
+        e.atualizar(1.0, [1, 2, 3, 4])
+        self.assertEqual(e.ultimas(), ((1.0, 2.0, 3.0), 1.0))
+        e.atualizar(2.0, None)
+        self.assertEqual(e.ultimas(), (None, None))
+
+
+class TestTeto(unittest.TestCase):
+    def test_turn_ceiling_splits_turn(self):
+        d = DetectorFala(max_quadros=750)
+        ev = [d.alimentar(1.0) for _ in range(760)]
+        nomes = [(i, x) for i, x in enumerate(ev) if x]
+        self.assertEqual([x for _, x in nomes], ["fala_comecou", "fala_parou", "fala_comecou"])
+        self.assertTrue(d.falando or d.parou_por_teto is False)
+        self.assertLessEqual(nomes[2][0] - nomes[1][0], 2)
+
+    def test_parou_por_teto_flag(self):
+        d = DetectorFala(max_quadros=5)
+        for _ in range(8):
+            if d.alimentar(1.0) == "fala_parou":
+                self.assertTrue(d.parou_por_teto)
+                return
+        self.fail("sem fala_parou")
