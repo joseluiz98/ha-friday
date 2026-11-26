@@ -48,13 +48,13 @@ def test_score_unavailable_without_model(env):
 def test_enroll_skips_jabra_folders_and_writes_mean(env):
     (env / "m.onnx").write_bytes(b"x")
     root = env / "voices"
-    _wav(root / SAT / "vozes" / "jose" / "a.wav", 1)
-    _wav(root / SAT / "vozes" / "jose" / "b.wav", 2)
+    _wav(root / SAT / "vozes" / "person-a" / "a.wav", 1)
+    _wav(root / SAT / "vozes" / "person-a" / "b.wav", 2)
     _wav(root / SAT / "vozes" / "jabra-speak-410" / "c.wav", 9)
-    _wav(root / SAT / "vozes" / "maria" / "jabra-speak-410" / "d.wav", 9)
+    _wav(root / SAT / "vozes" / "person-b" / "jabra-speak-410" / "d.wav", 9)
     res = sg.SpeakerGate(_fake).enroll(SAT, str(root))
-    assert res == {"jose": 2}
-    vec = json.loads((env / "enroll" / SAT / "jose.json").read_text())
+    assert res == {"person-a": 2}
+    vec = json.loads((env / "enroll" / SAT / "person-a.json").read_text())
     assert vec["dim"] == 2 and vec["vector"] == pytest.approx([0.5, 0.5])
     assert not (env / "enroll" / SAT / "jabra-speak-410.json").exists()
 
@@ -63,12 +63,12 @@ def test_score_picks_best_person(env):
     (env / "m.onnx").write_bytes(b"x")
     d = env / "enroll" / SAT
     d.mkdir(parents=True)
-    (d / "jose.json").write_text(json.dumps({"dim": 2, "vector": [1.0, 0.0]}))
-    (d / "maria.json").write_text(json.dumps({"dim": 2, "vector": [0.0, 1.0]}))
+    (d / "person-a.json").write_text(json.dumps({"dim": 2, "vector": [1.0, 0.0]}))
+    (d / "person-b.json").write_text(json.dumps({"dim": 2, "vector": [0.0, 1.0]}))
     gate = sg.SpeakerGate(_fake)
     r = gate.score(SAT, _pcm(1))
     assert r["available"]
-    assert r["best"] == "jose" and r["score"] == pytest.approx(1.0) and r["scores"]["maria"] == pytest.approx(0.0)
+    assert r["best"] == "person-a" and r["score"] == pytest.approx(1.0) and r["scores"]["person-b"] == pytest.approx(0.0)
     assert gate.score("sat-bbbbbb", _pcm(1))["best"] is None
 
 

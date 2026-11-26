@@ -297,7 +297,7 @@ the TV can never vanish from the metrics.**)**
     Pi-driven turns, the whole-conversation lock and the caller-voice turn end. The alpha proves there that nothing got
     worse.
   - It requires "Only the wake word interrupts". With that switch off, two-beam listening behaves as off and says so in
-    the entity's attributes.
+    the Pi journal (`why_not` of the `two_beam_config` line); it is not shown in the entity's attributes.
 - **Margins (`caller_margin_db`, `tv_margin_db`) and the D7 threshold.** Advanced numbers, with defaults from Phase 0.
 - **"TV direction" and "Learn TV direction"** (D5).
 - **The existing "Beam lock" switch.** It stays meaningful only with two-beam listening off, where it is today's lock.

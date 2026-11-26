@@ -21,7 +21,7 @@ def fake(seq):
     return post
 
 
-def ok(score, who="jose"):
+def ok(score, who="person-a"):
     return {"available": True, "scores": {who: score}, "best": who, "score": score}
 
 
@@ -40,8 +40,8 @@ class T(unittest.TestCase):
             g.audio(JAN * 2)
             return await g.fim_do_turno()
         r = run(go())
-        self.assertEqual(r["callerMatch"], "jose")
-        self.assertEqual(r["best"], "jose")
+        self.assertEqual(r["callerMatch"], "person-a")
+        self.assertEqual(r["best"], "person-a")
         self.assertFalse(r["wouldEnd"])
         self.assertEqual(r["errors"], 0)
 
@@ -68,7 +68,7 @@ class T(unittest.TestCase):
         self.assertIsNone(r2)
         self.assertEqual(n, 1)
         self.assertEqual(m, 2)
-        self.assertEqual(r3["callerMatch"], "jose")
+        self.assertEqual(r3["callerMatch"], "person-a")
 
     def test_post_failure_counted_not_raised(self):
         async def go():
@@ -78,7 +78,7 @@ class T(unittest.TestCase):
             return await g.fim_do_turno()
         r = run(go())
         self.assertEqual(r["errors"], 1)
-        self.assertEqual(r["callerMatch"], "jose")
+        self.assertEqual(r["callerMatch"], "person-a")
 
     def test_unavailable_logged_once(self):
         async def go():
@@ -94,9 +94,9 @@ class T(unittest.TestCase):
     def test_speaker_gate_field_in_line(self):
         t = rc.Turnos("k", "s", "a", pi_turns=True)
         t.usuario("oi", 1.0)
-        t.portao_voz({"windows": [0.7], "best": "jose", "callerMatch": "jose", "wouldEnd": False, "errors": 0})
+        t.portao_voz({"windows": [0.7], "best": "person-a", "callerMatch": "person-a", "wouldEnd": False, "errors": 0})
         r = t.ela_parou(2.0)
-        self.assertEqual(r["speakerGate"]["callerMatch"], "jose")
+        self.assertEqual(r["speakerGate"]["callerMatch"], "person-a")
         t.usuario("de novo", 3.0)
         self.assertNotIn("speakerGate", t.ela_parou(4.0))
 

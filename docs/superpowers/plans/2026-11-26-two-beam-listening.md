@@ -68,7 +68,7 @@ inflating any of them.
 | Where | Event (top-level key) | When | Fields |
 |---|---|---|---|
 | Pi | `two_beam_config` | program start, and after a config change that touches these keys | `enabled`, `permitted` + `why_not` (`board`, `only_word_off`, `off`), `tv_azimuth_deg`, `tv_elevation_deg`, `caller_margin_db`, `tv_margin_db`, `caller_silence_s`, `turn_max_s` |
-| Pi | `two_beam_mode` | each conversation, at connect | `mode` (`pi` or `v046`), `reason` (`locked`, `locked_tv_excluded`, `lock_failed`, `no_wake_word`, `whisper`, `not_permitted`), `beam_a_deg`, `beam_t_deg`, `tv_elev_deg` |
+| Pi | `two_beam_mode` | each conversation, at connect | `mode` (`pi` or `v046`), `reason` (`locked`, `locked_tv_excluded`, `lock_failed`, `board_busy` (the TV calibration owns the board), `no_wake_word`, `whisper`, `not_permitted`), `beam_a_deg`, `beam_t_deg`, `tv_elev_deg` |
 | Pi | `two_beam_reaim` | each re-aim | `cause` (`follow_up` or `wake_word`), `from_deg`, `to_deg`, `polls` |
 | Pi | `two_beam_energy` | the detector enters pass-through because energy went stale, and again when it recovers | `state` (`stale` or `ok`), `failed_reads`, `stale_s` |
 | Pi | `two_beam_turn_ceiling` | the 60 s ceiling split a turn | `turn_s`, `frames` (per class) |
@@ -527,7 +527,7 @@ Labels (HA style, English in `en.json` and `strings.json`; the pt-BR file keeps 
 - "Caller silence"
 - "Turn ceiling"
 - Button "Learn TV direction"
-- Event "TV direction learning"
+- Event "TV direction learn"
 
 Short help texts. Exact copy: one sentence each, at most ~200 characters, like the 25/11 `continuous_speech_limit`
 fix. Long explanations go to `docs/satellite-settings.md`.

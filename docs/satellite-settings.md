@@ -20,14 +20,14 @@ The settings dialog of each satellite (gear → Advanced) keeps its help texts s
 
 **What it does.** On XVF3800 boards the satellite listens with two beams during a conversation: one aimed at the person who called her, one aimed at the TV. Speech that comes from the TV beam does not reach her and does not keep the conversation open. It needs "Only the wake word interrupts" to be on.
 
-**When it falls back to v0.4.6 behavior.** With no direction lock on the caller, with no wake word starting the conversation, in whisper mode, or on a Jabra (which has no beams), the satellite behaves as in v0.4.6: the continuous sound cutoff applies and nothing is filtered by direction.
+**When it falls back to v0.4.6 behavior.** With no direction lock on the caller, with no wake word starting the conversation, in whisper mode, or on a Jabra (which has no beams), the satellite behaves as in v0.4.6: the continuous sound cutoff applies and nothing is filtered by direction. The reason is written to the satellite journal (`why_not` in the `two_beam_config` line), not shown in the entity's attributes.
 
-**Learn TV direction.** The "Learn TV direction" button listens for a short time while the TV is playing and stores `tv_azimuth` (degrees as the board sees it; -1 = no TV) and `tv_elevation`. The `TV direction learning` event reports `stored` or `refused`. It refuses with one of these reasons: `too_few_frames` (the room is too quiet), `spread` (the sound has no stable direction), `near_caller` (the direction is too close to where the caller usually stands), `aborted` (a conversation started meanwhile) or `error` (a USB failure). The board is always released at the end. Set the values by hand if you prefer.
+**Learn TV direction.** The "Learn TV direction" button listens for a short time while the TV is playing and stores `tv_azimuth` (degrees as the board sees it; -1 = no TV) and `tv_elevation`. The `TV direction learn` event reports `stored` or `refused`. It refuses with one of these reasons: `too_few_frames` (the room is too quiet), `spread` (the sound has no stable direction), `near_caller` (the direction is too close to where the caller usually stands), `aborted` (a conversation started meanwhile) or `error` (a USB failure). The board is always released at the end. Set the values by hand if you prefer.
 
 **The margins.**
 - `caller_margin` (dB): how much louder the caller's beam must be than the TV beam for the sound to count as the caller.
 - `tv_margin` (dB): how much louder the TV beam must be than the caller's beam for the sound to count as the TV.
-- Between the two, the sound is undecided and the previous decision stands. Larger margins decide less often but wrongly less often.
+- Between the two, the sound is undecided: it counts as speech (so it can hold the turn open) until `speech_max` or the caller-silence rule ends it. Larger margins decide less often but wrongly less often.
 - `caller_silence` (s) ends the turn after this long without the caller's voice, even if other sound goes on.
 
 **The turn ceiling.** `turn_ceiling` (default 60 s) is the longest single turn. Longer speech is split in two and the conversation goes on; it is not cut.
