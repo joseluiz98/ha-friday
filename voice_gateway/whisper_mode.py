@@ -84,10 +84,10 @@ class SemResposta:
 
     def __init__(self, prazo_s=10.0, sat_id=None):
         self.prazo_s, self._sat_id = prazo_s, sat_id
-        self._desde = None
+        self._desde, self._payload = None, None
 
-    def stopped(self, agora: float):
-        self._desde = agora
+    def stopped(self, agora: float, payload=None):
+        self._desde, self._payload = agora, payload
 
     def respondeu(self):
         self._desde = None
@@ -96,7 +96,7 @@ class SemResposta:
         if self._desde is None or agora - self._desde < self.prazo_s:
             return False
         self._desde = None  # once per turn
-        logger.warning(f"two-beam: no answer {self.prazo_s:.0f}s after the end of speech (sat={self._sat_id})")
+        logger.warning(f"two-beam: no answer {self.prazo_s:.0f}s after the end of speech (sat={self._sat_id}) twoBeam={self._payload}")
         return True
 
 
@@ -146,7 +146,8 @@ class PiSpeechTurns(FrameProcessor):
 
     async def _fim_por_prazo(self):
         await asyncio.sleep(self._stop_timeout)
-        logger.warning(f"whisper: fim da fala sem áudio na janela; enviando assim mesmo (sat={self._sat_id})")
+        prefixo = "two-beam: window without audio" if self._preroll else "whisper: fim da fala sem áudio na janela"
+        logger.warning(f"{prefixo}; enviando assim mesmo (sat={self._sat_id})")
         await self._trocar(False)
 
     async def _depois_de_pronto(self, anterior, falando):

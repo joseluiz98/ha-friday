@@ -1832,7 +1832,7 @@ async def bot(runner_args: RunnerArguments):
             elif msg.type == "speech_stopped" and turnos_pi:
                 turnos.dois_feixes(msg.data)
                 if sem_resposta:
-                    sem_resposta.stopped(time.monotonic())
+                    sem_resposta.stopped(time.monotonic(), msg.data if isinstance(msg.data, dict) else None)
                     _manter(asyncio.create_task(_vigiar_sem_resposta()))
                 await turnos_pi.stopped()
                 if sombra_portao:
