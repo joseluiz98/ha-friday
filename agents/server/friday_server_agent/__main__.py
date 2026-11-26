@@ -32,6 +32,7 @@ from .ota import github as otagh
 from .ota import http as otahttp
 from .ota import tls as otatls
 from . import negatives as negmod
+from . import speaker_gate as spkgate
 from .ota import image as otaimg
 from .ota import loop as otaloop
 from .ota import notify as otanotify
@@ -378,6 +379,7 @@ async def main() -> None:
     app = core.app()
     otahttp.add_routes(app, orch, lambda: status_token)  # satellites: their own tokens; request_install: status token
     negmod.add_routes(app, orch.tokens.check)  # voice-training baseline: other satellites' negatives, satellite bearer
+    spkgate.add_routes(app)  # speaker gate (shadow): localhost-only scoring route
     provmod.add_routes(app, bundles)  # GET /v1/bundles/{one_time_token}: its own single-use token, no other auth
     runner = web.AppRunner(app)
     await runner.setup()
