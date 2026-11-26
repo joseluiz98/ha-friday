@@ -99,3 +99,15 @@ def test_recording_switches_are_advanced_settings():
     assert code(st.validate_advanced, caps, "record_activations", 1) == "bad_type"
     # an old agent that does not announce them: unknown
     assert code(st.validate_advanced, _caps(), "record_ambient", True) == "unknown_key"
+
+
+def test_two_beam_keys_and_texts_in_all_files():
+    import json, pathlib
+    keys = ["two_beam_listening", "tv_azimuth", "tv_elevation", "caller_margin", "tv_margin",
+            "caller_silence", "turn_ceiling"]
+    assert all(k in st.ADVANCED_FIXED for k in keys)
+    base = pathlib.Path(st.__file__).parent
+    for f in ("strings.json", "translations/en.json", "translations/pt-BR.json"):
+        adv = json.loads((base / f).read_text())["config_subentries"]["satellite"]["step"]["advanced"]
+        for k in keys:
+            assert adv["data"][k] and 0 < len(adv["data_description"][k]) <= 220

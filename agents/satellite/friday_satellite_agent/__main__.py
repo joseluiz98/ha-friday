@@ -242,6 +242,8 @@ async def main() -> None:
             return await power.restart_program()
         if key == "ring_preview":
             return preview.start()
+        if key == "learn_tv_direction":
+            return await program.command({"acao": "learn_tv_direction"})
         return {"ok": False, "error": "unknown_key"}
 
     room = room_sensors.Monitor(room_sensors.RoomSensors(), lambda v: room_state(v), lambda: room_caps())

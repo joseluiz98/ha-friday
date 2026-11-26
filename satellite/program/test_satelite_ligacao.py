@@ -1470,6 +1470,246 @@ class TestXvf3800Trava(TestXvf3800):
         self.s._travar_na_palavra()  # não faz nada no Jabra
 
 
+class TestDoisFeixesLigacao(TestXvf3800):
+    """Two-beam listening wired into the program (spec 2026-11-26): mode at connect, payloads, re-aim, traceability."""
+    PALAVRA = {"whisper": False, "wake_word": "friday"}
+
+    def _satelite(self, graus=45, tv=200):
+        s = self._novo_satelite_xvf()
+        s.cfg["tv_azimuth_deg"] = tv
+        s.maestro.mudo = False
+        patch = mock.patch.object(fs, "DIRECOES", os.path.join(self.d, "direcoes.ndjson"))
+        patch.start()
+        self.addCleanup(patch.stop)
+        if graus is not None:
+            agora = fs.time.monotonic()
+            for dt in (0.6, 0.4, 0.2):
+                s.doa_dir.alimentar(agora - dt, fs.math.radians(graus))
+        return s
+
+    def _conversa(self, **kw):
+        import contextlib, io
+        s = self._satelite(**kw)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            s.evento("palavra", dict(self.PALAVRA))
+            s.evento("conectou")
+        return s, self._linhas(buf.getvalue())
+
+    @staticmethod
+    def _linhas(texto):
+        out = []
+        for ln in texto.splitlines():
+            try:
+                out.append(json.loads(ln))
+            except ValueError:
+                pass
+        return out
+
+    def _imprimindo(self, fn):
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            fn()
+        return self._linhas(buf.getvalue())
+
+    async def test_two_beam_mode_decided_at_connect(self):
+        s, linhas = self._conversa()
+        self.assertIs(F.conexoes[-1].dados["pi_turns"], True)
+        self.assertTrue(s.maestro.pi_turns and s.dois_feixes)
+        modo = next(l["two_beam_mode"] for l in linhas if "two_beam_mode" in l)
+        self.assertEqual((modo["mode"], modo["reason"]), ("pi", "locked"))
+        self.assertAlmostEqual(modo["beam_a_deg"], 45, delta=1)
+        self.assertAlmostEqual(modo["beam_t_deg"], 200, delta=1)
+        par = [vs for n, vs in self.link.escritas if n == "AEC_FIXEDBEAMSAZIMUTH_VALUES"][-1]
+        self.assertAlmostEqual(par[0], fs.math.radians(45), places=3)
+        self.assertAlmostEqual(par[1], fs.math.radians(200), places=3)
+        self.assertTrue(os.path.exists(fs.DIRECOES))
+
+    async def test_lock_failure_runs_as_today(self):
+        s, linhas = self._conversa(graus=None)  # no direction samples: nothing to lock on
+        self.assertNotIn("pi_turns", F.conexoes[-1].dados)
+        self.assertFalse(s.maestro.pi_turns or s.dois_feixes)
+        self.assertIsNone(s.ouvido)
+        modo = next(l["two_beam_mode"] for l in linhas if "two_beam_mode" in l)
+        self.assertEqual((modo["mode"], modo["reason"]), ("v046", "lock_failed"))
+
+    async def test_not_permitted_conversations_print_why(self):
+        s = self._satelite()
+        s.cfg["two_beam_listening"] = False
+        linhas = self._imprimindo(lambda: s.evento("palavra", dict(self.PALAVRA)))
+        self.assertNotIn("pi_turns", F.conexoes[-1].dados)
+        self.assertEqual(next(l["two_beam_mode"]["reason"] for l in linhas if "two_beam_mode" in l), "not_permitted")
+
+    async def test_speech_stopped_payload_has_stats_and_reason(self):
+        s, _ = self._conversa()
+        t = fs.time.monotonic()
+        for i in range(5):
+            s.energia.atualizar(t + i * 0.08, [4.0, 0.0, 1.0, 1.0])
+            s.ouvido.alimentar(0.9, t + i * 0.08, True, True, "ouvindo")
+        s.evento("fala_comecou")
+        self.assertEqual(F.mensagens[-1], ("speech_started", {"tv_active": False}))
+        s._fim_payload, _ = s.ouvido.fala("fala_parou", t + 1, False, *s._beam_deg())
+        s.evento("fala_parou")
+        tipo, dados = F.mensagens[-1]
+        self.assertEqual(tipo, "speech_stopped")
+        self.assertEqual(dados["frames"]["caller"], 5)
+        self.assertEqual(dados["by"], "pause")
+        self.assertAlmostEqual(dados["beam_a_deg"], 45, delta=1)
+        self.assertAlmostEqual(dados["beam_t_deg"], 200, delta=1)
+        self.assertEqual(s.ouvido.det.estatisticas()["frames"]["caller"], 0)  # reset after each stop
+
+    async def test_whisper_conversation_still_sends_empty_payloads(self):
+        s = self._satelite()
+        s.evento("palavra", {"whisper": True, "wake_word": "friday"})
+        s.evento("conectou")
+        self.assertEqual([m for m in F.mensagens if m[0].startswith("speech")][0], ("speech_started", {}))
+        self.assertFalse(s.dois_feixes)
+
+    async def test_mic_closing_for_a_recado_closes_the_open_window_first(self):
+        s, _ = self._conversa()
+        s.evento("fala_comecou")  # the caller is speaking: window open
+        self.assertEqual([m[0] for m in F.mensagens], ["speech_started"])
+        s.evento("ela_comecou")  # her answer starts: only the word interrupts, so the mic closes
+        self.assertEqual([m[0] for m in F.mensagens], ["speech_started", "speech_stopped"])
+        self.assertFalse(s.microfone_aberto)
+        s.evento("fala_parou")  # swallowed by the maestro during the recado: no second stop
+        self.assertEqual([m[0] for m in F.mensagens], ["speech_started", "speech_stopped"])
+
+    async def test_mic_closing_without_an_open_window_sends_nothing(self):
+        s, _ = self._conversa()
+        s.evento("ela_comecou")
+        self.assertEqual(F.mensagens, [])
+
+    async def test_one_summary_line_per_conversation(self):
+        s, linhas = self._conversa()
+        t = fs.time.monotonic()
+
+        def tres_turnos():
+            for n in range(3):
+                for i in range(4):
+                    s.energia.atualizar(t + n * 3 + i * 0.08, [4.0, 1.0, 1.0, 1.0])
+                    s.ouvido.alimentar(0.9, t + n * 3 + i * 0.08, True, True, "ouvindo")
+                s.evento("fala_comecou")
+                s._fim_payload, _ = s.ouvido.fala("fala_parou", t + n * 3 + 1, False, *s._beam_deg())
+                s.evento("fala_parou")
+            s.evento("botao", "vermelho")
+        linhas += self._imprimindo(tres_turnos)
+        resumos = [l["two_beam_summary"] for l in linhas if "two_beam_summary" in l]
+        self.assertEqual(len(resumos), 1)
+        self.assertEqual((resumos[0]["turns"], resumos[0]["by"]["pause"], resumos[0]["release"]), (3, 3, "closed"))
+        self.assertEqual(resumos[0]["frames"]["caller"], 12)
+        chaves = {k for l in linhas for k in l if k.startswith("two_beam")}
+        self.assertEqual(chaves, {"two_beam_mode", "two_beam_summary"})  # never per-frame lines
+        self.assertFalse(s.dois_feixes or s.doa_trava.travado)
+
+    async def test_reaim_runs_between_the_answer_and_the_next_speech(self):
+        s, _ = self._conversa()
+        s.evento("ela_comecou"); s.evento("resposta_completa"); s.evento("ela_parou")  # the first answer ends: fim_da_resposta
+        self.assertTrue(s._reaim_ativo)
+        self.link.escritas.clear()
+        t = fs.time.monotonic()
+        for dt in (0.3, 0.2, 0.1, 0.0):
+            s.reaponta.alimentar(t - dt, fs.math.radians(120), 2.0)
+        linhas = self._imprimindo(lambda: s._ciclo_doa(t))
+        await asyncio.sleep(0)
+        self.assertAlmostEqual(fs.math.degrees(s.doa_trava.theta_a), 120, delta=1)
+        self.assertAlmostEqual(fs.math.degrees(s.doa_trava.theta_t), 200, delta=1)  # the TV beam stays
+        self.assertFalse(s._reaim_ativo)
+        s._reaim_ativo = True
+        s.evento("fala_comecou")  # the window closes at the next speech, and the lock is re-armed
+        self.assertFalse(s._reaim_ativo)
+
+    async def test_wake_word_inside_the_conversation_reaims_beam_a_without_reconnecting(self):
+        s, _ = self._conversa()
+        s.evento("ela_comecou")  # her answer: recado, mic closed
+        agora = fs.time.monotonic()
+        s.doa_livre._amostras.clear()
+        for dt in (0.6, 0.4, 0.2):  # the free-running beam follows the second speaker (the fixed beams cannot)
+            s.doa_livre.alimentar(agora - dt, fs.math.radians(300))
+        n = len(F.conexoes)
+        linhas = self._imprimindo(lambda: s.evento("palavra", dict(self.PALAVRA)))
+        self.assertEqual(len(F.conexoes), n)
+        self.assertAlmostEqual(fs.math.degrees(s.doa_trava.theta_a), 300, delta=1)
+        self.assertEqual(next(l["two_beam_reaim"]["cause"] for l in linhas if "two_beam_reaim" in l), "wake_word")
+
+    async def test_wake_word_reaim_ignores_the_processed_doa_and_a_direction_near_beam_a(self):
+        s, _ = self._conversa()  # beam A at 45
+        s.evento("ela_comecou")
+        agora = fs.time.monotonic()
+        s.doa_dir._amostras.clear(); s.doa_livre._amostras.clear()
+        for dt in (0.6, 0.4, 0.2):
+            s.doa_dir.alimentar(agora - dt, fs.math.radians(300))   # processed DoA: never the source of a re-aim
+            s.doa_livre.alimentar(agora - dt, fs.math.radians(60))  # free beam within 30 degrees of beam A
+        linhas = self._imprimindo(lambda: s.evento("palavra", dict(self.PALAVRA)))
+        self.assertFalse([l for l in linhas if "two_beam_reaim" in l])  # no log line, no write
+        self.assertAlmostEqual(fs.math.degrees(s.doa_trava.theta_a), 45, delta=1)
+
+    async def test_green_button_during_the_callers_speech_closes_the_window_once(self):
+        s, _ = self._conversa()
+        s.evento("fala_comecou")  # the caller is speaking: window open
+        s.evento("botao", "verde")
+        self.assertEqual([m[0] for m in F.mensagens], ["speech_started", "speech_stopped"])
+        self.assertFalse(s.janela_pi.aberta)
+        s.evento("fala_parou")  # the detector stop afterwards sends nothing more
+        self.assertEqual([m[0] for m in F.mensagens].count("speech_stopped"), 1)
+
+    async def test_caller_resuming_across_a_recado_keeps_a_window(self):
+        s, _ = self._conversa()
+        s.maestro.a.only_wake_word_interrupts = True
+        s.evento("fala_comecou")
+        s.evento("ela_comecou")  # she answers over the caller: stop, mic closed
+        self.assertEqual([m[0] for m in F.mensagens], ["speech_started", "speech_stopped"])
+        s.evento("resposta_completa"); s.evento("ela_parou")  # the recado ends with the caller still talking
+        self.assertEqual([m[0] for m in F.mensagens], ["speech_started", "speech_stopped", "speech_started"])
+        self.assertTrue(s.janela_pi.aberta)
+        s.evento("fala_parou")
+        self.assertEqual([m[0] for m in F.mensagens][-1], "speech_stopped")
+        self.assertFalse(s.janela_pi.aberta)
+
+    async def test_poll_stops_reading_energies_once_the_beams_are_released(self):
+        s, _ = self._conversa()
+        self.assertTrue(s._escuta_dois_feixes())
+        s.doa_trava.soltar("ceiling90")  # the 90 s ceiling
+        self.assertTrue(s.dois_feixes)
+        self.assertFalse(s._escuta_dois_feixes())  # energies go stale: the detector passes through
+        s.dois_feixes = False
+        self.assertFalse(s._escuta_dois_feixes())
+
+    async def test_caller_events_are_not_journaled(self):
+        s, _ = self._conversa()
+        s.evento("fala_comecou")
+        linhas = self._imprimindo(lambda: [s.evento("fala_quem_chamou") for _ in range(5)])
+        self.assertEqual([l for l in linhas if l.get("evento") == "fala_quem_chamou"], [])
+
+    async def test_summary_turns_count_only_stops_sent_to_the_bot(self):
+        s, linhas = self._conversa()
+        t = fs.time.monotonic()
+        s.evento("fala_comecou")
+        s.evento("ela_comecou")  # the maestro closes the window: one stop sent
+        s._fim_payload, _ = s.ouvido.fala("fala_parou", t + 1, False, *s._beam_deg())
+        s.evento("fala_parou")  # the detector's own stop is swallowed by the recado
+        resumo = s.ouvido.fechar(t + 2, 1.0, "closed")["two_beam_summary"]
+        self.assertEqual(resumo["turns"], 1)
+        self.assertEqual(sum(resumo["by"].values()), 1)
+
+    async def test_follow_up_reaim_is_dropped_when_the_turn_began_meanwhile(self):
+        s, _ = self._conversa()
+        s.evento("ela_comecou"); s.evento("resposta_completa"); s.evento("ela_parou")
+        self.assertTrue(s._reaim_ativo)
+        s.evento("fala_comecou")  # the caller's turn begins before the posted re-aim runs
+        s._reapontar(fs.math.radians(120), 3, "follow_up")
+        self.assertAlmostEqual(fs.math.degrees(s.doa_trava.theta_a), 45, delta=1)
+
+    async def test_summary_lock_time_ends_at_the_ceiling_release(self):
+        s, _ = self._conversa()
+        s.doa_trava.soltar("ceiling90")
+        s.doa_trava.soltada_em = s.doa_trava.travada_desde + 5.0
+        linhas = self._imprimindo(lambda: s.evento("botao", "vermelho"))
+        resumo = next(l["two_beam_summary"] for l in linhas if "two_beam_summary" in l)
+        self.assertEqual((resumo["lock_s"], resumo["release"]), (5.0, "ceiling90"))
+
+
 class TestXvf3800MudoRevisao(TestXvf3800):
     async def test_button_mute_is_saved_so_a_restart_keeps_it(self):
         # review I1: apply_startup writes the pin from cfg["mudo"]; a button mute must be recorded there

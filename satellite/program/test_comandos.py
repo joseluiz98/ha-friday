@@ -296,3 +296,15 @@ class TestProvisionamento(unittest.TestCase):
         for ruim in (None, "", "Sala de estar", "a/b", 3):
             self.assertFalse(self.run_(acao="set_area", area_id=ruim)[0]["ok"], ruim)
 
+
+
+class TestAprenderTv(unittest.TestCase):
+    def test_calibration_refused_when_not_idle(self):
+        r, ef = comandos.executar({"id": "1", "acao": "learn_tv_direction"}, None, None, 0, estado_maestro="conversando")
+        self.assertFalse(r["ok"])
+        self.assertEqual(ef, [])
+
+    def test_calibration_effect_when_idle(self):
+        r, ef = comandos.executar({"id": "1", "acao": "learn_tv_direction"}, None, None, 0, estado_maestro="parada")
+        self.assertTrue(r["ok"])
+        self.assertEqual(ef, [("aprender_tv", None)])

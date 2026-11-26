@@ -1053,15 +1053,18 @@ class EntregaObserver(BaseObserver):
 class RegistroObserver(BaseObserver):
     """Grava cada turno no NDJSON do CV (spec do satélite §4). Só olha a primeira passagem de cada quadro."""
 
-    def __init__(self, turnos: rc.Turnos):
+    def __init__(self, turnos: rc.Turnos, ao_saida=None):
         super().__init__()
         self._t = turnos
+        self._ao_saida = ao_saida  # two-beam: model output or tool call = the turn was answered
 
     async def on_push_frame(self, data: FramePushed):
         if not data.first_push:
             return
         f = data.frame
         try:
+            if self._ao_saida and isinstance(f, (TTSTextFrame, FunctionCallInProgressFrame)):
+                self._ao_saida()
             if isinstance(f, TranscriptionFrame) and f.text:
                 self._t.usuario(f.text, datetime.now().timestamp())
             elif isinstance(f, TTSTextFrame) and f.text:
@@ -1264,8 +1267,10 @@ async def bot(runner_args: RunnerArguments):
     # "conexão: entrega …" e "conexão: timer …" ficam fora da medição de latência (spec 2026-10-12 §6)
     # 20/10 (spec 2026-10-20 D6): conversa aberta por um "Friday" sussurrado; só o satélite manda `whisper`
     sussurro = eh_satelite and sm.whisper(corpo)
+    pi_turns = eh_satelite and sm.pi_turns(corpo)  # 26/11: two-beam listening, the Pi drives the turns
+    turnos_pi_ativos = sussurro or pi_turns
     logger.info(f"conexão: {sm.rotulo_conexao(eh_satelite, satelite_id, comodo, id_entrega, timer, bool(apresentacao))}"
-                f"{' sussurro' if sussurro else ''}"
+                f"{' sussurro' if sussurro else ''}{' pi_turns' if pi_turns else ''}"
                 f"{' claim_id=' + str(corpo.get('claim_id')) if eh_satelite and isinstance(corpo, dict) and corpo.get('claim_id') else ''}; "
                 f"preferências: {preferencias.count(chr(10) + '- ')} diretrizes; vistas de memória: braço={arm}")
     if id_entrega and not entrega:
@@ -1336,15 +1341,17 @@ async def bot(runner_args: RunnerArguments):
         ),
     }
 
-    fim_ms = sm.fim_de_fala_ms(corpo) if eh_satelite and not sussurro else None
+    fim_ms = sm.fim_de_fala_ms(corpo) if eh_satelite and not turnos_pi_ativos else None
     if fim_ms is not None:  # 04/11: pausa de fim de fala ajustada pela Pi (em 0,8 s nada muda no Gemini)
         settings_kwargs["vad"] = GeminiVADParams(silence_duration_ms=fim_ms)
         logger.info(f"pausa de fim de fala do satélite: {fim_ms} ms")
     llm_extra = {}
-    if sussurro:
+    if turnos_pi_ativos:
         # D7: sem a detecção de atividade do servidor; início e fim da fala vêm da Pi (PiSpeechTurns)
         settings_kwargs["vad"] = GeminiVADParams(disabled=True)
         llm_extra["user_audio_preroll_secs"] = 1.5
+        if pi_turns:
+            logger.info(f"two-beam: session sat={satelite_id} pi_turns, server VAD off, preroll 1.5s then 0.5s")
     llm = GeminiLiveLLMService(
         api_key=os.environ["GEMINI_API_KEY"],
         tools=ferramentas,
@@ -1384,6 +1391,8 @@ async def bot(runner_args: RunnerArguments):
     llm._handle_server_message = _mensagem_vigiada
 
     def vigia_fala():
+        if sem_resposta:
+            sem_resposta.respondeu()
         latencia = vigia.speech_started()
         if latencia is not None:
             logger.info(f"gemini [{sessao}] começou a falar {latencia:.1f}s após o cérebro")
@@ -1398,7 +1407,7 @@ async def bot(runner_args: RunnerArguments):
         _manter(asyncio.create_task(vigia_silencio()))
     turnos = rc.Turnos(f"friday-satelite-{satelite_id}" if eh_satelite else "friday-pagina", sessao,
                        satelite_id if eh_satelite else "pagina", whisper=sussurro,  # 22/10: marca no Logbook
-                       wake_word=sm.wake_word(corpo))  # 28/10: palavra que abriu, só no 1º turno
+                       wake_word=sm.wake_word(corpo), pi_turns=pi_turns)  # 28/10: palavra que abriu, só no 1º turno
 
     def portao_decidiu(acao, segurou_s, fecha_turno):
         if acao:
@@ -1742,7 +1751,13 @@ async def bot(runner_args: RunnerArguments):
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
     # D7/D8: conversa sussurrada = turnos dirigidos pela Pi e voz do TTS sussurrado (whisper_mode.py)
-    turnos_pi = wm.PiSpeechTurns(ready=lambda: bool(getattr(llm, "_ready_for_realtime_input", True))) if sussurro else None
+    from speaker_gate_client import SombraPortao
+    sombra_portao = SombraPortao(satelite_id) if pi_turns else None
+    turnos_pi = wm.PiSpeechTurns(sink=sombra_portao.audio if sombra_portao else None,
+                                 ready=lambda: bool(getattr(llm, "_ready_for_realtime_input", True)),
+                                 preroll=(llm, 1.5, 0.5) if pi_turns else None,
+                                 sat_id=satelite_id) if turnos_pi_ativos else None
+    sem_resposta = wm.SemResposta(10.0, satelite_id) if pi_turns else None
     voz_sussurrada = None
     if sussurro:
         from google import genai as _genai
@@ -1777,7 +1792,7 @@ async def bot(runner_args: RunnerArguments):
         # enable_usage_metrics: o log passa a mostrar os tokens de cada fala, com o áudio separado.
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         idle_timeout_secs=IDLE_TIMEOUT_SECS,
-        observers=[RegistroObserver(turnos), UsageObserver(ab, sessao, arm, satelite_id if eh_satelite else None, settings_kwargs["model"]), ChamadasObserver(chamadas)]
+        observers=[RegistroObserver(turnos, sem_resposta.respondeu if sem_resposta else None), UsageObserver(ab, sessao, arm, satelite_id if eh_satelite else None, settings_kwargs["model"]), ChamadasObserver(chamadas)]
                   + ([EntregaObserver(entrega.id)] if entrega else [])
                   + ([SinaisDoSatelite(avisar_pi, contador_pi)] if eh_satelite else [])
                   + [PromessaObserver(sessao, contador_pi if eh_satelite else None, avisar_pi, avisar_gemini,
@@ -1788,6 +1803,10 @@ async def bot(runner_args: RunnerArguments):
             function_call_report_level={"*": RTVIFunctionCallReportLevel.FULL}
         ),
     )
+    async def _vigiar_sem_resposta():
+        await asyncio.sleep(sem_resposta.prazo_s + 0.1)
+        sem_resposta.verificar(time.monotonic())
+
     if worker.rtvi:
         @worker.rtvi.event_handler("on_client_message")
         async def ao_msg_da_pi(rtvi, msg):
@@ -1806,9 +1825,21 @@ async def bot(runner_args: RunnerArguments):
                 logger.info(f"fala cortada pela palavra [{sessao}]: geração em curso descartada={armou}")
                 await worker.queue_frames([_quadros.InterruptionWorkerFrame()])
             elif msg.type == "speech_started" and turnos_pi:  # D7: a Pi percebeu a fala (inclusive sussurrada)
+                turnos.dois_feixes(msg.data)
+                if sombra_portao:
+                    sombra_portao.comeco_do_turno(bool(isinstance(msg.data, dict) and msg.data.get("tv_active")))
                 await turnos_pi.started()
             elif msg.type == "speech_stopped" and turnos_pi:
+                turnos.dois_feixes(msg.data)
+                if sem_resposta:
+                    sem_resposta.stopped(time.monotonic(), msg.data if isinstance(msg.data, dict) else None)
+                    _manter(asyncio.create_task(_vigiar_sem_resposta()))
                 await turnos_pi.stopped()
+                if sombra_portao:
+                    try:
+                        turnos.portao_voz(await sombra_portao.fim_do_turno())
+                    except Exception:  # noqa: BLE001 - shadow only
+                        logger.exception("two-beam: speaker gate record failed")
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)

@@ -7,11 +7,15 @@ isso `apply_startup` reaplica tudo a cada partida do programa, começando por so
 """
 import os
 import sys
+import struct
 import threading
 import time
 
 VID_SEEED, PID_XVF3800 = 0x2886, 0x001A
 SYS_DELAY_PADRAO = 12  # amostras a 16 kHz, valor de fábrica (calibrar no lugar pelo HA)
+CTRL_LEITURA = 0xC0    # CTRL_IN | CTRL_TYPE_VENDOR | CTRL_RECIPIENT_DEVICE (pyusb), sem importar pyusb aqui
+STATUS_OK, STATUS_RETENTAR = 0, 64
+FORMATO = {"float": "f", "radians": "f", "int32": "i", "uint16": "H", "uint8": "B"}
 PINO_MUDO = 30         # X0D30: 1 = microfone cortado (medido 17/11)
 
 
@@ -28,6 +32,7 @@ def abrir_vendor(timeout_ms: int = 1000):
     if dev is None:
         raise RuntimeError("XVF3800 não encontrado")
     dev.TIMEOUT = timeout_ms
+    dev.PARAMETERS = xvf_host.PARAMETERS  # para `read_bounded` (a tabela do vendor)
     return dev
 
 
@@ -41,6 +46,7 @@ class XvfLink:
         self._lock_timeout, self._relogio = lock_timeout_s, relogio
         self._dev = None
         self._ultimo_log = {}
+        self.falhas_leitura = 0  # leituras limitadas que falharam (rastreabilidade do programa)
 
     def _avisar(self, chave, msg):
         agora = self._relogio()
@@ -71,11 +77,47 @@ class XvfLink:
         ok, v = self._chamar("read", nome)
         return list(v) if ok and v is not None else None
 
+    def read_bounded(self, nome: str, max_retries: int = 5, timeout_ms: int = 300):
+        """Leitura de registrador com prazo: no máximo 1 + `max_retries` transferências de `timeout_ms` (o `read` do
+        vendor tenta até 100 vezes). Mesmo lock e mesma reabertura do `_chamar`; devolve a lista ou None, nunca levanta."""
+        if not self._lock.acquire(timeout=self._lock_timeout):
+            self._avisar(("ocupado", nome), f"xvf3800: read_bounded {nome}: canal ocupado, pulado")
+            self.falhas_leitura += 1
+            return None
+        try:
+            if self._dev is None:
+                self._dev = self._fabrica()
+            info = getattr(self._dev, "PARAMETERS", {}).get(nome)
+            if info is None:
+                self._avisar(("desconhecido", nome), f"xvf3800: read_bounded {nome}: registrador desconhecido")
+                self.falhas_leitura += 1
+                return None
+            resid, cmdid, n, _, tipo = info[:5]
+            fmt = FORMATO[tipo]
+            tamanho = n * struct.calcsize("<" + fmt)
+            for _ in range(1 + max_retries):
+                r = bytes(self._dev.dev.ctrl_transfer(CTRL_LEITURA, 0, 0x80 | cmdid, resid, tamanho + 1, timeout_ms))
+                if r[0] == STATUS_OK:
+                    return list(struct.unpack("<" + fmt * n, r[1:1 + tamanho]))
+                if r[0] != STATUS_RETENTAR:
+                    break
+                time.sleep(0.01)
+            self._avisar(("leitura", nome), f"xvf3800: read_bounded {nome}: sem resposta válida")
+        except Exception as e:  # noqa: BLE001 - USB nunca derruba o programa
+            self._dev = None  # reabre na próxima
+            self._avisar(("falha", "read_bounded", nome, type(e).__name__),
+                         f"xvf3800: read_bounded {nome} falhou ({type(e).__name__}: {e})")
+        finally:
+            self._lock.release()
+        self.falhas_leitura += 1
+        return None
+
 
 def apply_startup(link: XvfLink, cfg: dict, mudo: bool) -> None:
     """Na partida do programa: solta a trava (nunca fica presa depois de um crash), saídas 8 0 / 7 3, atraso do
     `config.json` e o pino de mudo com o estado gravado."""
     link.write("AEC_FIXEDBEAMSONOFF", [0])
+    link.write("AEC_FIXEDBEAMSELEVATION_VALUES", [0.0, 0.0])
     link.write("AUDIO_MGR_OP_L", [8, 0])
     link.write("AUDIO_MGR_OP_R", [7, 3])
     link.write("AUDIO_MGR_SYS_DELAY", [int(cfg.get("xvf_sys_delay", SYS_DELAY_PADRAO))])
