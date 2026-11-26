@@ -765,6 +765,13 @@ class Satelite:
                 resposta = dict(resposta, parados=parados, tocando=bool(self.maestro._timers_tocando()))
             elif nome == "teste_palavra":
                 self.evento("teste_palavra", arg)
+            elif nome == "aprender_tv":
+                if self.xvf is None or self.doa_regra is None:
+                    resposta = dict(resposta, ok=False, erro="sem a placa XVF3800")
+                elif self.doa_regra.ocupada:
+                    resposta = dict(resposta, ok=False, erro="a calibração da TV já está em andamento")
+                else:
+                    self._comecar_aprender_tv()
             elif nome == "apresentacao":
                 self.evento("abrir_apresentacao", arg)
                 if self.maestro.estado != "conectando":
@@ -1023,6 +1030,39 @@ class Satelite:
         if baseline:
             resultados[0]["negativos_baixados"] = baseline
         self.loop.call_soon_threadsafe(self._fim_do_treino, ident, nome, pasta, resultados)
+
+    def _comecar_aprender_tv(self):
+        """Learn TV direction: a daemon thread runs doa.aprender_tv; the board is 'busy' (no lock on a word) meanwhile."""
+        hist = doa.mediana_direcoes(DIRECOES, time.time())
+        print(json.dumps({"tv_direction": {"started": True, "historico_deg": r1(
+            None if hist is None else math.degrees(hist) % 360)}}), flush=True)
+        self.doa_regra.ocupada = True
+
+        def correr():
+            try:
+                r = doa.aprender_tv(self.xvf, time.monotonic, time.sleep, lambda: self.maestro.estado != "parada", hist)
+            except Exception as e:  # noqa: BLE001
+                r = {"result": "refused", "reason": "error", "azimuth_deg": None, "elevation_deg": None,
+                     "spread_deg": None, "frames": 0, "energy_by_elevation": []}
+                print(json.dumps({"tv_direction_error": f"{type(e).__name__}: {e}"}), flush=True)
+            self.doa_regra.ocupada = False
+            self.loop.call_soon_threadsafe(self._fim_aprender_tv, r)
+        threading.Thread(target=correr, daemon=True, name="aprender-tv").start()
+
+    def _fim_aprender_tv(self, r):
+        if r.get("result") == "stored":
+            try:
+                mud = {"tv_azimuth_deg": r["azimuth_deg"], "tv_elevation_deg": r["elevation_deg"]}
+                novo = cfgmod.validar_mudancas(self.cfg, mud)
+                cfgmod.gravar(CFG, novo)
+                self.cfg = novo
+                print(json.dumps({"two_beam_config": cfgmod.resumo_dois_feixes(novo, self.placa)}), flush=True)
+                self.emissor.emitir("config", {"mudancas": mud, "origem": "calibracao"})
+            except Exception as e:  # noqa: BLE001
+                r = dict(r, result="refused", reason="error")
+                print(json.dumps({"tv_direction_error": f"{type(e).__name__}: {e}"}), flush=True)
+        print(json.dumps({"tv_direction": r}), flush=True)
+        self.emissor.emitir("tv_direction", r)
 
     def _fim_do_treino(self, ident, nome, pasta, resultados):
         aprovadas = {r["palavra"]: r for r in resultados if r.get("aprovado")}

@@ -125,6 +125,11 @@ def executar(cmd: dict, ctl, timers, agora: float, vozes=None, sons_dir=None, es
                 raise ValueError("o teste da palavra só começa com o satélite parado")
             r = {}
             efeitos.append(("teste_palavra", t))
+        elif acao == "learn_tv_direction":  # two-beam: the board listens to the TV for ~40 s (program effect)
+            if estado_maestro != "parada":
+                raise ValueError("a calibração da TV só começa com o satélite parado")
+            r = {}
+            efeitos.append(("aprender_tv", None))
         elif acao == "open_presentation":
             fatos = cmd.get("facts")
             if not isinstance(fatos, dict):
