@@ -110,7 +110,8 @@ class SpeakerGate:
         ext = self._ext()
         for person in sorted(os.listdir(root)):
             pdir = os.path.join(root, person)
-            if person in SKIP_FOLDERS or not os.path.isdir(pdir):
+            # `_negativos`, `_cache`: the voice-learning program's own folders, not people (desk test 26/11)
+            if person in SKIP_FOLDERS or person.startswith("_") or not os.path.isdir(pdir):
                 continue
             embs: list = []
             for dirpath, dirs, names in os.walk(pdir):

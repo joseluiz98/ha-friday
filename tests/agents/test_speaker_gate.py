@@ -59,6 +59,15 @@ def test_enroll_skips_jabra_folders_and_writes_mean(env):
     assert not (env / "enroll" / SAT / "jabra-speak-410.json").exists()
 
 
+def test_enroll_skips_program_folders(env):
+    (env / "m.onnx").write_bytes(b"x")
+    root = env / "voices"
+    _wav(root / SAT / "vozes" / "person-a" / "a.wav", 1)
+    _wav(root / SAT / "vozes" / "_negativos" / "n.wav", 9)
+    _wav(root / SAT / "vozes" / "_cache" / "c.wav", 9)
+    assert sg.SpeakerGate(_fake).enroll(SAT, str(root)) == {"person-a": 1}
+
+
 def test_score_picks_best_person(env):
     (env / "m.onnx").write_bytes(b"x")
     d = env / "enroll" / SAT
