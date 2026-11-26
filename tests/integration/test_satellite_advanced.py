@@ -28,12 +28,27 @@ CAPS = [
      "hidden": True},
     {"key": "record_activations", "platform": "switch", "name": "Record activations", "category": "config",
      "hidden": True},
+    {"key": "two_beam_listening", "platform": "switch", "name": "Two-beam listening", "hidden": True},
+    {"key": "tv_azimuth", "platform": "number", "name": "TV direction", "min": -1, "max": 359, "step": 1,
+     "hidden": True},
+    {"key": "tv_elevation", "platform": "number", "name": "TV elevation", "min": 0, "max": 80, "step": 1,
+     "hidden": True},
+    {"key": "caller_margin", "platform": "number", "name": "Caller margin", "min": 0, "max": 20, "step": 0.5,
+     "hidden": True},
+    {"key": "tv_margin", "platform": "number", "name": "TV margin", "min": 0, "max": 20, "step": 0.5,
+     "hidden": True},
+    {"key": "caller_silence", "platform": "number", "name": "Caller silence", "min": 0.5, "max": 5, "step": 0.1,
+     "hidden": True},
+    {"key": "turn_ceiling", "platform": "number", "name": "Turn ceiling", "min": 10, "max": 300, "step": 10,
+     "hidden": True},
     {"key": "vol", "platform": "number", "name": "Volume", "min": 0, "max": 10, "step": 1},
 ]
 STATE = {"ducking_restore": 1.0, "continuous_speech_limit": 0,
          "wakeword_friday_mode": "off", "wakeword_friday_sensitivity": 0.5,
          "wakeword_sexta_feira_mode": "active", "wakeword_sexta_feira_sensitivity": 0.35,
-         "ota_channel": "stable", "record_ambient": True, "record_activations": False}
+         "ota_channel": "stable", "record_ambient": True, "record_activations": False,
+         "two_beam_listening": False, "tv_azimuth": -1, "tv_elevation": 20, "caller_margin": 6,
+         "tv_margin": 6, "caller_silence": 1.5, "turn_ceiling": 60}
 
 
 def make_sat(got, state=None, answer=None):
@@ -220,5 +235,20 @@ async def test_advanced_recording_switches_are_sent_when_changed(hass):
     r = await hass.config_entries.subentries.async_configure(r["flow_id"], form_values(record_activations=True))
     assert r["type"] == FlowResultType.ABORT and r["reason"] == "advanced_saved"
     assert got == [("record_activations", True)]
+    await hass.config_entries.async_unload(entry.entry_id)
+    await sat.stop()
+
+
+async def test_advanced_two_beam_keys_are_shown_and_sent(hass):
+    """26/11: the two-beam settings are in the Advanced step; only changed ones are sent."""
+    got = []
+    sat = make_sat(got)
+    entry = await setup(hass, sat)
+    r = await open_advanced(hass, entry)
+    fields = {str(k) for k in r["data_schema"].schema}
+    assert {"two_beam_listening", "tv_azimuth", "tv_elevation", "caller_margin", "tv_margin",
+            "caller_silence", "turn_ceiling"} <= fields
+    r = await hass.config_entries.subentries.async_configure(r["flow_id"], form_values(tv_azimuth=120))
+    assert r["type"] == FlowResultType.ABORT and got == [("tv_azimuth", 120)]
     await hass.config_entries.async_unload(entry.entry_id)
     await sat.stop()

@@ -15,3 +15,19 @@ The settings dialog of each satellite (gear → Advanced) keeps its help texts s
 - The detector may miss the short pauses of a long dictation. On 10 Nov a 15 s reminder dictation was cut at the limit, so the office satellite (MK1) runs with 0.
 - **0 = off:** no dictation is ever cut, but a sound that never pauses (TV) keeps the conversation open until she ends it herself. This is a known open problem (evolution item 25, 25 Nov).
 - A higher value (for example 30 s) keeps most dictations and still closes on TV, only later.
+
+## Two-beam listening (`two_beam_listening` and six related keys)
+
+**What it does.** On XVF3800 boards the satellite listens with two beams during a conversation: one aimed at the person who called her, one aimed at the TV. Speech that comes from the TV beam does not reach her and does not keep the conversation open. It needs "Only the wake word interrupts" to be on.
+
+**When it falls back to v0.4.6 behavior.** With no direction lock on the caller, with no wake word starting the conversation, in whisper mode, or on a Jabra (which has no beams), the satellite behaves as in v0.4.6: the continuous sound cutoff applies and nothing is filtered by direction.
+
+**Learn TV direction.** The "Learn TV direction" button listens for a short time while the TV is playing and stores `tv_azimuth` (degrees as the board sees it; -1 = no TV) and `tv_elevation`. The `TV direction learning` event reports `stored` or `refused`. It refuses when the room is too quiet, when the sound has no stable direction, or when the direction is too close to where the caller usually stands. Set the values by hand if you prefer.
+
+**The margins.**
+- `caller_margin` (dB): how much louder the caller's beam must be than the TV beam for the sound to count as the caller.
+- `tv_margin` (dB): how much louder the TV beam must be than the caller's beam for the sound to count as the TV.
+- Between the two, the sound is undecided and the previous decision stands. Larger margins decide less often but wrongly less often.
+- `caller_silence` (s) ends the turn after this long without the caller's voice, even if other sound goes on.
+
+**The turn ceiling.** `turn_ceiling` (default 60 s) is the longest single turn. Longer speech is split in two and the conversation goes on; it is not cut.
