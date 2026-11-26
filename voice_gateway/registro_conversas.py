@@ -13,7 +13,8 @@ def _iso(agora: float) -> str:
 
 
 def _linha(chave, sessao, alvo, prompt, resposta, ok, erro, dur_ms, ferramentas, turno, agora, whisper=False,
-           wake_word=None, speech_gate=None, user_speech=None, two_beam=None, pi_turns=False):
+           wake_word=None, speech_gate=None, user_speech=None, two_beam=None, pi_turns=False,
+           speaker_gate=None):
     r = {"ts": _iso(agora), "prompt": prompt, "response": resposta, "ok": ok, "error": erro,
          "durationMs": dur_ms, "sessionKey": chave, "sessionId": sessao, "speakTarget": alvo,
          "warmState": None, "mode": "friday", "tools": ferramentas, "turnNumber": turno, "resumed": False}
@@ -27,6 +28,8 @@ def _linha(chave, sessao, alvo, prompt, resposta, ok, erro, dur_ms, ferramentas,
         r["userSpeech"] = user_speech
     if pi_turns:  # 26/11: the Pi drove the turn (two-beam listening)
         r["turnMode"] = "pi"
+    if speaker_gate:  # shadow speaker-gate verdicts (never acted on)
+        r["speakerGate"] = speaker_gate
     if two_beam:  # per-turn stats the Pi measured (frames per class, ratio, tv runs, how it ended, beam angles)
         r["twoBeam"] = two_beam
     return r
@@ -48,6 +51,7 @@ class Turnos:
         self._portao = []
         self._two_beam = None  # last `speech_stopped` payload of the turn, with tv_active ORed over the turn
         self._tv_active = False
+        self._speaker_gate = None
         self._t_trechos = []  # hora de cada trecho da transcrição do usuário (não conta a entrega do cérebro)
 
     def dois_feixes(self, d):
@@ -58,6 +62,11 @@ class Turnos:
             self._tv_active = True
         if "frames" in d or "by" in d:
             self._two_beam = dict(d)
+
+    def portao_voz(self, d):
+        """Shadow speaker-gate record of the turn (SombraPortao.fim_do_turno)."""
+        if isinstance(d, dict) and d:
+            self._speaker_gate = dict(d)
 
     def usuario(self, texto: str, agora: float):
         self._usuario.append(texto)
@@ -101,7 +110,7 @@ class Turnos:
         r = _linha(self.chave, self.sessao, self.alvo, "".join(self._usuario).strip(),
                    "".join(self._ela).strip(), True, None, dur, self._ferramentas, self.numero, agora,
                    self.whisper, self.wake_word if self.numero == 1 else None, self._portao,
-                   self._fala_do_usuario(), two_beam, self.pi_turns)
+                   self._fala_do_usuario(), two_beam, self.pi_turns, self._speaker_gate)
         self._novo()
         return r
 
