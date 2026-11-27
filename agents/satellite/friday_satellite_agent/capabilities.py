@@ -6,6 +6,7 @@ program's local events into protocol state, events and counters (idempotent).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -54,8 +55,14 @@ def percent_from_position(pos) -> int:
     return round(int(pos) * 100 / 11)
 
 
-def position_from_percent(pct) -> int:
-    return max(1, round(float(pct) * 11 / 100))
+def serialized(fn):
+    """One run at a time, in call order: a read that started before a change can never publish after it."""
+    lock = asyncio.Lock()
+
+    async def run(*args, **kwargs):
+        async with lock:
+            return await fn(*args, **kwargs)
+    return run
 
 
 def _d(key, platform, name, **kw) -> dict:
@@ -218,9 +225,14 @@ class Mapper:
         follow = cfg.get("continuacao_s")
         if isinstance(follow, int) and not isinstance(follow, bool) and follow > 0:
             self.last_follow_up = follow
-        pos = cfg.get("volume")
-        if pos is None and status:
-            pos = status.get("volume")
+        pct = status.get("volume_pct") if status else None  # the live value: the file lags a button press by 3 s
+        if pct is None:
+            pct = cfg.get("volume_pct")
+        if pct is None:
+            pos = cfg.get("volume")
+            if pos is None and status:
+                pos = status.get("volume")
+            pct = None if pos is None else percent_from_position(pos)
         st = {
             "do_not_disturb": bool(cfg.get("nao_perturbe")),
             # software mute (HA) OR the Jabra's own mute button (detected by the program, `mudo` in /status)
@@ -265,8 +277,8 @@ class Mapper:
             st["tv_margin"] = cfg.get("tv_margin_db", 6.0)
             st["caller_silence"] = cfg.get("caller_silence_s", 1.5)
             st["turn_ceiling"] = cfg.get("turn_max_s", 60)
-        if pos is not None:
-            st["volume"] = percent_from_position(pos)
+        if pct is not None:
+            st["volume"] = pct
         for w in wakewords:
             st[f"wakeword_{w['nome']}_mode"] = MODES.get(w.get("modo"))
             st[f"wakeword_{w['nome']}_sensitivity"] = w.get("limiar")
@@ -311,7 +323,7 @@ class Mapper:
         if key == "follow_up_mode":
             return {"config": {"continuacao_s": int(self.last_follow_up) if value else 0}}
         if key == "volume":
-            return {"config": {"volume": position_from_percent(value)}}
+            return {"config": {"volume_pct": int(round(float(value)))}}
         if key == "whisper_mode":
             return {"config": {"whisper_min_ratio_db": WHISPER_DEFAULT_DB if value else None}}
         if key == "ducking":
@@ -401,6 +413,9 @@ class Tracker:
 
     def mark_ha(self, keys) -> None:
         """Keys the agent just wrote for HA: their echo from the program is origin `ha`."""
+        keys = set(keys)
+        if "volume_pct" in keys:
+            keys.add("volume")  # the program echoes the pair
         now = self._clock()
         for k in keys:
             self._pending[k] = now + self.PENDING_S

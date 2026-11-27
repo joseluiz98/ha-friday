@@ -277,6 +277,8 @@ async def main() -> None:
                 memo["state"].pop(key, None)
         await core.push_state(changes, origin)
 
+    refresh = cap.serialized(refresh)  # poll, events and HA sets never interleave
+
     async def do_set(cmd: dict) -> dict:
         if cmd.get("key") == "voice_enabled":
             return await voice.set(bool(cmd.get("value")))
