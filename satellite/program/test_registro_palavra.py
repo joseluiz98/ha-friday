@@ -21,6 +21,11 @@ class TestLinha(unittest.TestCase):
         with self.assertRaises(ValueError):
             rp.linha("outro", 0.5, 0.5)
 
+    def test_marca_de_musica(self):
+        """27/11 (music_wake.py): só a decisão tomada no modo música leva a marca."""
+        self.assertIs(json.loads(rp.linha("ativou", 0.6, 0.4, music_relaxed=True))["music_relaxed"], True)
+        self.assertNotIn("music_relaxed", json.loads(rp.linha("ativou", 0.6, 0.4)))
+
 
     def test_tipo_sussurro_e_razao(self):
         d = json.loads(rp.linha("sussurro", 0.8, 0.2, whisper_ratio_db=12.34))

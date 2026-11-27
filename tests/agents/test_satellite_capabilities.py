@@ -543,3 +543,30 @@ def test_learn_tv_direction_press_forwards_command():
     src = (Path(__file__).resolve().parents[2] / "agents/satellite/friday_satellite_agent/__main__.py").read_text()
     assert 'key == "learn_tv_direction"' in src
     assert 'program.command({"acao": "learn_tv_direction"})' in src
+
+
+# 27/11: music-tolerant wake word (satellite/program/music_wake.py)
+def test_music_tolerant_wake_is_a_hidden_config_switch():
+    keys = {c["key"]: c for c in cap.controls_from_config(CFG, WW)}
+    d = keys["music_tolerant_wake"]
+    assert (d["platform"], d["name"], d["category"], d["hidden"]) == (
+        "switch", "Wake word tolerant to music", "config", True)
+
+
+def test_music_tolerant_wake_state_follows_the_board_when_auto():
+    assert cap.Mapper(board="jabra").state(dict(CFG), WW, None)["music_tolerant_wake"] is True
+    assert cap.Mapper().state(dict(CFG), WW, None)["music_tolerant_wake"] is True
+    assert cap.Mapper(board="xvf3800").state(dict(CFG), WW, None)["music_tolerant_wake"] is False
+    assert cap.Mapper(board="xvf3800").state(dict(CFG, music_relaxed_wake=True), WW, None)["music_tolerant_wake"] is True
+    assert cap.Mapper(board="jabra").state(dict(CFG, music_relaxed_wake=False), WW, None)["music_tolerant_wake"] is False
+
+
+def test_music_tolerant_wake_to_program():
+    m = cap.Mapper(board="jabra")
+    assert m.to_program(CFG, "music_tolerant_wake", False) == {"config": {"music_relaxed_wake": False}}
+    assert m.to_program(CFG, "music_tolerant_wake", True) == {"config": {"music_relaxed_wake": True}}
+
+
+def test_activation_data_carries_music_relaxed():
+    assert cap.activation_data({"palavra": "friday", "nota": 0.6, "music_relaxed": True})["music_relaxed"] is True
+    assert "music_relaxed" not in cap.activation_data({"palavra": "friday", "nota": 0.6})

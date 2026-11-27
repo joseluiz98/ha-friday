@@ -7,7 +7,7 @@ ARQUIVO = "/home/jose/gravacoes/eventos_palavra.ndjson"
 TIPOS = ("ativou", "sem_voz", "quase", "barrada_verificador", "sussurro", "sombra", "paciencia")
 
 
-def linha(tipo, nota, voz, arquivo=None, agora=None, whisper_ratio_db=None, palavra=None) -> str:
+def linha(tipo, nota, voz, arquivo=None, agora=None, whisper_ratio_db=None, palavra=None, music_relaxed=False) -> str:
     if tipo not in TIPOS:
         raise ValueError(f"tipo é um de {TIPOS}")
     agora = agora or datetime.datetime.now()
@@ -19,6 +19,8 @@ def linha(tipo, nota, voz, arquivo=None, agora=None, whisper_ratio_db=None, pala
         d["whisper_ratio_db"] = round(float(whisper_ratio_db), 1)
     if palavra is not None:  # spec 2026-10-24: só as palavras extras; a Friday segue sem o campo
         d["palavra"] = palavra
+    if music_relaxed:  # 27/11 (music_wake.py): decidida com verificadores de lado e porta de voz relaxada
+        d["music_relaxed"] = True
     return json.dumps(d, ensure_ascii=False)
 
 

@@ -13,6 +13,11 @@ class TestPayload(unittest.TestCase):
                              "limiar_verificador": 0.3, "razao_sussurro_db": -11.6, "sussurro": False,
                              "gravacao": "sem_voz_20261103_094322.wav"})
 
+    def test_marca_de_musica(self):
+        p = payload("friday", 0.6, "conversa", modo="ativa", limiar=0.42, limiar_voz=0.35, music_relaxed=True)
+        self.assertIs(p["music_relaxed"], True)
+        self.assertNotIn("music_relaxed", payload("friday", 0.6, "conversa", modo="ativa", limiar=0.42, limiar_voz=0.5))
+
     def test_sem_opcionais(self):
         p = payload("sexta_feira", 0.7, "sombra", modo="sombra", limiar=0.5, limiar_voz=0.6)
         self.assertEqual(set(p), {"palavra", "nota", "resultado", "duracao_s", "modo", "limiar", "limiar_voz"})

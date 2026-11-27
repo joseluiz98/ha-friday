@@ -32,7 +32,8 @@ ADVANCED_FIXED: tuple[str, ...] = ("ducking_restore", "continuous_speech_limit",
                                    "two_beam_listening", "tv_azimuth", "tv_elevation", "caller_margin", "tv_margin",
                                    "caller_silence", "turn_ceiling",  # 26/11: two-beam listening (XVF3800 only)
                                    "ota_channel",  # 14/11: the update channel left the device page
-                                   "record_ambient", "record_activations")  # 18/11: per-satellite recordings
+                                   "record_ambient", "record_activations",  # 18/11: per-satellite recordings
+                                   "music_tolerant_wake")  # 27/11: music-tolerant wake word
 _WAKEWORD_KEYS = ("_mode", "_sensitivity")
 _EPS = 1e-6
 

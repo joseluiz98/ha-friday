@@ -164,7 +164,8 @@
             "turn_ceiling": "Turn ceiling",
             "ota_channel": "Canal de atualização",
             "record_ambient": "Gravar áudio do ambiente",
-            "record_activations": "Gravar ativações"
+            "record_activations": "Gravar ativações",
+            "music_tolerant_wake": "Palavra tolerante à música"
           },
           "data_description": {
             "continuous_speech_limit": "Encerra a conversa após esse tempo de som sem pausa (TV, música, ruído) com ela calada. Também pode cortar um ditado longo sem pausas. 0 = desligado: nada é cortado, mas som contínuo deixa o microfone aberto. Padrão: 15 s.",
@@ -178,7 +179,8 @@
             "ducking_restore": "Quanto tempo até o volume da música voltar",
             "ota_channel": "alpha recebe as pre-releases primeiro; stable recebe depois da prova do alpha",
             "record_ambient": "Grava das 08:00 às 22:00 para treinar as palavras; vai para a VM de madrugada",
-            "record_activations": "Guarda ~3,5 s em volta de cada ativação para análise"
+            "record_activations": "Guarda ~3,5 s em volta de cada ativação para análise",
+            "music_tolerant_wake": "Enquanto toca música aqui (e 5 s depois), as palavras dispensam o verificador de voz e pedem menos voz. Para o Jabra, cujo cancelamento de eco picota a voz com música. Padrão: ligado no Jabra, desligado no XVF3800."
           }
         }
       },
