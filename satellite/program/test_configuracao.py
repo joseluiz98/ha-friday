@@ -423,3 +423,25 @@ class TestConversaCanal0(unittest.TestCase):
         with self.assertRaises(ValueError):
             c.validar_mudancas(c.PADROES, {"xvf_conversa_canal0": "sim"})
 
+
+
+class TestMusicRelaxedWake(unittest.TestCase):
+    """27/11: music-tolerant wake word (music_wake.py)."""
+    def test_defaults(self):
+        self.assertIsNone(c.PADROES["music_relaxed_wake"])
+        self.assertEqual(c.PADROES["music_voice_threshold"], 0.35)
+        self.assertEqual(c.PADROES["music_hold_s"], 5.0)
+
+    def test_relaxed_accepts_bool_and_null(self):
+        for v in (True, False, None):
+            self.assertIs(c.validar_mudancas(dict(c.PADROES), {"music_relaxed_wake": v})["music_relaxed_wake"], v)
+        with self.assertRaises(ValueError):
+            c.validar_mudancas(dict(c.PADROES), {"music_relaxed_wake": 1})
+
+    def test_bounds(self):
+        with self.assertRaises(ValueError):
+            c.validar_mudancas(dict(c.PADROES), {"music_voice_threshold": 1.0})
+        with self.assertRaises(ValueError):
+            c.validar_mudancas(dict(c.PADROES), {"music_hold_s": 31})
+        n = c.validar_mudancas(dict(c.PADROES), {"music_voice_threshold": 0, "music_hold_s": 0})
+        self.assertEqual((n["music_voice_threshold"], n["music_hold_s"]), (0, 0))

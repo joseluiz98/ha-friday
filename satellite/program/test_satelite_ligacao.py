@@ -152,6 +152,35 @@ class TestDucking(Base):
         self.assertEqual(F.music[-1], 5)
 
 
+class TestMusicTolerantWake(Base):
+    """27/11 (music_wake.py): the poller feeds Playback; the capture loop sets the verifiers aside before predict and
+    uses the relaxed voice gate for every word."""
+    async def test_poller_feeds_playback_only_when_enabled(self):
+        self.s.placa = "jabra"
+        async def tocando():
+            return True
+        self.s._musica_agora = tocando
+        with mock.patch.object(fs.music_wake, "POLL_S", 0.01):
+            t = asyncio.ensure_future(self.s.laco_musica())
+            await asyncio.sleep(0.05)
+            self.assertTrue(self.s.reproducao.active(time.monotonic(), 0))
+            self.s.reproducao = fs.music_wake.Playback()
+            self.s.cfg["music_relaxed_wake"] = False
+            await asyncio.sleep(0.05)
+            t.cancel()
+        self.assertFalse(self.s.reproducao.active(time.monotonic(), 0))
+
+    async def test_capture_loop_wiring(self):
+        import inspect
+        fonte = inspect.getsource(fs.Satelite.captura)
+        self.assertLess(fonte.index("desvio.set(palavra, com_musica)"), fonte.index("pred = palavra.predict(x)"))
+        self.assertIn("dp.limiar, dp.limiar_voz = self.cfg[\"limiar_palavra\"], limiar_voz_q", fonte)
+        self.assertIn("det.limiar, det.limiar_voz = e[\"limiar\"], limiar_voz_q", fonte)
+        self.assertIn("desvio.forget()", fonte)
+        self.assertNotIn("registro_palavra.linha(", fonte.split("while True:", 1)[1])
+        self.assertNotIn("payload_ativacao(", fonte.split("while True:", 1)[1])
+
+
 class TestMudoESonsTurno(Base):
     async def test_mudo_pela_porta_aplica_so_quando_muda(self):
         self.s.ao_mudar_config(dict(self.s.cfg, mudo=True))
@@ -872,7 +901,7 @@ class TestRedeEsgotadaLigacao(unittest.TestCase):
         self.assertIn('r_["causa"] in ("paciencia", "sem_voz")', b)
         self.assertIn("registro_palavra.prefixo_sem_voz_extra(nome_e)", b)
         self.assertIn("registro_palavra.prefixo_paciencia_extra(nome_e)", b)
-        self.assertIn('registro_palavra.linha(r_["causa"]', b)
+        self.assertIn('_linha(r_["causa"]', b)
         self.assertIn("palavra=nome_e", b)
         self.assertIn("trecho_do_episodio(self.contexto, r_[\"quadros\"])", b)
 

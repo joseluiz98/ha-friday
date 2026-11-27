@@ -53,6 +53,9 @@ PADROES = {
     # 04/11: continuação no estilo Alexa. Sem continuação com música tocando nem depois de comando da casa; pausa de fim
     # de fala (s) que o DetectorFala e o VAD do Gemini esperam (0,8 = o de sempre)
     "no_follow_up_while_music": True, "no_follow_up_after_home_commands": True, "end_of_speech_pause_s": 0.8,
+    # 27/11 (music_wake.py): with music playing, every word's verifier is set aside and the voice gate drops to
+    # music_voice_threshold, until music_hold_s after it stops. None = auto (Jabra only); bool = forced on any board
+    "music_relaxed_wake": None, "music_voice_threshold": 0.35, "music_hold_s": 5.0,
     # 21/11: com ela falando nada vai ao Gemini; só a palavra a interrompe (a resposta vira recado)
     "only_wake_word_interrupts": True,
     "alarm_ramp_s": 0,  # alarme crescente (0 = desligado): segundos para o alarme subir ao volume de alertas
@@ -94,6 +97,8 @@ _REGRAS = {
     "eco_portao_db": ((int, float, type(None)), -90, 0),
     "close_mic_awaiting_reply": ((bool,), None, None), "keep_listening_while_speaking": ((bool,), None, None),
     "no_follow_up_while_music": ((bool,), None, None), "no_follow_up_after_home_commands": ((bool,), None, None),
+    "music_relaxed_wake": ((bool, type(None)), None, None), "music_voice_threshold": ((int, float), 0, 0.99),
+    "music_hold_s": ((int, float), 0, 30),
     "only_wake_word_interrupts": ((bool,), None, None),
     "end_of_speech_pause_s": ((int, float), 0.5, 2.0),
     "two_beam_listening": ((bool,), None, None),

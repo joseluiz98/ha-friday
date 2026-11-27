@@ -19,6 +19,7 @@ from detectores import (DetectorBotaoTelefone, DetectorFala, DetectorMudo, Detec
 from hardware import AltoFalante, Anel, Captura, CapturaDupla, TeclasVolume
 from maestro import Ajustes, Maestro
 from taxa_captura import TaxaCaptura
+import music_wake
 import palavra_modelo
 import placa
 import sons
@@ -67,6 +68,7 @@ class Satelite:
     def __init__(self, loop):
         self.loop = loop
         self.sendspin_timeout_s = 2.0  # consulta de música (04/11); injetável nos testes
+        self.reproducao = music_wake.Playback()  # 27/11: música tocando? (laco_musica; lido pela captura)
         self.sid = cfgmod.ler_ou_criar_id(ID)
         self.cfg = cfgmod.carregar(CFG)
         try:  # 18/11: a imagem pode vir sem os sons sintéticos (volume_a.wav); sem eles o comando falhava com som de erro
@@ -252,6 +254,13 @@ class Satelite:
 
     async def _marcar_musica(self):
         self.evento("musica", await self._musica_agora())
+
+    async def laco_musica(self):
+        """27/11 (music_wake.py): pergunta ao Sendspin a cada POLL_S se há música, só com a palavra tolerante ligada."""
+        while True:
+            if music_wake.enabled(self.cfg, self.placa):
+                self.reproducao.update(await self._musica_agora(), time.monotonic())
+            await asyncio.sleep(music_wake.POLL_S)
 
     # ---- eventos (sempre no laço asyncio)
     def evento(self, nome, valor=None):
@@ -1283,6 +1292,13 @@ class Satelite:
         pico, reg_falas = PicoDaFala(), registro_palavra.Registro(registro_palavra.ARQUIVO_FALAS)  # 20/10
         pulou, gravando, vozes, pont_ant = False, None, collections.deque(maxlen=self.cfg.get("janela_voz_palavra", 6)), 0.0
         razao_ep, piso_ep, calculou = None, 0.0, False  # spec 2026-10-20 D3: a razão sai uma vez por episódio
+        desvio, com_musica = music_wake.VerifierBypass(), False  # 27/11: palavra tolerante à música
+
+        def _linha(*a, **k):  # 27/11: toda decisão tomada no modo música leva a marca (medir os falsos depois)
+            return registro_palavra.linha(*a, music_relaxed=com_musica, **k)
+
+        def _payload(*a, **k):
+            return payload_ativacao(*a, music_relaxed=com_musica, **k)
         primeira = True
         while True:
             try:
@@ -1310,7 +1326,11 @@ class Satelite:
                 self.cfg["gravar_ambiente_ate"] = self.cfg["gravar_ambiente_janela"] = None  # só na memória
             quadro = (None, False, 0.0, 0.0, False)  # inferência pulada: não entra no pico
             extras_pred = {}  # spec 2026-10-24: nota de cada palavra extra não desligada neste quadro
-            dp.limiar, dp.limiar_voz = self.cfg["limiar_palavra"], self.cfg["limiar_voz_palavra"]
+            # 27/11: com música (Jabra), verificadores de lado e porta de voz mais baixa, para todas as palavras
+            com_musica = music_wake.enabled(self.cfg, self.placa) and self.reproducao.active(
+                time.monotonic(), self.cfg.get("music_hold_s", music_wake.HOLD_DEFAULT_S))
+            limiar_voz_q = music_wake.voice_threshold(self.cfg, com_musica)
+            dp.limiar, dp.limiar_voz = self.cfg["limiar_palavra"], limiar_voz_q
             dp.limiar_sussurro = self.cfg.get("whisper_min_ratio_db")
             if palavra_modelo.chave(self.cfg) != chave_modelo:  # D13: cadastro aprovado ou PUT /config
                 chave_modelo = palavra_modelo.chave(self.cfg)
@@ -1318,6 +1338,7 @@ class Satelite:
                 self._modelo_palavra, dets_extras = palavra, self._detectores_extras(palavra)
                 espiao, ep_verif = palavra_modelo.espiar(palavra), EpisodioVerificador()
                 rej_f, rej_extras = RejeicaoEpisodio(), {n: RejeicaoEpisodio() for n in dets_extras}
+                desvio.forget()  # modelo novo: os verificadores dele entram de lado no próximo quadro com música
                 print(json.dumps({"detector_palavra": "com verificador" if com_verificador else "sem verificador",
                                   "palavras": sorted(palavra_modelo.carregadas(palavra))}), flush=True)
             cad = self._cad
@@ -1343,6 +1364,9 @@ class Satelite:
             else:
                 if pulou:
                     palavra.reset(); pulou = False
+                if desvio.set(palavra, com_musica):
+                    print(json.dumps({"music_relaxed_wake": desvio.active, "voice_threshold": limiar_voz_q}),
+                          flush=True)
                 pred = palavra.predict(x)
                 pont = float(pred["friday"])
                 modo_f = self.cfg.get("modo_friday", "ativa")  # spec 2026-10-24: ativa | sombra | desligada
@@ -1369,7 +1393,7 @@ class Satelite:
                                 nome = self._nome_gravacao("barrada_")
                                 gravando = (self._janela_palavra(), [], nome)
                             nomes_f.append(nome)
-                            reg.escrever(registro_palavra.linha("barrada_verificador", b["nota"], b["voz"], nome))
+                            reg.escrever(_linha("barrada_verificador", b["nota"], b["voz"], nome))
                     acao = escolher_acao(modo_f, disparou, False)
                     if acao == "evento":
                         ja_evento = True
@@ -1383,10 +1407,10 @@ class Satelite:
                                              daemon=True).start()
                         sussurro = dp.ultimo_sussurro
                         self.piso_conversa = piso_ep
-                        reg.escrever(registro_palavra.linha("sussurro" if sussurro else "ativou", pont, max(vozes),
+                        reg.escrever(_linha("sussurro" if sussurro else "ativou", pont, max(vozes),
                                                             nome, whisper_ratio_db=razao_ep))
                         nomes_f.append(nome)
-                        self.emissor.emitir("ativacao", payload_ativacao(
+                        self.emissor.emitir("ativacao", _payload(
                             "friday", pont, "conversa", modo="ativa", limiar=dp.limiar, limiar_voz=dp.limiar_voz,
                             voz=max(vozes), nota_verificador=nota_v if consultado else None,
                             limiar_verificador=self.cfg.get("limiar_verificador") if consultado else None,
@@ -1399,9 +1423,9 @@ class Satelite:
                         if self.cfg.get("gravar_ativacoes") and gravando is None:
                             nome = self._nome_gravacao("sombra_friday_")
                             gravando = (self._janela_palavra(), [], nome)
-                        reg.escrever(registro_palavra.linha("sombra", pont, max(vozes), nome, palavra="friday"))
+                        reg.escrever(_linha("sombra", pont, max(vozes), nome, palavra="friday"))
                         nomes_f.append(nome)
-                        self.emissor.emitir("ativacao", payload_ativacao(
+                        self.emissor.emitir("ativacao", _payload(
                             "friday", pont, "sombra", modo="sombra", limiar=dp.limiar, limiar_voz=dp.limiar_voz,
                             voz=max(vozes), nota_verificador=nota_v if consultado else None,
                             limiar_verificador=self.cfg.get("limiar_verificador") if consultado else None,
@@ -1414,7 +1438,7 @@ class Satelite:
                             nome = self._nome_gravacao("sem_voz_")
                             gravando = (self._janela_palavra(), [], nome)
                         nomes_f.append(nome)
-                        reg.escrever(registro_palavra.linha("sem_voz", pont, max(vozes), nome,
+                        reg.escrever(_linha("sem_voz", pont, max(vozes), nome,
                                                             whisper_ratio_db=razao_ep))
                     q = dp.pegar_quase()
                     if registro_palavra.quase_vale(q, dp.limiar, dp.limiar_voz):  # spec 2026-10-15 D8
@@ -1424,7 +1448,7 @@ class Satelite:
                             nome = self._nome_gravacao("quase_")
                             gravando = (self._janela_palavra(), [], nome)
                         nomes_f.append(nome)
-                        reg.escrever(registro_palavra.linha("quase", q["nota"], q["voz"], nome))
+                        reg.escrever(_linha("quase", q["nota"], q["voz"], nome))
                     # spec 2026-11-03: causa real da rejeição do episódio (a gravação pode ser escolhida no quadro que
                     # abre o episódio, por isso anota antes e depois de alimentar)
                     for n_ in nomes_f:
@@ -1438,7 +1462,7 @@ class Satelite:
                         if n_ is not None:
                             rej_f.anotar_gravacao(n_)
                     if r_ and modo_f == "ativa":
-                        self.emissor.emitir("ativacao", payload_ativacao(
+                        self.emissor.emitir("ativacao", _payload(
                             "friday", r_["nota"], "barrada", modo="ativa", limiar=dp.limiar, limiar_voz=dp.limiar_voz,
                             voz=r_["voz"], causa=r_["causa"], nota_verificador=r_["nota_verificador"],
                             limiar_verificador=self.cfg.get("limiar_verificador"),
@@ -1450,7 +1474,7 @@ class Satelite:
                         continue
                     nota_e = float(pred.get(nome_e, 0.0))
                     extras_pred[nome_e] = nota_e
-                    det.limiar, det.limiar_voz = e["limiar"], self.cfg["limiar_voz_palavra"]
+                    det.limiar, det.limiar_voz = e["limiar"], limiar_voz_q
                     det.paciencia = e.get("paciencia", 1)
                     disp = det.alimentar(nota_e, max(vozes))
                     rej_e, nomes_e = rej_extras.setdefault(nome_e, RejeicaoEpisodio()), []
@@ -1464,8 +1488,8 @@ class Satelite:
                             nome = self._nome_gravacao(f"{nome_e}_")  # prefixo próprio: não mistura com as da Friday
                             gravando = (self._janela_palavra(), [], nome)
                         nomes_e.append(nome)
-                        reg.escrever(registro_palavra.linha("ativou", nota_e, max(vozes), nome, palavra=nome_e))
-                        self.emissor.emitir("ativacao", payload_ativacao(
+                        reg.escrever(_linha("ativou", nota_e, max(vozes), nome, palavra=nome_e))
+                        self.emissor.emitir("ativacao", _payload(
                             nome_e, nota_e, "conversa", modo="ativa", limiar=det.limiar, limiar_voz=det.limiar_voz,
                             voz=max(vozes), paciencia=e.get("paciencia"), gravacao=nome))
                         self.loop.call_soon_threadsafe(self.evento, "palavra", self._valor_palavra(False, nome_e, nota_e))
@@ -1476,8 +1500,8 @@ class Satelite:
                             nome = self._nome_gravacao(f"sombra_{nome_e}_")
                             gravando = (self._janela_palavra(), [], nome)
                         nomes_e.append(nome)
-                        reg.escrever(registro_palavra.linha("sombra", nota_e, max(vozes), nome, palavra=nome_e))
-                        self.emissor.emitir("ativacao", payload_ativacao(
+                        reg.escrever(_linha("sombra", nota_e, max(vozes), nome, palavra=nome_e))
+                        self.emissor.emitir("ativacao", _payload(
                             nome_e, nota_e, "sombra", modo="sombra", limiar=det.limiar, limiar_voz=det.limiar_voz,
                             voz=max(vozes), paciencia=e.get("paciencia"), gravacao=nome))
                     q = det.pegar_quase()  # 26/10: o "quase" das extras (antes só a Friday registrava)
@@ -1488,7 +1512,7 @@ class Satelite:
                             nome = self._nome_gravacao(registro_palavra.prefixo_quase_extra(nome_e))
                             gravando = (self._janela_palavra(), [], nome)
                         nomes_e.append(nome)
-                        reg.escrever(registro_palavra.linha("quase", q["nota"], q["voz"], nome, palavra=nome_e))
+                        reg.escrever(_linha("quase", q["nota"], q["voz"], nome, palavra=nome_e))
                     for n_ in nomes_e:
                         if n_ is not None:
                             rej_e.anotar_gravacao(n_)
@@ -1506,9 +1530,9 @@ class Satelite:
                         nome = self._nome_gravacao(prefixo_)
                         gravando = (trecho_do_episodio(self.contexto, r_["quadros"]), [], nome)
                         r_["gravacao"] = nome
-                        reg.escrever(registro_palavra.linha(r_["causa"], r_["nota"], r_["voz"], nome, palavra=nome_e))
+                        reg.escrever(_linha(r_["causa"], r_["nota"], r_["voz"], nome, palavra=nome_e))
                     if r_ and e["modo"] == "ativa":
-                        self.emissor.emitir("ativacao", payload_ativacao(
+                        self.emissor.emitir("ativacao", _payload(
                             nome_e, r_["nota"], "barrada", modo="ativa", limiar=det.limiar, limiar_voz=det.limiar_voz,
                             voz=r_["voz"], causa=r_["causa"], paciencia=e.get("paciencia"), gravacao=r_["gravacao"]))
                 if modo_f == "desligada" and extras_pred:  # só as extras precisam do trecho; a Friday não é registrada
@@ -1614,6 +1638,7 @@ async def principal():
     presenca = asyncio.ensure_future(s.disputa.laco_presenca())  # spec 2026-11-16: quantos outros satélites estão online
     threading.Thread(target=s.teclas, daemon=True).start()
     threading.Thread(target=s.duck_laco, daemon=True).start()
+    musica = asyncio.ensure_future(s.laco_musica())  # 27/11: palavra tolerante à música
     await porta_local.iniciar(CFG, s.estado_publico, s.ao_mudar_config, s.cfg["porta_local"], s.campainha,
                              palavras_fn=s.palavras_carregadas, comando_fn=s.comando_porta, musica_fn=s._musica_agora,
                              anuncio_fn=s.anuncio, anuncio_dir=ANUNCIOS,
@@ -1629,6 +1654,7 @@ async def principal():
         except asyncio.TimeoutError:
             pass
     presenca.cancel()
+    musica.cancel()
     await s.disputa.fechar()
     sys.exit(2)
 

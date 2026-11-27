@@ -164,7 +164,8 @@
             "turn_ceiling": "Turn ceiling",
             "ota_channel": "Update channel",
             "record_ambient": "Record ambient audio",
-            "record_activations": "Record activations"
+            "record_activations": "Record activations",
+            "music_tolerant_wake": "Wake word tolerant to music"
           },
           "data_description": {
             "continuous_speech_limit": "Ends the conversation after this long of sound without a pause (TV, music, noise) while she is silent. It can also cut a long dictation with no pauses. 0 = off: nothing is cut, but continuous sound keeps the mic open. Default: 15 s.",
@@ -178,7 +179,8 @@
             "ducking_restore": "How long until the music volume comes back",
             "ota_channel": "alpha gets pre-releases first; stable gets them after the alpha soak",
             "record_ambient": "Records from 08:00 to 22:00 to train the wake words; it goes to the VM overnight",
-            "record_activations": "Keeps about 3.5 s around each activation for analysis"
+            "record_activations": "Keeps about 3.5 s around each activation for analysis",
+            "music_tolerant_wake": "While music plays here (and 5 s after), the wake words skip the voice verifier and need less voice. For the Jabra, whose echo processing chops the voice under music. Default: on with the Jabra, off with the XVF3800."
           }
         }
       },

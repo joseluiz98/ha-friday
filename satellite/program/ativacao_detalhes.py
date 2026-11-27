@@ -8,7 +8,8 @@ def _r(x, n=2):
 
 
 def payload(palavra, nota, resultado, *, modo, limiar, limiar_voz, voz=None, causa=None, nota_verificador=None,
-            limiar_verificador=None, razao_sussurro_db=None, sussurro=None, paciencia=None, gravacao=None):
+            limiar_verificador=None, razao_sussurro_db=None, sussurro=None, paciencia=None, gravacao=None,
+            music_relaxed=False):
     p = {"palavra": palavra, "nota": _r(nota), "resultado": resultado, "duracao_s": None, "modo": modo,
          "limiar": _r(limiar), "limiar_voz": _r(limiar_voz)}
     opc = {"voz": _r(voz), "causa": causa, "nota_verificador": _r(nota_verificador),
@@ -16,4 +17,6 @@ def payload(palavra, nota, resultado, *, modo, limiar, limiar_voz, voz=None, cau
            "sussurro": None if sussurro is None else bool(sussurro), "paciencia": paciencia,
            "gravacao": os.path.basename(gravacao) if gravacao else None}
     p.update({k: v for k, v in opc.items() if v is not None})
+    if music_relaxed:  # 27/11 (music_wake.py)
+        p["music_relaxed"] = True
     return p

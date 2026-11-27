@@ -108,6 +108,9 @@ def controls_from_config(cfg: dict, wakewords: list[dict], board: str | None = N
         # the recordings reach the VM (mtime of the local stamp the sync script writes after a whole upload)
         _d("record_ambient", "switch", "Record ambient audio", category=c, icon="mdi:waveform", hidden=True),
         _d("record_activations", "switch", "Record activations", category=c, icon="mdi:record-rec", hidden=True),
+        # 27/11: music-tolerant wake word (program music_wake.py); Advanced step only. Auto = on with the Jabra
+        _d("music_tolerant_wake", "switch", "Wake word tolerant to music", category=c, icon="mdi:music-note",
+           hidden=True),
         _d("recordings_sync_last_ok", "sensor", "Recordings sync last OK", device_class="timestamp",
            category="diagnostic"),
     ]
@@ -182,6 +185,15 @@ def timers_state(timers) -> dict:
                                       "duration_s": t.get("duracao_s"), "total_active": len(valid)}}
 
 
+def music_tolerant(cfg: dict, board: str | None) -> bool:
+    """27/11: the effective state (program music_wake.enabled): an explicit bool wins; None = on with the Jabra
+    (an unknown board is the Jabra, as in the program's placa.ler_placa)."""
+    v = cfg.get("music_relaxed_wake")
+    if isinstance(v, bool):
+        return v
+    return board in (None, "jabra")
+
+
 class Mapper:
     def __init__(self, board: str | None = None) -> None:
         self.board = board  # the XVF-only keys exist only on the XVF3800
@@ -230,6 +242,7 @@ class Mapper:
             "ducking": bool(duck),
             "ducking_level": duck if duck else self.last_duck,
             "ducking_restore": cfg.get("music_restore_s"),
+            "music_tolerant_wake": music_tolerant(cfg, self.board),
             "program_state": "idle",
         }
         ambient = bool(cfg.get("gravar_ambiente_janela"))  # any window counts: a custom one is still "on"
@@ -277,7 +290,8 @@ class Mapper:
                   "xvf_sys_delay": "xvf_sys_delay", "beam_lock": "beam_lock",
                   "two_beam_listening": "two_beam_listening", "tv_elevation": "tv_elevation_deg",
                   "caller_margin": "caller_margin_db", "tv_margin": "tv_margin_db",
-                  "caller_silence": "caller_silence_s", "turn_ceiling": "turn_max_s"}
+                  "caller_silence": "caller_silence_s", "turn_ceiling": "turn_max_s",
+                  "music_tolerant_wake": "music_relaxed_wake"}
         if key == "tv_azimuth":
             value = None if value is None or value < 0 else value
             if isinstance(value, float) and value.is_integer():
@@ -319,7 +333,8 @@ _CAUSES = {"verificador": "verifier", "sem_voz": "no_voice", "paciencia": "patie
 _MODES = {"ativa": "active", "sombra": "shadow"}
 _PLAIN = {"limiar": "threshold", "voz": "voice", "limiar_voz": "voice_threshold",
           "nota_verificador": "verifier_score", "limiar_verificador": "verifier_threshold",
-          "razao_sussurro_db": "whisper_ratio_db", "sussurro": "whisper", "paciencia": "patience"}
+          "razao_sussurro_db": "whisper_ratio_db", "sussurro": "whisper", "paciencia": "patience",
+          "music_relaxed": "music_relaxed"}
 _REC = re.compile(r"^[A-Za-z0-9_-]+\.wav$")
 
 
