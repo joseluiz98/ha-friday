@@ -1,2 +1,7 @@
 # Installed by satellite/install.sh as /etc/sudoers.d/friday-satellite-agent (mode 0440).
 jose ALL=(root) NOPASSWD: /usr/bin/systemctl start friday-satelite, /usr/bin/systemctl stop friday-satelite, /usr/bin/systemctl restart friday-satelite, /usr/sbin/reboot, /usr/local/sbin/friday-wifi-apply, /usr/local/sbin/friday-agent-apply, /usr/local/sbin/friday-ota-apply
+# 27/11: the satellite program asks Sendspin every 3 s whether music plays (satellite/program/music_wake.py). Each ask
+# wrote three journal lines (~86k a day). This does not allow anything new; it only silences the log and the PAM
+# session of that one read-only command.
+Cmnd_Alias FRIDAY_SENDSPIN_STATUS = /usr/local/bin/sendspin-cli status *
+Defaults!FRIDAY_SENDSPIN_STATUS !log_allowed, !pam_session

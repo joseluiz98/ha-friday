@@ -115,7 +115,10 @@ def test_descriptors():
 def test_sudoers_file_is_exact():
     text = (SAT / "sudoers.friday-satellite-agent").read_text()
     rules = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
-    assert len(rules) == 1 and rules[0].startswith("jose ALL=(root) NOPASSWD: ")
+    # 27/11: the only other lines silence the log of the program's read-only Sendspin status (music_wake.py)
+    assert rules[1:] == ["Cmnd_Alias FRIDAY_SENDSPIN_STATUS = /usr/local/bin/sendspin-cli status *",
+                         "Defaults!FRIDAY_SENDSPIN_STATUS !log_allowed, !pam_session"]
+    assert rules[0].startswith("jose ALL=(root) NOPASSWD: ")
     cmds = [c.strip() for c in rules[0].split("NOPASSWD:")[1].split(",")]
     assert cmds == ["/usr/bin/systemctl start friday-satelite", "/usr/bin/systemctl stop friday-satelite",
                     "/usr/bin/systemctl restart friday-satelite", "/usr/sbin/reboot", "/usr/local/sbin/friday-wifi-apply",
