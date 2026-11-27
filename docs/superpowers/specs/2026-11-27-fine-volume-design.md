@@ -20,7 +20,8 @@ Two separate faults, found on 27/11 on the first satellite (MK1, Jabra):
 - The slider stays where it is put: the satellite reports the percent that was asked.
 - The 12 grid percents (0, 9, 18, 27, 36, 45, 55, 64, 73, 82, 91, 100) of positions 1-11 sound exactly as today.
 - Jabra and XVF3800. New satellites get it from the image; existing ones by OTA.
-- MA uses the integration's number entity. No copied password, no fixed IP.
+- Every satellite (MK1 and MK2) has a house mirror for MA, bound both ways to the integration's number entity.
+  No copied password, no fixed IP.
 
 ## Non-goals
 - Finer LED feedback: the ring keeps showing the hardware step.
@@ -54,7 +55,7 @@ Two separate faults, found on 27/11 on the first satellite (MK1, Jabra):
 - Positions 10 and 11 stay above 0 dB on the Jabra, as today.
 
 ### Bottom of the slider
-**(builder's call, for the owner to confirm)** The satellite is never muted by volume, as today (mute is its own
+**(builder's call, accepted by the owner on 27/11)** The satellite is never muted by volume, as today (mute is its own
 switch). 0% is position 0, the quietest audible level (Jabra -36 dB, XVF3800 -34 dB), and 1-9% rise from there to
 today's step 1. Today 0-13% all sound like step 1, so the bottom gets 4 dB quieter than it can go now.
 
@@ -93,23 +94,27 @@ The `volume` number reports and sets `volume_pct`. Same entity, same range. A ch
 shows in the entity at once, without waiting for the 20 s poll (check the existing event path; add it if missing).
 During a drag, neither the poll nor the HA-change tracking may republish an older value.
 
-The entity goes unavailable while the program does not answer (updates, restarts, outages), and the old mirror never
-did. MA reads a state it cannot parse as volume 0. Before the switch, restart the program with music playing and
-record what MA shows, whether it sends a volume when the entity returns, and whether it falls back to Sendspin's own
-volume. Acceptable: MA shows a wrong number while the satellite is down. Not acceptable: loudness changes by itself
-or Sendspin's volume moves. If it is not acceptable, the design comes back to the owner (fallback: a house-side
-`input_number` kept in step with the entity, with no password or IP).
+### House mirrors (replace the old bridge)
+Changed on 27/11 at the owner's request: both satellites get helpers and two-way binding.
 
-### Retiring the bridge
-- MA: each satellite player's "volume control" becomes its integration number (MA's Home Assistant plugin accepts
-  `number` entities; checked in MA 2.10.x source). MK1 and MK2. This is a manual MA setting, so it goes into the
-  new-satellite runbook. Before switching MK2, record what controls its MA volume today and Sendspin's current
-  level: if MA drives Sendspin and it is below 100, the switch changes how loud music is.
-- This step does not depend on the OTA: it fixes the 401 today, still with 12 steps.
-- Remove from the house, with backups, after MA is proven on the new entity: the volume bridge package, its two
-  secrets, its test (`tools/friday_music/test_satellite_volume_package.py`) and, optionally, `volume_webhook_url` in
-  the Pi config. Update the production doc, the new-satellite runbook and the memory note that describe the bridge.
-- Remove the webhook code from the program. A leftover `volume_webhook_url` key stays harmless.
+- One `input_number` (0-100, step 1) per satellite: MK1 keeps `input_number.friday_satellite_volume` (MA already
+  uses it); MK2 gets `input_number.friday_satellite_living_room_volume`. MA's player "volume control" is the mirror.
+- Satellite to mirror: when the integration number holds a value for 1 s, the mirror takes it. The satellite is the
+  truth, also after it was unavailable and after the nightly HA restart. The 1 s settle keeps an old value from
+  pulling the slider back during a drag: the number is ignored while the mirror changed less than 1 s ago, and a
+  second check runs when the mirror has been still for 3 s.
+- Mirror to satellite: a mirror change that differs from the number is sent with `number.set_value`; latest wins.
+  The restore at HA start is not sent. While the number is unavailable nothing is sent, and the mirror returns to
+  the satellite's value when it comes back.
+- No loop: each direction writes only when the two values differ.
+- Why a mirror and not the entity directly: the entity goes unavailable while the program does not answer, and MA
+  reads a state it cannot parse as volume 0 (MA 2.10.x source). The mirror keeps its last value.
+- It works before the OTA (with 12 steps) and fixes the 401 on its own.
+- Remove the webhook automation, the `rest_command` and their two secrets, with backups. Remove the webhook code
+  from the program; a leftover `volume_webhook_url` key stays harmless.
+- Before choosing the mirror on MK2, record what controls its MA volume today and Sendspin's current level: if MA
+  drives Sendspin and it is below 100, the switch changes how loud music is.
+- The MA setting is manual, so it goes into the new-satellite runbook with the mirror's package block.
 
 ### Delivery and image
 - Existing satellites: OTA. A new migration (0009) installs the two ALSA files and restarts what holds the output
