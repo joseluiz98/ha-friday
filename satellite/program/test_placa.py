@@ -59,25 +59,23 @@ class TestLerPlaca(unittest.TestCase):
 
 
 class TestVolumeXvf(unittest.TestCase):
-    def test_volume_table_xvf(self):
-        self.assertEqual(placa.VOLUME_XVF, [0, 30, 33, 37, 40, 43, 47, 50, 53, 57, 58, 60])
-        for pos, valor in enumerate(placa.VOLUME_XVF):
+    def test_writes_the_raw_level(self):
+        for cru in (0, 26, 43, 45, 60):
             ex = Exec()
-            placa.MixerXvf(executar=ex).escrever(pos)
-            self.assertEqual(ex.chamadas, [["amixer", "-q", "-c", "Array", "sset", "PCM", f"{valor},{valor}"]])
+            placa.MixerXvf(executar=ex).escrever(cru)
+            self.assertEqual(ex.chamadas, [["amixer", "-q", "-c", "Array", "sset", "PCM", f"{cru},{cru}"]])
 
-    def test_write_clamps_the_position(self):
+    def test_write_clamps(self):
         ex = Exec()
         m = placa.MixerXvf(executar=ex)
         m.escrever(99)
         m.escrever(-3)
         self.assertEqual([c[-1] for c in ex.chamadas], ["60,60", "0,0"])
 
-    def test_read_rounds_to_the_nearest_position(self):
-        casos = {60: 11, 58: 10, 40: 4, 30: 1, 0: 0, 41: 4, 42: 5, 35: 2, 59: 10, 20: 1, 10: 0}
-        for cru, pos in casos.items():
+    def test_reads_the_raw_level(self):
+        for cru in (0, 41, 45, 59, 60):
             saida = f"Simple mixer control 'PCM',0\n  Front Left: Playback {cru} [67%] [-20.00dB]\n"
-            self.assertEqual(placa.MixerXvf(executar=Exec(saida)).ler(), pos, cru)
+            self.assertEqual(placa.MixerXvf(executar=Exec(saida)).ler(), cru)
 
     def test_read_without_position_raises(self):
         with self.assertRaises(RuntimeError):
@@ -141,6 +139,7 @@ class TestMontar(unittest.TestCase):
         self.assertIsInstance(c["controle_mudo"], hardware.ControleMudo)
         self.assertEqual((c["controle_mudo"].card, c["controle_mudo"].control), ("USB", "Headset"))
         self.assertIs(c["botao"], hardware.Botao)
+        self.assertEqual((c["fine_mixer"].card, c["fine_mixer"].control, c["escala"]), ("USB", "Fine", "jabra"))
 
     def test_none_assembles_like_jabra(self):
         """`none` não sobe o programa; se alguém montar assim mesmo, nada muda para o Jabra."""
@@ -156,6 +155,7 @@ class TestMontar(unittest.TestCase):
         self.assertIsInstance(c["controle_mudo"], placa.MudoXvf)
         self.assertIs(c["controle_mudo"]._link, link)
         self.assertIsNone(c["botao"])
+        self.assertEqual((c["fine_mixer"].card, c["escala"]), ("Array", "xvf3800"))
 
 
 if __name__ == "__main__":

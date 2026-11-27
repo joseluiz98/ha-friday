@@ -224,6 +224,21 @@ class MusicMixer:
                        input=b"\0" * (48000 // 10 * 4), timeout=5)
 
 
+class FineMixer:
+    """Controle `Fine` (softvol do asound.conf, spec 2026-11-27): -6..0 dB em 0..120 (0,05 dB). Nunca 0, que no softvol
+    é mudo. `prime` toca 0,1 s de silêncio no PCM voice para o controle existir."""
+    def __init__(self, card="USB", control="Fine"):
+        self.card, self.control = card, control
+
+    def write(self, db: float):
+        cru = max(1, min(120, round((db + 6.0) * 20)))
+        subprocess.run(["amixer", "-q", "-c", self.card, "sset", self.control, str(cru)], timeout=5, check=True)
+
+    def prime(self):
+        subprocess.run(["aplay", "-q", "-D", "voice", "-t", "raw", "-f", "S16_LE", "-r", "48000", "-c", "2"],
+                       input=b"\0" * (48000 // 10 * 4), timeout=5)
+
+
 class ControleMudo:
     """Mudo por software: liga/desliga a captura do Jabra no mixer (controle "Headset", conferido na Pi em
     29/10: `Capture` não existe nesse card). Com a captura cortada o DetectorMudo vê silêncio e o maestro trata
