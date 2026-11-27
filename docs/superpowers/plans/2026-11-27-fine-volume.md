@@ -4,7 +4,7 @@
 
 **Goal:** Music Assistant (MA) volume works again on MK1 and MK2, and every percent 1-100 has its own loudness.
 
-**Architecture:** In the house, one `input_number` mirror per satellite, bound both ways to the integration's volume entity (Task 1, no OTA). In the satellite, the hardware step sits at or above the asked loudness and a new ALSA softvol `Fine` attenuates the rest (Tasks 2-7, OTA).
+**Architecture:** In the house, one `input_number` mirror per satellite, bound both ways to the integration's volume entity (Task 1, no OTA). In the satellite, the board's own hardware level (Jabra: 12 steps of 4 dB; XVF3800: 61 raw levels of 1 dB) sits at or above the asked loudness and a new ALSA softvol `Fine` attenuates the rest (Tasks 2-7, OTA).
 
 **Tech Stack:** Home Assistant YAML package, Python 3 stdlib (satellite program and agent), ALSA `asound.conf`, bash migration.
 
@@ -143,35 +143,43 @@ Remove the two secrets from `secrets.yaml` (delete their lines only, e.g. `sed -
 
 **Files:**
 - Create: `satellite/program/escala.py`, `satellite/program/test_escala.py`
-- Modify: `satellite/program/placa.py` (nothing renamed; `VOLUME_XVF[0]` becomes 26 with a comment)
+- Modify: `satellite/program/placa.py` (`VOLUME_XVF[0]` becomes 26, with a comment: from now on it is the loudness curve, not the set of hardware levels)
 
 **Interfaces:**
 - Produces:
-  - `escala.TABELAS: dict[str, tuple[float, ...]]` with keys `"jabra"`, `"xvf3800"`: 12 dB values. Jabra `-36 + 4*k`; XVF `placa.VOLUME_XVF[k] - 60` (build it in `escala` without a circular import).
+  - `escala.ANCORAS: dict[str, tuple]` (loudness curve, keys `"jabra"`, `"xvf3800"`, 12 dB values): Jabra `-36 + 4*k`; XVF `placa.VOLUME_XVF[k] - 60` (build it in `escala` without a circular import).
+  - `escala.NIVEIS: dict[str, tuple]` (hardware levels, index = the value written to the board): Jabra = `ANCORAS["jabra"]` (index 0..11); XVF = `tuple(range(-60, 1))` (index = raw 0..60).
   - `grade(k: int) -> int` = `round(k * 100 / 11)`
-  - `posicao_de_pct(pct: int) -> int`: lowest k with `grade(k) >= pct`
-  - `alvo_db(pct: int, tabela) -> float`: linear between `(grade(k), tabela[k])`
-  - `trim_db(pct: int, tabela) -> float` = `alvo_db - tabela[posicao_de_pct(pct)]` (<= 0)
-  - `pct_de(posicao: int, trim: float, tabela) -> int`: the percent whose `alvo_db` is nearest to `tabela[posicao] + trim`, clamped to 0..100
+  - `posicao_de_pct(pct: int) -> int`: lowest k with `grade(k) >= pct` (spoken scale and Jabra LED; same on both boards)
+  - `alvo_db(pct: int, placa: str) -> float`: linear between `(grade(k), ANCORAS[placa][k])`
+  - `nivel_de_pct(pct: int, placa: str) -> int`: lowest index i with `NIVEIS[placa][i] >= alvo_db - 1e-9` (float guard)
+  - `trim_db(pct: int, placa: str) -> float` = `min(0.0, alvo_db - NIVEIS[placa][nivel_de_pct])`
+  - `pct_de_db(db: float, placa: str) -> int`: the percent whose `alvo_db` is nearest to `db`, clamped to 0..100
   - All reject non-int / out of range percent with `ValueError` (bool is not an int here).
 
-- [ ] **Step 1: Tests**, for both tables:
+- [ ] **Step 1: Tests**, for `placa in ("jabra", "xvf3800")`:
 
 ```python
 def test_grid_percents_keep_todays_loudness(self):
     self.assertEqual([e.grade(k) for k in range(12)], [0, 9, 18, 27, 36, 45, 55, 64, 73, 82, 91, 100])
     for k in range(12):
-        self.assertEqual((e.posicao_de_pct(e.grade(k)), e.trim_db(e.grade(k), t)), (k, 0))
+        p = e.grade(k)
+        self.assertEqual((e.alvo_db(p, placa), e.trim_db(p, placa)), (e.ANCORAS[placa][k], 0))
 def test_loudness_strictly_rises(self):
-    vals = [e.alvo_db(p, t) for p in range(101)]
+    vals = [e.NIVEIS[placa][e.nivel_de_pct(p, placa)] + e.trim_db(p, placa) for p in range(101)]
     self.assertTrue(all(b - a >= 0.1 for a, b in zip(vals, vals[1:])))
-def test_trim_is_within_the_softvol_range(self):
-    self.assertTrue(all(-6.0 < e.trim_db(p, t) <= 0 for p in range(101)))
-def test_percent_survives_position_and_trim(self):
+def test_jabra_levels_are_the_positions(self):
+    self.assertTrue(all(e.nivel_de_pct(p, "jabra") == e.posicao_de_pct(p) for p in range(101)))
+    self.assertTrue(all(-4.0 < e.trim_db(p, "jabra") <= 0 for p in range(101)))
+def test_xvf_uses_its_own_1db_levels(self):
+    self.assertEqual(e.NIVEIS["xvf3800"], tuple(range(-60, 1)))
+    self.assertTrue(all(-1.0 < e.trim_db(p, "xvf3800") <= 0 for p in range(101)))
+    self.assertGreaterEqual(len({e.nivel_de_pct(p, "xvf3800") for p in range(101)}), 30)
+def test_percent_survives_db(self):
     for p in range(101):
-        self.assertEqual(e.pct_de(e.posicao_de_pct(p), e.trim_db(p, t), t), p)
+        self.assertEqual(e.pct_de_db(e.alvo_db(p, placa), placa), p)
 def test_floor(self):
-    self.assertEqual((e.TABELAS["jabra"][0], e.TABELAS["xvf3800"][0]), (-36, -34))
+    self.assertEqual((e.ANCORAS["jabra"][0], e.ANCORAS["xvf3800"][0]), (-36, -34))
 ```
 
 - [ ] **Step 2: Run** `cd satellite/program && python3 -m unittest -q test_escala`. Expected: FAIL (no module).
@@ -186,14 +194,15 @@ def test_floor(self):
 **Files:**
 - Create: `satellite/program/mixer_fino.py`, `satellite/program/test_mixer_fino.py`
 - Modify: `satellite/program/volume.py`, `comandos.py`, `configuracao.py`, `placa.py`, `hardware.py`, `friday_satelite.py`
-- Test: `test_volume.py`, `test_comandos.py`, `test_configuracao.py`, `test_volume_inicial.py`, `test_placa.py`
+- Test: `test_volume.py`, `test_comandos.py`, `test_configuracao.py`, `test_volume_inicial.py`, `test_placa.py` (`MixerXvf` tests move from positions to raw levels)
 
 **Interfaces:**
 - Consumes: Task 2.
 - Produces:
   - `hardware.FineMixer(card="USB", control="Fine")`: `write(trim_db: float)` runs `amixer -q -c <card> sset Fine <round((max(trim_db, -6.0) + 6.0) * 20)>` (0..120, so 120 = 0 dB; never below 1, 0 mutes); `prime()` plays 0.1 s of silence on PCM `voice`. XVF card `Array`.
-  - `mixer_fino.MixerFino(hw, fino, tabela, agendar, atraso_s=0.4)`; `hw` has `ler()/escrever(pos)`, `agendar(delay_s, fn) -> handle` with `.cancel()`. Methods: `escrever(pct)`, `sincronizar(posicao)` (writes the board position, same trim, cancels a pending write), `reaplicar(pct)` (alias of `escrever` that writes the board even if unchanged), `posicao -> int` (last asked), `trim -> float`, `ler() -> int` (board position).
-  - `placa.montar(...)` returns also `"fine_mixer"` and `"tabela"` (`escala.TABELAS[...]`).
+  - `placa.MixerXvf.escrever(nivel)` / `ler()` now take and return the raw level 0..60 (writes `<n>,<n>`; no position table, no nearest-position rounding). `hardware.Mixer` (Jabra) is unchanged: its level is the position 0..11. `fixar_mestre` stays at raw 60.
+  - `mixer_fino.MixerFino(hw, fino, placa, agendar, atraso_s=0.4)`; `hw` has `ler()/escrever(nivel)`, `agendar(delay_s, fn) -> handle` with `.cancel()`. Methods: `escrever(pct)` (level from `nivel_de_pct`, trim from `trim_db`; the order rules apply when the hardware level changes), `sincronizar(nivel)` (Jabra button: writes that board level, same trim, cancels a pending write), `reaplicar(pct)` (`escrever` that writes the board even if unchanged), `nivel -> int` (last asked), `trim -> float`, `db() -> float` (`NIVEIS[placa][nivel] + trim`), `ler() -> int` (level read from the board).
+  - `placa.montar(...)` returns also `"fine_mixer"` and `"escala"` (`"jabra"` or `"xvf3800"`).
   - `volume.ControleVolume(mixer: MixerFino-like, gravar(pct), pct_inicial, alertas_numero=6)`; `.normal`, `.atual` are percents; `.posicao` property; `definir(pct)`, `passo(delta)`, `apertou(delta, agora)`, `tique`, `entrar_alerta(rampa_s=0, agora=None)`, `sair_alerta`, `iniciar`. The `avisar` parameter and the neighbour-write trick stay only where needed: `iniciar` still writes a neighbouring board position first (driver cache).
   - `volume.posicao_de_percentual` is removed; `posicao_de_numero` stays. `volume.descrever(pct) -> {"posicao": k, "volume": k if k <= 9 else (10 if k == 11 else None), "percentual": pct}`.
   - `configuracao`: new key `volume_pct` (default None, limits int 0..100); `pct_efetivo(cfg) -> int | None`: None if both are None; `grade(volume)` if `volume_pct` is None or `posicao_de_pct(volume_pct) != volume` (when `volume` is not None); else `volume_pct`. `volume_webhook_url` leaves `PADROES`.
@@ -201,12 +210,13 @@ def test_floor(self):
 - [ ] **Step 1: `test_mixer_fino.py`** with fakes that append `("hw", pos)` / `("fine", trim)` to one list and a manual scheduler:
 
 ```python
-def test_same_step_writes_only_the_trim()          # 73 -> 70 (both step 8): log == [("fine", trim70)]
-def test_step_up_lowers_trim_now_and_board_later()  # 73 -> 75: [("fine", t75)], then scheduler fires -> ("hw", 9)
-def test_step_down_moves_board_first()              # 75 -> 70: [("hw", 8), ("fine", t70)], nothing scheduled
+def test_same_step_writes_only_the_trim()          # jabra 73 -> 70 (both level 8): log == [("fine", trim70)]
+def test_step_up_lowers_trim_now_and_board_later()  # jabra 73 -> 75: [("fine", t75)], then scheduler fires -> ("hw", 9)
+def test_step_down_moves_board_first()              # jabra 75 -> 70: [("hw", 8), ("fine", t70)], nothing scheduled
+def test_xvf_moves_its_raw_level()                  # 100 -> raw 60, trim 0; 91 -> raw 58, trim 0; 73 -> raw 53, trim 0
 def test_latest_wins_while_pending()                # 73->75->85->70 before firing: no ("hw", 9|10) ever; pending cancelled
 def test_never_louder_than_old_or_new():            # for every (a, b) in 0..100 step 7: after each logged write,
-    # tabela[hw] + trim <= max(alvo(a), alvo(b)) + 1e-9, treating a "fine" write that RAISES the trim as effective
+    # NIVEIS[placa][hw] + trim <= max(alvo(a), alvo(b)) + 1e-9, for both boards, treating a "fine" write that RAISES the trim as effective
     # only when the board write already happened (that is the safe order)
 def test_new_trim_decrease_restarts_the_delay()     # board waits atraso_s after the LAST trim decrease
 def test_sincronizar_keeps_trim_and_cancels_pending()
@@ -216,9 +226,10 @@ def test_sincronizar_keeps_trim_and_cancels_pending()
 
 ```python
 def test_set_percent_is_kept_exactly():      c.definir(70) -> normal 70, descrever -> {"posicao": 8, "volume": 8, "percentual": 70}
-def test_step_keeps_the_trim():              from 70, passo(+1) -> position 9, pct_de(9, trim70, jabra)
+def test_step_keeps_the_offset():            from 70, passo(+1) -> position 9; offset = alvo_db(70) - ANCORAS[placa][8];
+                                             new pct = pct_de_db(ANCORAS[placa][9] + offset)  (same rule on both boards)
 def test_step_never_raises_on_less():        from 5, passo(-1) -> stays 5
-def test_button_recomputes_percent():        from 70, apertou(-1) -> position 7, same trim, sincronizar(7) called
+def test_button_recomputes_percent():        Jabra only: from 70, apertou(-1) -> level 7, same trim, sincronizar(7), pct = pct_de_db(db())
 def test_button_at_the_ends_keeps_percent(): 100 + (+1) -> 100; 0 + (-1) -> 0
 def test_restore_after_alert_returns_exact_percent():  70 -> alert -> 70
 def test_dragging_does_not_save_every_value():  definir(50, agora=0.0) .. definir(60, agora=0.5): nothing saved until ESPERA_GRAVACAO_S after the last
@@ -230,8 +241,8 @@ def test_dragging_does_not_save_every_value():  definir(50, agora=0.0) .. defini
 - [ ] **Step 4: Run** the program suite. Expected: FAIL on the new tests.
 - [ ] **Step 5: Implement.** In `friday_satelite.py`:
   - build `MixerFino(camada["mixer"], camada["fine_mixer"], camada["tabela"], agendar=loop.call_later)` (the object is created before the loop runs: use a small lambda that resolves the loop at call time, thread-safe like the old `_avisar_volume` did with `call_soon_threadsafe`); `fine_mixer.prime()` before the first write, failure logged, never fatal (same pattern as `music_mixer.prime`).
-  - Factory (`volume` and `volume_pct` both None): after `volume_inicial.aplicar()`, initial = `grade(self._ler_mixer())` (Jabra 65% -> 64; XVF raw 75% -> 45, today's effective loudness).
-  - `_gravar_volume(pct)` writes `volume_pct` and `volume = posicao_de_pct(pct)`.
+  - Factory (`volume` and `volume_pct` both None): after `volume_inicial.aplicar()`, initial = `pct_de_db(NIVEIS[placa][self._ler_mixer()], placa)` (Jabra 65% -> 64; XVF raw 75% = raw 45 -> 50: the factory loudness is now the real raw 45, 2 dB above today's, which rounded it down to raw 43).
+  - `_gravar_volume(pct)` writes `volume_pct` and `volume = posicao_de_pct(pct)` (position 0-11 on both boards, never the XVF raw level).
   - `ao_mudar_config`: compare `volume_pct`; a PUT carrying only `volume` means `grade(volume)`; call `definir(pct, agora=time.monotonic())`; do not write the config file a second time with a stale value.
   - Emitted events and `/status` carry `volume` (position) and `volume_pct`.
   - Jabra countdown (`ring.make_ring(posicao_fn=...)`) keeps writing the board only (`camada["mixer"].escrever`); the restore at line ~980 calls `self.volume` mixer `reaplicar(self.volume.atual)`.
@@ -287,6 +298,7 @@ Needs the owner's OK: it stops the voice program for a few minutes. Do it before
 
 - [ ] **Step 1:** copy the new conf of the board to the Pi and test it with `ALSA_CONFIG_PATH=/usr/share/alsa/alsa.conf:/tmp/<conf>` style override (or the owner's OK to swap `/etc/asound.conf` temporarily, restored at the end). With `friday-satelite`, `sendspin-cli` and `friday-silence` stopped:
   `aplay -D voice x.wav` and `aplay -D music_vol` (48 kHz S16 stereo) both play; `amixer sget Fine` exists, starts at 120 (if it does not, `prime` must set it, fix Task 3); 120 vs 40 changes loudness on both paths by about 4 dB (measure with the board's microphone, `arecord`, RMS).
+  On the XVF also confirm that each raw level near 30, 45 and 60 changes the captured loudness by about 1 dB; if the chip does not honour single raw steps, stop and report.
 - [ ] **Step 2:** measure the delay between an `amixer` write of `Fine` and the audible change while a tone plays; compare with `atraso_s = 0.4`. Cross a step boundary both ways while recording: no 100 ms window louder than the louder end by more than 1 dB. Adjust `atraso_s` if needed (commit).
 - [ ] **Step 3:** restore services; `systemctl is-active` all, original `asound.conf` link back. Record the numbers in the plan's PR description.
 
@@ -301,5 +313,5 @@ If the stacked softvol does not work (`music_vol` refuses the format or `Fine` h
 - [ ] **Step 1:** `grep -rn 'volume_webhook_url\|position_from_percent\|posicao_de_percentual' --include='*' -I . | grep -v docs/superpowers` returns nothing unexpected (check `volume_inicial.py` and `voice_gateway/`; `volume_inicial` keeps its own conversion if it needs one, inline).
 - [ ] **Step 2:** `bash scripts/test-all.sh`. Expected: `ALL GREEN`. Check every CI job, not the tail.
 - [ ] **Step 3:** final code review of the branch; then ask the owner before push, PR (draft, with a "Merge gate" section = Step 4) and the alpha release. Pull `origin/master` before the PR.
-- [ ] **Step 4: Alpha proof (merge gate = promotion to stable), both satellites:** updated, migration 0009 recorded, `Fine` exists, loudness at 73 sounds as before; MA slider changes sound at 70 → 72 → 75 and stays put; drag with music: no jump back, no blip; Jabra buttons and "volume 7" / "mais baixo" work and the MA slider follows; alarm rings and restores the exact percent; program restart and unplug/replug of the board with music: no loudness change; Sendspin `volume = 100`; 1 h of music with no new dropouts (compare `journalctl -u sendspin-cli`); MK2 wake word with music no worse than before. XVF raw values and ring unchanged at grid percents.
+- [ ] **Step 4: Alpha proof (merge gate = promotion to stable), both satellites:** updated, migration 0009 recorded, `Fine` exists, loudness at 73 sounds as before; MA slider changes sound at 70 → 72 → 75 and stays put; drag with music: no jump back, no blip; Jabra buttons and "volume 7" / "mais baixo" work and the MA slider follows; alarm rings and restores the exact percent; program restart and unplug/replug of the board with music: no loudness change; Sendspin `volume = 100`; 1 h of music with no new dropouts (compare `journalctl -u sendspin-cli`); MK2 wake word with music no worse than before. XVF at grid percents: raw level as today (30, 33 ... 60) and `Fine` = 120; between them the raw level moves in 1 dB steps. XVF ring unchanged.
 - [ ] **Step 5:** after promotion, remove `volume_webhook_url` from the Pi configs only if the owner wants (harmless leftover), and update memory and `friday-producao.md`.

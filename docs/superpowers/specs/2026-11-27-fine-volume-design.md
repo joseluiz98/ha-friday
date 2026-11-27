@@ -36,8 +36,8 @@ Two separate faults, found on 27/11 on the first satellite (MK1, Jabra):
 
 ## Approaches
 - **A. Keep 12 steps.** Cheapest. MA's slider is always 0-100, so the gaps stay.
-- **B. Hardware step plus a software trim (picked by the owner).** The board sits on the step at or above the asked
-  loudness and a new software control attenuates the rest. Costs: ALSA config, program, image, OTA; ring stays
+- **B. Hardware step plus a software trim (picked by the owner).** The board sits on its own level at or above the
+  asked loudness and a new software control attenuates the rest. Costs: ALSA config, program, image, OTA; ring stays
   coarse.
 - **C. Fine control for music only.** Cheaper, but music and voice get two volumes.
 
@@ -45,13 +45,16 @@ Two separate faults, found on 27/11 on the first satellite (MK1, Jabra):
 
 ### Scale
 - The truth is an integer percent 0-100.
-- Each board has an anchor table: for each position k, `(p_k, dB_k)`, with `p_k = round(k*100/11)`.
+- Two things per board. The **loudness curve** is an anchor table: for each position k (the spoken scale and the
+  Jabra LED), `(p_k, dB_k)`, with `p_k = round(k*100/11)`. The **hardware levels** are what the board really has:
+  12 on the Jabra (the positions themselves), 61 raw levels of 1 dB on the XVF3800 (-60..0 dB).
   Jabra: `dB_k = -36 + 4k` (read from the mixer: -36..+8 dB). XVF3800: from today's `VOLUME_XVF` raw values,
   `dB = raw - 60`; position 0 changes from raw 0 (near silence) to raw 26 (-34 dB), 4 dB under step 1.
-- Target loudness is the linear interpolation between anchors. The hardware position is the lowest k with
-  `p_k >= p`; the trim is `target - dB_k` (zero or negative). On a grid percent the trim is zero.
-- The XVF3800 keeps the same 12 hardware positions and uses the same trim **(builder's call:** one mechanism for
-  both boards; using its 1 dB hardware levels would add a second path for no audible gain**)**.
+- Target loudness is the linear interpolation between anchors. The hardware level is the quietest one at or above
+  the target; the trim is `target - level` (zero or negative). On a grid percent the trim is zero.
+- The XVF3800 uses its own 1 dB levels (owner, 27/11), not the Jabra's 12 steps: the trim only covers the fraction
+  under 1 dB, so a slider move or a rollback to hardware-only is never off by more than that. The trim stays
+  because 9-100% spans about 30 dB, so 1 dB levels alone would still group about 3 percents.
 - Positions 10 and 11 stay above 0 dB on the Jabra, as today.
 
 ### Bottom of the slider
@@ -71,7 +74,7 @@ program must never let the sum get louder than both the old and the new volume: 
 the two writes. A short dip is acceptable. The bench decides the delay.
 
 ### Program
-- `config.json` gets `volume_pct` (0-100). `volume` (position) is still written, as the hardware position, so a
+- `config.json` gets `volume_pct` (0-100). `volume` (position 0-11) is still written, as today, so a
   rollback to the previous release keeps a close volume. Without `volume_pct`, it is derived from `volume`
   (`round(k*100/11)`): nothing changes loudness on update. If an older program changed `volume` after a rollback
   (it no longer matches the position of `volume_pct`), `volume` wins on the next load.
