@@ -52,8 +52,10 @@ class UsbWatch:
         except OSError:
             pass
 
-    def observe(self, board: str, status: dict | None, kernel_71_new: int) -> str | None:
-        """`"reboot"`, `"exhausted"` (once per exhausted hour) or None. `self.reason` says why."""
+    def observe(self, board: str, status: dict | None, kernel_71_new: int, busy: bool = False) -> str | None:
+        """`"reboot"`, `"exhausted"` (once per exhausted hour) or None. `self.reason` says why. `busy` = a game stream
+        is using the Pi: a slow capture is then load, not a hung controller (25/11, Moonlight on the same Pi 3), so it
+        neither reboots nor counts; a stopped capture and a new `error -71` still do."""
         if board != "xvf3800" or status is None:
             self._slow = 0
             return None
@@ -63,6 +65,8 @@ class UsbWatch:
             reason = "usb_error_71"
         elif isinstance(age, (int, float)) and age > STALE_S:  # monotonic in the program: NTP steps never count
             reason = "capture_stopped"
+        elif busy:
+            self._slow = 0
         elif isinstance(rate, (int, float)):
             self._slow = self._slow + 1 if rate < SLOW else 0
             if self._slow >= SLOW_WINDOWS:
@@ -102,13 +106,32 @@ class UsbWatch:
 
 
 PERIOD_S = 10.0
+STREAM_PROCESS = "moonlight"
+
+
+def streaming_active(proc: str = "/proc") -> bool:
+    """True while a game stream client runs on this Pi (a scan of the process names: no process is spawned)."""
+    try:
+        names = os.listdir(proc)
+    except OSError:
+        return False
+    for name in names:
+        if not name.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, name, "comm"), encoding="utf-8") as f:
+                if f.read().strip() == STREAM_PROCESS:
+                    return True
+        except OSError:
+            continue  # the process ended during the scan
+    return False
 
 
 async def run(board, program, core, kernel_71_count, watch: UsbWatch, reboot, sleep=None,
-              period_s: float = PERIOD_S, state: dict | None = None) -> None:
+              period_s: float = PERIOD_S, state: dict | None = None, busy=None) -> None:
     """The agent's loop. `board` = the board name or a function reading it (re-read every round: a board swap does not
     restart the agent). `kernel_71_count()` = total `error -71` lines of this boot (or None); `reboot()` = the
-    privileged reboot; `state` = the agent's hello state (HA reads the count from it on connect). The first -71 reading
+    privileged reboot; `busy()` = a game stream is running (default: `streaming_active`); `state` = the agent's hello state (HA reads the count from it on connect). The first -71 reading
     is the baseline: old lines of this boot never reboot. The after-boot event waits until HA is connected."""
     import asyncio
     board_fn = board if callable(board) else (lambda: board)
@@ -131,7 +154,7 @@ async def run(board, program, core, kernel_71_count, watch: UsbWatch, reboot, sl
         n = await asyncio.to_thread(kernel_71_count)
         new = n - last if isinstance(n, int) and isinstance(last, int) else 0
         last = n if isinstance(n, int) else last
-        action = watch.observe(board_fn(), status, max(new, 0))
+        action = watch.observe(board_fn(), status, max(new, 0), (busy or streaming_active)())
         if action == "exhausted":
             await core.push_event("usb_recovery", "exhausted", {"reason": watch.reason})
             await core.push_log(f"USB watchdog: {watch.reason}, but {MAX_PER_HOUR} reboots in the last hour; waiting", {})

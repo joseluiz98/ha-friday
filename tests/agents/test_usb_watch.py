@@ -209,3 +209,67 @@ def test_count_goes_in_the_hello_state_and_event_waits_for_ha(tmp_path):
         pass
     assert memo["usb_recoveries"] == 1
     assert [e[1] for e in core.events] == ["rebooted"]
+
+
+# 25/11: a game stream (Moonlight) on the same Pi 3 slows the capture for as long as it runs. That is load, not a hung USB
+# controller, and the reboot it caused killed the game session. Only the slow-rate reason is held back while streaming.
+def test_slow_capture_while_streaming_never_reboots(tmp_path):
+    c = Clock(); w = watch(tmp_path, c)
+    for _ in range(12):
+        assert w.observe("xvf3800", ok(c, 0.5), 0, busy=True) is None
+    assert w.reason is None
+
+
+def test_streaming_still_reboots_on_stopped_capture(tmp_path):
+    c = Clock(); w = watch(tmp_path, c)
+    assert w.observe("xvf3800", {"captura_taxa": 1.0, "captura_idade_s": 31.0}, 0, busy=True) == "reboot"
+    assert w.reason == "capture_stopped"
+
+
+def test_streaming_still_reboots_on_kernel_71(tmp_path):
+    c = Clock(); w = watch(tmp_path, c)
+    assert w.observe("xvf3800", ok(c), 1, busy=True) == "reboot"
+    assert w.reason == "usb_error_71"
+
+
+def test_slow_windows_do_not_carry_over_from_a_stream(tmp_path):
+    c = Clock(); w = watch(tmp_path, c)
+    w.observe("xvf3800", ok(c, 0.5), 0); w.observe("xvf3800", ok(c, 0.5), 0)
+    w.observe("xvf3800", ok(c, 0.5), 0, busy=True)   # held back, and the count starts over
+    assert w.observe("xvf3800", ok(c, 0.5), 0) is None
+    assert w.observe("xvf3800", ok(c, 0.5), 0) is None
+    assert w.observe("xvf3800", ok(c, 0.5), 0) == "reboot"
+
+
+def test_streaming_detector_reads_process_names(tmp_path):
+    assert uw.streaming_active(str(tmp_path)) is False
+    (tmp_path / "10").mkdir(); (tmp_path / "10" / "comm").write_text("python\n")
+    (tmp_path / "self").mkdir()                       # not a pid: ignored
+    assert uw.streaming_active(str(tmp_path)) is False
+    (tmp_path / "11").mkdir(); (tmp_path / "11" / "comm").write_text("moonlight\n")
+    assert uw.streaming_active(str(tmp_path)) is True
+    (tmp_path / "12").mkdir()                         # a process that exited mid-scan has no comm: ignored
+    assert uw.streaming_active(str(tmp_path)) is True
+
+
+def test_loop_ignores_slow_capture_while_streaming(tmp_path):
+    import asyncio
+    c = Clock()
+    reboots, rounds = [], {"n": 0}
+
+    async def reboot():
+        reboots.append(1)
+
+    async def sleep(_s):
+        rounds["n"] += 1
+        if rounds["n"] > 12:
+            raise asyncio.CancelledError  # twelve observed rounds, then the test stops the loop
+
+    core = Core()
+    w = uw.UsbWatch(str(tmp_path / "usb.json"), now=c)
+    try:
+        asyncio.run(uw.run("xvf3800", Program([ok(c, 0.4)] * 12), core, lambda: 0, w, reboot, sleep=sleep,
+                           busy=lambda: True))
+    except asyncio.CancelledError:
+        pass
+    assert rounds["n"] > 12 and reboots == [] and w.count == 0
