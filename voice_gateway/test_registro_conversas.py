@@ -73,6 +73,31 @@ class TestTurnos(unittest.TestCase):
         self.assertEqual(tr.ela_parou(t(3))["prompt"], "[resposta do cérebro a: quanto de swap?]")
 
 
+class TestDoisFeixes(unittest.TestCase):
+    def test_two_beam_fields_in_line(self):
+        tr = rc.Turnos("k", "s", "sat-1", pi_turns=True)
+        tr.dois_feixes({"tv_active": True})
+        tr.dois_feixes({})  # empty data keeps working
+        tr.dois_feixes({"frames": {"caller": 40, "tv": 3, "unclear": 2}, "ratio_db_median": 6.5, "tv_runs": 1,
+                        "by": "pause", "beam_a_deg": 10.0, "beam_t_deg": None, "tv_active": False})
+        tr.usuario("oi", t(1)); tr.ela("olá")
+        r = tr.ela_parou(t(3))
+        self.assertEqual(r["turnMode"], "pi")
+        self.assertEqual(r["twoBeam"]["by"], "pause")
+        self.assertEqual(r["twoBeam"]["frames"]["caller"], 40)
+        self.assertTrue(r["twoBeam"]["tv_active"])  # ORed over the turn
+        tr.usuario("de novo", t(4)); tr.ela("sim")
+        r2 = tr.ela_parou(t(6))
+        self.assertNotIn("twoBeam", r2)  # reset per turn
+
+    def test_normal_conversation_has_no_two_beam_fields(self):
+        tr = rc.Turnos("k", "s", "sat-1")
+        tr.usuario("oi", t(1)); tr.ela("olá")
+        r = tr.ela_parou(t(3))
+        self.assertNotIn("turnMode", r)
+        self.assertNotIn("twoBeam", r)
+
+
 class TestSussurro(unittest.TestCase):
     """22/10: conversa do modo sussurro (spec 2026-10-20) leva `whisper: true`; as demais NÃO têm o campo
     (retrocompatível: quem lê trata a ausência como falso)."""

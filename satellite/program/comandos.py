@@ -3,6 +3,7 @@ resposta (que volta ao bot com o mesmo id) e os efeitos que o programa executa (
 import os, re
 import volume as v
 import cadastro
+import palavras as pw
 import ring
 
 _CHAVE_FRASE = re.compile(r"^[a-z0-9_]{1,40}$")
@@ -73,7 +74,9 @@ def executar(cmd: dict, ctl, timers, agora: float, vozes=None, sons_dir=None, es
                         "timers": [_timer_publico(x, agora) for x in timers.consultar(agora)]}, []
             r = {"cancelados": [_timer_publico(x, agora) for x in feitos]}
         elif acao == "vozes_consultar":  # spec 2026-10-15 §4.4
-            r = {"vozes": [{"nome": x["nome"], "desde": x["desde"]} for x in (vozes.listar() if vozes else [])]}
+            r = {"vozes": [{"nome": x["nome"], "desde": x["desde"],
+                            "palavras": [pw.nome_falado(w) for w in vozes.palavras_de(x["id"])]}
+                           for x in (vozes.listar() if vozes else [])]}
         elif acao == "cadastro_voz":
             if vozes is None:
                 raise ValueError("o programa de aprendizagem de voz não está disponível")
@@ -108,6 +111,12 @@ def executar(cmd: dict, ctl, timers, agora: float, vozes=None, sons_dir=None, es
                 raise ValueError("parametro_invalido")
             r = {"ligado": ligado}
             efeitos.append(("update_pendente", ligado))
+        elif acao == "timers_parar":  # 24/11: a ferramenta `parar_timers` do bot; quem para é o maestro (efeito)
+            nome = cmd.get("nome")
+            if nome is not None and not isinstance(nome, str):
+                raise ValueError("nome é texto")
+            r = {}
+            efeitos.append(("timers_parar", nome))
         elif acao == "wake_word_test":
             t = cmd.get("timeout_s", 30)
             if isinstance(t, bool) or not isinstance(t, (int, float)) or not 5 <= t <= 120:
@@ -116,6 +125,11 @@ def executar(cmd: dict, ctl, timers, agora: float, vozes=None, sons_dir=None, es
                 raise ValueError("o teste da palavra só começa com o satélite parado")
             r = {}
             efeitos.append(("teste_palavra", t))
+        elif acao == "learn_tv_direction":  # two-beam: the board listens to the TV for ~40 s (program effect)
+            if estado_maestro != "parada":
+                raise ValueError("a calibração da TV só começa com o satélite parado")
+            r = {}
+            efeitos.append(("aprender_tv", None))
         elif acao == "open_presentation":
             fatos = cmd.get("facts")
             if not isinstance(fatos, dict):

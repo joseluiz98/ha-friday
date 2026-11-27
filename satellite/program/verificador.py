@@ -104,13 +104,16 @@ def criterios(cats, antes, base=None):
     return r
 
 
-def escolher(tabela, antes):
+def escolher(tabela, antes, lv_fixo=None):
     """(aprovado, (lv, limiar), textos, falhou). Entre as combinações que passam: o limiar do verificador mais alto
     (só filtra o que a base já aceita; limiar baixo julga notas que nenhum dado de avaliação cobre), depois a que deixa
     passar menos falsas e a que aceita mais. Sem nenhuma: a que cumpre mais critérios, e `falhou` é o primeiro
     critério que ela não cumpre."""
     melhor = None
-    for combo, cats in sorted((k, v) for k, v in tabela.items() if k[0] != "base"):
+    # 23/11: o limiar do verificador é um só para todas as palavras (custom_verifier_threshold): com ele já em uso, a
+    # palavra nova só pode ser avaliada nele (sem ele na tabela, vale a escolha livre de antes)
+    fixo = lv_fixo if lv_fixo in {k[0] for k in tabela if k[0] != "base"} else None
+    for combo, cats in sorted((k, v) for k, v in tabela.items() if k[0] != "base" and (fixo is None or k[0] == fixo)):
         cs = criterios(cats, antes, tabela.get(("base", REFERENCIA_PALAVRA)))
         oks = sum(1 for ok, _ in cs if ok)
         f = cats.get("falsas", [0, 0])

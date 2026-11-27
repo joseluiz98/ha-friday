@@ -18,7 +18,7 @@ from . import capabilities as cap
 from . import diagnostics as diagmod
 from . import eq as eqmod
 from . import hardware as hw
-from . import local, ota, pairing, provision, recordings, server_watch
+from . import local, negatives, ota, pairing, provision, recordings, server_watch
 from . import ring_preview, room_sensors, usb_watch
 from . import wifi
 from .announce import Keeper, lan_ip as _lan_ip
@@ -242,6 +242,8 @@ async def main() -> None:
             return await power.restart_program()
         if key == "ring_preview":
             return preview.start()
+        if key == "learn_tv_direction":
+            return await program.command({"acao": "learn_tv_direction"})
         return {"ok": False, "error": "unknown_key"}
 
     room = room_sensors.Monitor(room_sensors.RoomSensors(), lambda v: room_state(v), lambda: room_caps())
@@ -463,7 +465,11 @@ async def main() -> None:
         LOG.info("paired with Home Assistant; restarting to load the new token")
         asyncio.create_task(finish_pairing())
 
-    app = local.make_app(token, on_event, core.app())
+    async def on_negatives(seconds: float) -> dict:
+        st = await asyncio.to_thread(os.stat, os.path.dirname(os.path.dirname(negatives.DEST)))  # the home's owner, to hand the folder over
+        return await negatives.fetch(updater, min(max(seconds, 60.0), 1800.0), owner=(st.st_uid, st.st_gid))
+
+    app = local.make_app(token, on_event, core.app(), on_negatives)
     if pairable:
         pairing.add_routes(app, session, sat_id, on_paired)
     # 21/11: satellites adopted with the spoken code are called by HA with ha_token; legacy ones (hand-paired)

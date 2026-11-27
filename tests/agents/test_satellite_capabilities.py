@@ -493,3 +493,53 @@ def test_down_state_clears_the_recording_keys():
     down = m.down_state()
     assert down["record_ambient"] is None and down["record_activations"] is None
     assert down["recordings_sync_last_ok"] is None
+
+
+def _two_beam(board):
+    return {c["key"]: c for c in cap.controls_from_config(CFG, WW, board=board)}
+
+
+def test_two_beam_descriptors_only_on_xvf3800():
+    keys = ("two_beam_listening", "tv_azimuth", "tv_elevation", "caller_margin", "tv_margin", "caller_silence",
+            "turn_ceiling", "learn_tv_direction", "tv_direction_learn")
+    xvf = _two_beam("xvf3800")
+    for k in keys:
+        assert k in xvf, k
+        assert k not in _two_beam("jabra") and k not in _two_beam(None)
+    assert xvf["tv_azimuth"]["min"] == -1 and xvf["tv_azimuth"]["max"] == 359 and xvf["tv_azimuth"]["hidden"]
+    assert xvf["learn_tv_direction"]["platform"] == "button" and not xvf["learn_tv_direction"].get("hidden")
+    ev = xvf["tv_direction_learn"]
+    assert ev["platform"] == "event" and ev["event_types"] == ["stored", "refused"] and ev["category"] == "diagnostic"
+
+
+def test_two_beam_mapping_roundtrip():
+    m = cap.Mapper(board="xvf3800")
+    st = m.state({}, [], None)
+    assert (st["two_beam_listening"], st["tv_azimuth"], st["tv_elevation"], st["caller_margin"], st["tv_margin"],
+            st["caller_silence"], st["turn_ceiling"]) == (True, -1, 0, 3.0, 6.0, 1.5, 60)
+    assert m.state({"tv_azimuth_deg": 120.0}, [], None)["tv_azimuth"] == 120.0
+    assert m.to_program({}, "tv_azimuth", -1.0) == {"config": {"tv_azimuth_deg": None}}
+    p = m.to_program({}, "tv_azimuth", 90.0)
+    assert p == {"config": {"tv_azimuth_deg": 90}} and isinstance(p["config"]["tv_azimuth_deg"], int)
+    assert m.to_program({}, "tv_elevation", 20.0) == {"config": {"tv_elevation_deg": 20}}
+    assert m.to_program({}, "turn_ceiling", 90.0) == {"config": {"turn_max_s": 90}}
+    assert m.to_program({}, "caller_margin", 2.5) == {"config": {"caller_margin_db": 2.5}}
+    assert m.to_program({}, "tv_margin", 7.0) == {"config": {"tv_margin_db": 7.0}}
+    assert m.to_program({}, "caller_silence", 2.0) == {"config": {"caller_silence_s": 2.0}}
+    assert m.to_program({}, "two_beam_listening", False) == {"config": {"two_beam_listening": False}}
+
+
+def test_tv_direction_event_becomes_ha_event():
+    t = cap.Tracker()
+    data = {"result": "stored", "reason": None, "azimuth_deg": 100.0, "elevation_deg": 10, "spread_deg": 5.0,
+            "frames": 40, "energy_by_elevation": [0.1, 0.2]}
+    assert t.on_event("tv_direction", data)["event"] == (
+        "tv_direction_learn", "stored", {k: v for k, v in data.items() if k != "result"})
+    assert t.on_event("tv_direction", dict(data, result="refused", reason="not_idle"))["event"][1] == "refused"
+    assert t.on_event("tv_direction", {"result": "bogus"}) is None
+
+
+def test_learn_tv_direction_press_forwards_command():
+    src = (Path(__file__).resolve().parents[2] / "agents/satellite/friday_satellite_agent/__main__.py").read_text()
+    assert 'key == "learn_tv_direction"' in src
+    assert 'program.command({"acao": "learn_tv_direction"})' in src

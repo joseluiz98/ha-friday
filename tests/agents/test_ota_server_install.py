@@ -7,11 +7,15 @@ import sys
 import tarfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "agents" / "server"))
 sys.path.insert(0, str(ROOT / "agents" / "common"))
 from friday_agent_core.ota.constants import CONTAINER_HEALTH_TIMEOUT_S, HEALTH_TIMEOUT_S  # noqa: E402
 from friday_agent_core.ota import manifest as mf  # noqa: E402
+from friday_agent_core.ota import channels as ch  # noqa: E402
+from friday_server_agent.ota import github as gh, orchestrator as orc, repo as vm  # noqa: E402
 from friday_server_agent.ota import server_install as si  # noqa: E402
 from friday_server_agent.ota import store as st  # noqa: E402
 
@@ -567,3 +571,37 @@ def test_container_waits_longer_than_a_light_component_for_health(tmp_path):
     out = w.inst.apply("v0.3.0", NEW, MANIFEST, manual=True)
     assert out["result"] == "installed"
     assert CONTAINER_HEALTH_TIMEOUT_S >= 600
+
+
+@pytest.mark.parametrize("changed", [
+    [], ["satellite/program/maestro.py", "custom_components/friday/manifest.json"], ["agents/server/a.py"],
+    ["agents/common/b.py"], ["scripts/vault.py"], ["vault/manifest.json"], ["agents/satellite/c.py"], Exception,
+])
+def test_package_gate_never_disagrees_with_the_installer(tmp_path, changed):
+    """26/11 (v0.4.6): the installer kept the agent, the package gate called it too old, and MK1 got nothing. The
+    gate accepts an older-labelled agent exactly when the installer would leave it in place."""
+    w = World(tmp_path, changed=changed)
+    kept = "server-agent" not in w.inst.plan(NEW, MANIFEST)
+    info = gh.ReleaseInfo(release=ch.Release("v0.3.0", NEW, 0.0, "green", True), notes="", url="")
+
+    class GateRepo(Repo):
+        def manifest(self, sha):
+            return MANIFEST
+
+    w.store.set_releases({"v0.3.0": info})
+    orch = orc.Orchestrator(w.store, None, None, GateRepo(changed), vault=None, notifier=None,
+                            root=str(tmp_path / "o"), own_version=lambda: "v0.1.0", own_sha=lambda: OLD)
+    assert orch._agent_matches("v0.3.0", NEW) is kept
+
+
+def test_changed_paths_lists_both_sides_of_a_rename(tmp_path):
+    """With rename detection `git diff --name-only` prints only the new path: a file moved out of the agent would
+    look like no change to it."""
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, b"a.py\n", b"")
+
+    vm.VmRepo(str(tmp_path), run=run).changed_paths(OLD, NEW)
+    assert "--no-renames" in seen[0]

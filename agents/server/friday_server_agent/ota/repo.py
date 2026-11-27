@@ -50,7 +50,8 @@ class VmRepo:
         if old_sha is None:
             out = self._git("ls-tree", "-r", "--name-only", new_sha)
         else:
-            out = self._git("diff", "--name-only", old_sha, new_sha)
+            # both sides of a rename: with rename detection a file moved out of a component would not show in it
+            out = self._git("diff", "--name-only", "--no-renames", old_sha, new_sha)
         return [p for p in out.decode().splitlines() if p]
 
     def manifest(self, sha: str) -> mf.Manifest | None:

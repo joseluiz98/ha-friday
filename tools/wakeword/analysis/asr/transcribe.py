@@ -1,6 +1,7 @@
 """Transcreve WAVs com faster-whisper e grava as palavras com tempos (uma linha JSON por arquivo).
 
 Uso no container: transcribe.py <pasta_wav> <saida.ndjson> [modelo]
+Modelo padrão: medium. O small alucina com TV ao fundo (24/11: "Friday" virou "O que é isso?"); só com autorização do dono.
 Lê o WAV com wave/numpy: o decodificador PyAV do faster-whisper quebrou em 24/10 (metadata_errors).
 Sem initial_prompt de propósito: um prompt com "Friday" faria o Whisper "ouvir" a palavra onde ela não foi dita."""
 import glob, json, os, sys, wave
@@ -29,7 +30,7 @@ def _words(model, a, off):
             for s in segs for w in (s.words or [])]
 
 
-def main(in_dir, out_path, model_name="small"):
+def main(in_dir, out_path, model_name="medium"):
     model = WhisperModel(model_name, device="cpu", compute_type="int8",
                          cpu_threads=int(os.environ.get("THREADS", "3")), download_root="/models")
     with open(out_path, "w") as out:

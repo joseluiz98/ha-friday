@@ -16,6 +16,22 @@ class Base(unittest.TestCase):
         return comandos.executar(dict(cmd, id="c1"), self.vol, self.tim, 1000.0)
 
 
+class TestTimersParar(Base):
+    def test_all(self):
+        r, ef = self.run_(acao="timers_parar")
+        self.assertTrue(r["ok"])
+        self.assertEqual(ef, [("timers_parar", None)])
+
+    def test_by_name(self):
+        r, ef = self.run_(acao="timers_parar", nome="arroz")
+        self.assertEqual(ef, [("timers_parar", "arroz")])
+
+    def test_non_string_name_is_rejected(self):
+        r, ef = self.run_(acao="timers_parar", nome=5)
+        self.assertFalse(r["ok"])
+        self.assertEqual(ef, [])
+
+
 class TestVolume(Base):
     def test_numero(self):
         r, ef = self.run_(acao="volume", numero=10)
@@ -138,13 +154,16 @@ class _Vozes:
     def listar(self):
         return [{"nome": "Bia", "id": "bia", "desde": "2026-10-15 18:00"}]
 
+    def palavras_de(self, ident):
+        return ["friday", "sexta_feira"]
+
 
 class TestAprendizagem(unittest.TestCase):
     """Spec 2026-10-15 §4.4: comandos do programa de aprendizagem de voz."""
 
     def test_consultar_devolve_nome_e_data(self):
         r, ef = comandos.executar({"id": "c1", "acao": "vozes_consultar"}, None, None, 0.0, _Vozes())
-        self.assertEqual((r["ok"], r["id"], r["vozes"], ef), (True, "c1", [{"nome": "Bia", "desde": "2026-10-15 18:00"}], []))
+        self.assertEqual((r["ok"], r["id"], r["vozes"], ef), (True, "c1", [{"nome": "Bia", "desde": "2026-10-15 18:00", "palavras": ["Friday", "Sexta-feira"]}], []))
 
     def test_cadastro_valido_devolve_efeito_sem_colidir_com_o_id_do_comando(self):
         r, ef = comandos.executar({"id": "c2", "acao": "cadastro_voz", "nome": "Bia"}, None, None, 0.0, _Vozes())
@@ -277,3 +296,15 @@ class TestProvisionamento(unittest.TestCase):
         for ruim in (None, "", "Sala de estar", "a/b", 3):
             self.assertFalse(self.run_(acao="set_area", area_id=ruim)[0]["ok"], ruim)
 
+
+
+class TestAprenderTv(unittest.TestCase):
+    def test_calibration_refused_when_not_idle(self):
+        r, ef = comandos.executar({"id": "1", "acao": "learn_tv_direction"}, None, None, 0, estado_maestro="conversando")
+        self.assertFalse(r["ok"])
+        self.assertEqual(ef, [])
+
+    def test_calibration_effect_when_idle(self):
+        r, ef = comandos.executar({"id": "1", "acao": "learn_tv_direction"}, None, None, 0, estado_maestro="parada")
+        self.assertTrue(r["ok"])
+        self.assertEqual(ef, [("aprender_tv", None)])

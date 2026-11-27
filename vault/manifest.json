@@ -41,8 +41,8 @@
       "source": "tools/satelite/sons/aprendizagem_cancelada.wav"
     },
     "satellite/sounds/aprendizagem_fala_livre.wav": {
-      "sha256": "f708b0ba07ab8cafb55b937ef255e0f07fcf61173951585e33015dc2207df1fc",
-      "size": 1739572,
+      "sha256": "c4af004949236625aeeae641045a758f7a382de819b64883e3660b47089e8de3",
+      "size": 1812524,
       "source": "tools/satelite/sons/aprendizagem_fala_livre.wav"
     },
     "satellite/sounds/aprendizagem_fim.wav": {
@@ -54,6 +54,11 @@
       "sha256": "978e2536eb2d5da195990d26a2653a0b198338219c55f8f17723dbbcdaa04eb8",
       "size": 2396212,
       "source": "tools/satelite/sons/aprendizagem_intro.wav"
+    },
+    "satellite/sounds/aprendizagem_intro_sexta_feira.wav": {
+      "sha256": "fc7f4fe369fdc31e4bd44eb181552a43c844db8d275f4dc73df522a6ce469b3f",
+      "size": 2442292,
+      "source": "tools/satelite/sons/aprendizagem_intro_sexta_feira.wav"
     },
     "satellite/sounds/aprendizagem_mudar_lugar.wav": {
       "sha256": "f0c5561f89acca0d5e60634f892bae0dfaaa1269e1c791f83c10da159046e187",

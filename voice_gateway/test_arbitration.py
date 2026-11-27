@@ -86,6 +86,24 @@ class ArbiterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((late["verdict"], late["reason"]), ("lost", "late"))
         self.assertEqual(late["round_id"], r["round_id"])
 
+    async def test_late_claim_is_logged_with_its_delay(self):
+        arb = self.make()
+        r = await arb.claim("A", claim("a1", -30))
+        self.clock.advance(0.35)
+        await arb.claim("B", claim("b1", -20, score=0.47))
+        rec = [l for l in self.logs if l.get("event") == "late_claim"]
+        self.assertEqual(len(rec), 1)
+        rec = rec[0]
+        self.assertEqual((rec["sid"], rec["winner"], rec["round_id"]), ("B", "A", r["round_id"]))
+        self.assertEqual(rec["delay_ms"], 350)
+        self.assertEqual((rec["score"], rec["voice_dbfs"]), (0.47, -20))
+        self.assertIn("ts", rec)
+
+    async def test_default_window_fits_the_satellites_old_budget(self):
+        # satellites up to v0.4.4 give up after 0.3 s and act as `go`; a window near that budget would double-wake
+        self.assertGreater(Arbiter().window_s, 0.2)
+        self.assertLessEqual(Arbiter().window_s, 0.25)
+
     async def test_claim_after_same_activation_window_opens_new_round(self):
         arb = self.make()
         r = await arb.claim("A", claim("a1", -30))

@@ -56,6 +56,9 @@ PADROES = {
     # 21/11: com ela falando nada vai ao Gemini; só a palavra a interrompe (a resposta vira recado)
     "only_wake_word_interrupts": True,
     "alarm_ramp_s": 0,  # alarme crescente (0 = desligado): segundos para o alarme subir ao volume de alertas
+    # 26/11 (two-beam listening): dois feixes (quem fala x TV); azimute da TV em graus, None = sem TV
+    "two_beam_listening": True, "tv_azimuth_deg": None, "tv_elevation_deg": 0,
+    "caller_margin_db": 3.0, "tv_margin_db": 6.0, "caller_silence_s": 1.5, "turn_max_s": 60,
     "speech_max_s": 15,  # R13: teto de fala contínua (s) antes de a conversa fechar por `fala_longa`
     # spec 2026-10-24 (wakeword-retrain): palavras configuráveis. `modo_friday` e o `modo` de cada extra:
     # ativa (acorda) | sombra (só registra) | desligada (carregada, mas não ouvida). Config antiga = como hoje.
@@ -93,6 +96,10 @@ _REGRAS = {
     "no_follow_up_while_music": ((bool,), None, None), "no_follow_up_after_home_commands": ((bool,), None, None),
     "only_wake_word_interrupts": ((bool,), None, None),
     "end_of_speech_pause_s": ((int, float), 0.5, 2.0),
+    "two_beam_listening": ((bool,), None, None),
+    "tv_azimuth_deg": ((int, float, type(None)), 0, 359.9), "tv_elevation_deg": ((int, float), 0, 80),
+    "caller_margin_db": ((int, float), 0, 20), "tv_margin_db": ((int, float), 0, 20),
+    "caller_silence_s": ((int, float), 0.5, 5), "turn_max_s": ((int, float), 10, 300),
 }
 
 
@@ -222,6 +229,8 @@ def dados_conexao(sid: str, cfg: dict, extras: dict = None) -> dict:
     dados = {"origem": "satelite", "satelite_id": sid}
     if extras:
         dados.update(extras)
+        if dados.get("pi_turns") is not True:  # só vai quando verdadeiro (two-beam: a Pi decide os turnos)
+            dados.pop("pi_turns", None)
     if cfg.get("comodo"):
         dados["comodo"] = cfg["comodo"]
     if cfg.get("nao_perturbe"):
@@ -230,6 +239,36 @@ def dados_conexao(sid: str, cfg: dict, extras: dict = None) -> dict:
     if pausa != 0.8:  # 04/11: o bot ajusta a pausa de fim de fala do Gemini; em 0,8 nada muda
         dados["end_of_speech_pause_s"] = pausa
     return dados
+
+
+def dois_feixes_permitido(cfg: dict, placa: str) -> bool:
+    """Escuta por dois feixes só na XVF3800 e com a regra "só a palavra interrompe" ligada."""
+    return (placa == "xvf3800" and cfg.get("two_beam_listening") is not False
+            and cfg.get("only_wake_word_interrupts") is not False)
+
+
+def motivo_v046(cfg: dict, placa: str, arg) -> str:
+    """Por que uma conversa NÃO tenta dois feixes (None = pode tentar): `not_permitted`, `whisper` ou `no_wake_word`."""
+    if not dois_feixes_permitido(cfg, placa):
+        return "not_permitted"
+    if arg and arg.get("whisper"):
+        return "whisper"
+    return None if arg and arg.get("wake_word") else "no_wake_word"
+
+
+CHAVES_DOIS_FEIXES = ("two_beam_listening", "tv_azimuth_deg", "tv_elevation_deg", "caller_margin_db", "tv_margin_db",
+                      "caller_silence_s", "turn_max_s", "only_wake_word_interrupts")
+
+
+def resumo_dois_feixes(cfg: dict, placa: str) -> dict:
+    """Corpo do `two_beam_config` (rastreabilidade): o que está ligado e, se não pode, por quê."""
+    permitido = dois_feixes_permitido(cfg, placa)
+    por_que = (None if permitido else "board" if placa != "xvf3800"
+               else "off" if cfg.get("two_beam_listening") is False else "only_word_off")
+    return {"enabled": cfg.get("two_beam_listening") is not False, "permitted": permitido, "why_not": por_que,
+            "tv_azimuth_deg": cfg.get("tv_azimuth_deg"), "tv_elevation_deg": cfg.get("tv_elevation_deg"),
+            "caller_margin_db": cfg.get("caller_margin_db"), "tv_margin_db": cfg.get("tv_margin_db"),
+            "caller_silence_s": cfg.get("caller_silence_s"), "turn_max_s": cfg.get("turn_max_s")}
 
 
 def validar_mudancas(atual: dict, mudancas: dict) -> dict:

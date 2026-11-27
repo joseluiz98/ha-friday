@@ -207,6 +207,31 @@ def wakeword_pipeline_metrics(cache_mtime: float | None, satellites) -> dict:
             "wakeword_cache_last_ok_attributes": {"satellites": dict(satellites) if ok else {}}}
 
 
+# Keep equal to voice_gateway/tts_saude.py (the agent cannot import it; tests/agents/test_server_collectors.py checks).
+TTS_LIMITE_SEGUIDAS = 3
+TTS_EXPIRA_S = 7 * 86400
+
+
+def tts_health_metrics(state, now: float) -> dict:
+    """Spec 2026-11-24 goal 5: TTS keeps failing. `state` = the bot's tts-health.json ({} = no attempt ever recorded,
+    so nothing is failing; None or anything malformed = unreadable, so unknown, never a false "ok"). On from the 3rd
+    consecutive failure (timers and announcements share the streak), off at the next good TTS, and expired after 7 days
+    with no TTS attempt."""
+    if not isinstance(state, dict):
+        return {"tts_failing": None, "tts_failing_attributes": None}
+    if not state:
+        return {"tts_failing": False, "tts_failing_attributes": {"consecutive": 0}}
+    seguidas, ultima, desde = state.get("seguidas"), state.get("ultima_tentativa"), state.get("desde")
+    if isinstance(seguidas, bool) or not isinstance(seguidas, int) or isinstance(ultima, bool) \
+            or not isinstance(ultima, (int, float)):
+        return {"tts_failing": None, "tts_failing_attributes": None}
+    vivo = now - ultima <= TTS_EXPIRA_S
+    return {"tts_failing": bool(vivo and seguidas >= TTS_LIMITE_SEGUIDAS),
+            "tts_failing_attributes": {"consecutive": seguidas,
+                                       "since": stamp_iso(desde) if isinstance(desde, (int, float)) else None,
+                                       "last_error": state.get("ultimo_erro"), "origin": state.get("origem")}}
+
+
 VOICE_DESCRIPTOR = DESCRIPTOR
 
 
@@ -232,6 +257,7 @@ def capabilities(proxmox: bool) -> list[dict]:
         s("memory_views_mode", "Memory views mode", **diag),
         s("wakeword_cache_last_ok", "Wake word feature cache last OK", device_class="timestamp", **diag),
         s("conversation_open", "Conversation open", platform="binary_sensor", **diag),
+        s("tts_failing", "TTS failing", platform="binary_sensor", device_class="problem", **diag),
         s("host_memory_usage_pct", "Proxmox host memory usage", unit="%", icon="mdi:memory",
           available=proxmox, **m, **diag),
         s("nvme_temperature", "Proxmox NVMe temperature", unit="°C", device_class="temperature",

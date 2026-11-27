@@ -13,7 +13,8 @@ def _iso(agora: float) -> str:
 
 
 def _linha(chave, sessao, alvo, prompt, resposta, ok, erro, dur_ms, ferramentas, turno, agora, whisper=False,
-           wake_word=None, speech_gate=None, user_speech=None):
+           wake_word=None, speech_gate=None, user_speech=None, two_beam=None, pi_turns=False,
+           speaker_gate=None):
     r = {"ts": _iso(agora), "prompt": prompt, "response": resposta, "ok": ok, "error": erro,
          "durationMs": dur_ms, "sessionKey": chave, "sessionId": sessao, "speakTarget": alvo,
          "warmState": None, "mode": "friday", "tools": ferramentas, "turnNumber": turno, "resumed": False}
@@ -25,12 +26,19 @@ def _linha(chave, sessao, alvo, prompt, resposta, ok, erro, dur_ms, ferramentas,
         r["speechGate"] = speech_gate
     if user_speech:  # 21/11: trechos da transcrição do usuário, do 1º ao último, e a maior pausa (fala da TV no fim)
         r["userSpeech"] = user_speech
+    if pi_turns:  # 26/11: the Pi drove the turn (two-beam listening)
+        r["turnMode"] = "pi"
+    if speaker_gate:  # shadow speaker-gate verdicts (never acted on)
+        r["speakerGate"] = speaker_gate
+    if two_beam:  # per-turn stats the Pi measured (frames per class, ratio, tv runs, how it ended, beam angles)
+        r["twoBeam"] = two_beam
     return r
 
 
 class Turnos:
     def __init__(self, session_key: str, session_id: str, speak_target: str, whisper: bool = False,
-                 wake_word: str | None = None):
+                 wake_word: str | None = None, pi_turns: bool = False):
+        self.pi_turns = bool(pi_turns)
         self.chave, self.sessao, self.alvo = session_key, session_id, speak_target
         self.whisper = bool(whisper)
         self.wake_word = wake_word
@@ -41,7 +49,24 @@ class Turnos:
         self._usuario, self._ela, self._ferramentas, self._t_usuario = [], [], [], None
         self._ids = set()
         self._portao = []
+        self._two_beam = None  # last `speech_stopped` payload of the turn, with tv_active ORed over the turn
+        self._tv_active = False
+        self._speaker_gate = None
         self._t_trechos = []  # hora de cada trecho da transcrição do usuário (não conta a entrega do cérebro)
+
+    def dois_feixes(self, d):
+        """`speech_started`/`speech_stopped` data from the Pi: keeps the last stopped payload, ORs `tv_active`."""
+        if not isinstance(d, dict) or not d:
+            return
+        if d.get("tv_active") is True:
+            self._tv_active = True
+        if "frames" in d or "by" in d:
+            self._two_beam = dict(d)
+
+    def portao_voz(self, d):
+        """Shadow speaker-gate record of the turn (SombraPortao.fim_do_turno)."""
+        if isinstance(d, dict) and d:
+            self._speaker_gate = dict(d)
 
     def usuario(self, texto: str, agora: float):
         self._usuario.append(texto)
@@ -79,10 +104,13 @@ class Turnos:
             return None
         self.numero += 1
         dur = int(round((agora - self._t_usuario) * 1000)) if self._t_usuario else None
+        two_beam = None
+        if self._two_beam is not None:
+            two_beam = dict(self._two_beam, tv_active=self._tv_active or bool(self._two_beam.get("tv_active")))
         r = _linha(self.chave, self.sessao, self.alvo, "".join(self._usuario).strip(),
                    "".join(self._ela).strip(), True, None, dur, self._ferramentas, self.numero, agora,
                    self.whisper, self.wake_word if self.numero == 1 else None, self._portao,
-                   self._fala_do_usuario())
+                   self._fala_do_usuario(), two_beam, self.pi_turns, self._speaker_gate)
         self._novo()
         return r
 

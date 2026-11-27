@@ -29,4 +29,13 @@ fi
 m=$(grep -n '^migrar_openclaw' "$DIR/run.sh" | head -1 | cut -d: -f1)
 c=$(grep -n '^openclaw \|^  openclaw \|openclaw config set' "$DIR/run.sh" | head -1 | cut -d: -f1)
 [ -n "$m" ] && [ -n "$c" ] && [ "$m" -lt "$c" ] && ok "doctor antes do primeiro comando do openclaw" || erro "doctor depois do openclaw config (m=$m c=$c)"
+# 23/11: o cérebro nunca usa o Code Mode do OpenClaw (test_run_disables_code_mode): a linha existe, tem o
+# valor exato e vem depois do bloco de config do gateway (chatCompletions).
+test_run_disables_code_mode() {
+  local l g
+  l=$(grep -n '^openclaw config set tools.codeMode.enabled false >/dev/null 2>&1 || echo "codeMode: config set failed" >&2$' "$DIR/run.sh" | head -1 | cut -d: -f1)
+  g=$(grep -n 'openclaw config set gateway.http.endpoints.chatCompletions.enabled true' "$DIR/run.sh" | head -1 | cut -d: -f1)
+  [ -n "$l" ] && [ -n "$g" ] && [ "$l" -gt "$g" ] && ok "Code Mode desligado depois do bloco do gateway" || erro "run.sh sem a linha do Code Mode depois do gateway (l=$l g=$g)"
+}
+test_run_disables_code_mode
 exit $falhou

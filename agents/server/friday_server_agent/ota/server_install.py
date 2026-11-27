@@ -106,6 +106,19 @@ def touches(changed: list[str] | None, paths) -> bool:
     return any(p == base or p.startswith(base.rstrip("/") + "/") for p in changed for base in paths)
 
 
+def needs_install(repo, installed_sha: str | None, sha: str, paths) -> bool:
+    """Whether the release at `sha` changes a component installed at `installed_sha`; unknown or unreadable history =
+    yes. The one rule of both the installer and the satellite package gate: two rules disagreeing left a satellite
+    with no update (v0.4.6, 26/11/2026)."""
+    if installed_sha == sha:
+        return False
+    try:
+        changed = repo.changed_paths(installed_sha, sha) if installed_sha else None
+    except Exception:  # noqa: BLE001 - a sha the clone never saw
+        changed = None
+    return touches(changed, paths)
+
+
 class IdleTracker:
     """Continuous idle time, sampled every ~30 s by the agent (a conversation shorter than a sample can slip by)."""
 
@@ -179,13 +192,7 @@ class ServerInstaller:
         out = []
         for comp in SERVER_COMPONENTS:
             old = version_line_sha(self.installed_line(comp))
-            if old == sha:
-                continue
-            try:
-                changed = self.repo.changed_paths(old, sha) if old else None
-            except Exception:  # noqa: BLE001 - a sha the clone never saw: reinstall
-                changed = None
-            if touches(changed, manifest.components.get(comp, ())):
+            if needs_install(self.repo, old, sha, manifest.components.get(comp, ())):
                 out.append(comp)
         return out
 

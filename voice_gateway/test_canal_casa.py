@@ -308,6 +308,44 @@ class TestAvisoCadastro(unittest.TestCase):
                             "motivo": "tentativas da pessoa nova aceitas: 6 de 10", "numeros": {}}, SAT["sat-0a1b2c"])
         self.assertIn("não foi aprendida", t); self.assertIn("6 de 10", t)
 
+    def corpo(self, palavras, aprovado):
+        return {"tipo": "cadastro_voz", "nome": "Bia", "aprovado": aprovado, "palavras": palavras}
+
+    def test_duas_palavras_aprovadas(self):
+        t = cc.texto_aviso(self.corpo([{"palavra": "Friday", "aprovado": True, "numeros": {"nova": "9/10"}},
+                                       {"palavra": "Sexta-feira", "aprovado": True, "numeros": {"nova": "8/10"}}], True),
+                           SAT["sat-0a1b2c"])
+        self.assertIn("foi aprendida para Friday", t); self.assertIn("e Sexta-feira", t)
+        self.assertIn("9/10", t); self.assertIn("8/10", t)
+
+    def test_uma_aprovada_e_uma_reprovada_diz_as_duas_coisas(self):
+        t = cc.texto_aviso(self.corpo([{"palavra": "Friday", "aprovado": True, "numeros": {}},
+                                       {"palavra": "Sexta-feira", "aprovado": False,
+                                        "motivo": "faltam negativos para provar o verificador"}], True), SAT["sat-0a1b2c"])
+        self.assertIn("foi aprendida para Friday", t)
+        self.assertIn("não para Sexta-feira (faltam negativos", t)
+        self.assertIn("continua como antes", t)
+
+    def test_nenhuma_aprovada(self):
+        t = cc.texto_aviso(self.corpo([{"palavra": "Friday", "aprovado": False, "motivo": "a"},
+                                       {"palavra": "Sexta-feira", "aprovado": False, "motivo": "b"}], False), SAT["sat-0a1b2c"])
+        self.assertIn("não foi aprendida: Friday (a); Sexta-feira (b)", t)
+
+    def test_o_texto_falado_nao_expoe_o_mecanismo(self):
+        casos = [{"tipo": "cadastro_voz", "nome": "Bia", "aprovado": False, "motivo": "x", "numeros": {}},
+                 self.corpo([{"palavra": "Friday", "aprovado": True, "numeros": {}}], True),
+                 self.corpo([{"palavra": "Friday", "aprovado": False, "motivo": "x"}], False)]
+        for c in casos:
+            for sat in (SAT["sat-0a1b2c"], {}):
+                for interno in ("satélite", "cérebro", "modelo"):
+                    self.assertNotIn(interno, cc.texto_aviso(c, sat).lower())
+
+    def test_palavras_invalidas(self):
+        for ruim in ([], "x", [{"palavra": "", "aprovado": True}], [{"palavra": "A", "aprovado": "sim"}],
+                     [{"palavra": "A", "aprovado": True}] * 7):
+            with self.assertRaises(ValueError, msg=ruim):
+                cc.texto_aviso(self.corpo(ruim, True), SAT["sat-0a1b2c"])
+
     def test_invalido(self):
         for ruim in ({"tipo": "cadastro_voz", "nome": "", "aprovado": True},
                      {"tipo": "cadastro_voz", "nome": "Bia", "aprovado": "sim"},

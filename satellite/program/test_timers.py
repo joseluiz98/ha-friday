@@ -1,11 +1,35 @@
 """Testes dos timers: cd /homeassistant/tools/satelite/programa && python3 -m unittest test_timers -v"""
-import unittest
+import os, shutil, tempfile, unittest
 import timers as tm
 
 
 def novo():
     gravados = []
     return tm.Timers(gravados.append), gravados
+
+
+class TestLimparVoz(unittest.TestCase):
+    """24/11: o aviso falado de cada timer (<id>.wav) some com o timer."""
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def toca(self, nome):
+        open(os.path.join(self.d, nome), "wb").close()
+
+    def test_keeps_only_the_given_ids(self):
+        for n in ("t111111.wav", "t222222.wav", "t333333.wav.tmp"):
+            self.toca(n)
+        tm.limpar_voz(self.d, {"t222222"})
+        self.assertEqual(sorted(os.listdir(self.d)), ["t222222.wav"])
+
+    def test_other_files_are_left_alone(self):
+        self.toca("notas.txt")
+        tm.limpar_voz(self.d, set())
+        self.assertEqual(os.listdir(self.d), ["notas.txt"])
+
+    def test_missing_dir_is_fine(self):
+        tm.limpar_voz(os.path.join(self.d, "nao_existe"), set())
 
 
 class TestCriar(unittest.TestCase):

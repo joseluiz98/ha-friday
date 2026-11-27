@@ -52,12 +52,15 @@ import cancellation as cx
 import satelite_modo as sm
 import voice_settings as vs_cfg
 import music_state as ms
+import player_guard as pgd
 import preferencias_voz as pv
 import inventario_casa as ic
 import gemini_watch as gw
 import speech_cut
 import canal_casa as cc
 import anuncios as an
+import timer_voz as tvz
+import parar_timers as pt
 from arbitration import Arbiter, load_offsets
 import whisper_mode as wm
 import memory_views as mv
@@ -150,6 +153,9 @@ ENTREGAS = cc.Entregas()
 SYSTEM_INSTRUCTION = """Você é a Sexta-feira, a assistente de voz da casa do {DONO}. Fale sempre em português
 do Brasil, de forma natural e breve, como numa conversa entre duas pessoas, em ritmo um pouco mais rápido
 e dinâmico. Nada de listas, emojis ou formatação: tudo o que você diz vira fala.
+
+Quem conversa com você percebe uma só assistente, a Sexta-feira. Satélite, cérebro, ferramentas, modelos e
+servidor são o mecanismo por dentro: a pessoa ouve a sua voz e vê o resultado, não o caminho até ele.
 
 Pedidos sobre o seu jeito de falar (ritmo, tom, volume) você atende sozinha, na hora; não os passe
 ao cérebro.
@@ -372,7 +378,14 @@ CANCELAR_TIMER_FUNCTION = FunctionSchema(
     },
     required=[],
 )
-TIMER_FUNCTIONS = [CRIAR_TIMER_FUNCTION, CONSULTAR_TIMERS_FUNCTION, CANCELAR_TIMER_FUNCTION]
+PARAR_TIMERS_FUNCTION = FunctionSchema(
+    name="parar_timers",
+    description=sm.DESCRICAO_PARAR_TIMERS,
+    properties={"nome": _NOME_TIMER_PROP,
+                "comodo": {"type": "string", "description": "Cômodo do satélite onde o timer toca, como 'escritório'."}},
+    required=[],
+)
+TIMER_FUNCTIONS = [CRIAR_TIMER_FUNCTION, CONSULTAR_TIMERS_FUNCTION, CANCELAR_TIMER_FUNCTION, PARAR_TIMERS_FUNCTION]
 
 # Spec 2026-10-15 D15: programa de aprendizagem de voz (só no satélite). Duas ferramentas: a trava "roteiro antes de
 # gravar" precisa de duas chamadas, e uma ferramenta com parâmetro que troca a ação seria um enum (D28).
@@ -500,6 +513,9 @@ def _cliente_tts_anuncio():
     return _cliente_anuncio
 
 
+_tarefas_timer_voz: set = set()  # referência forte: uma tarefa solta pode ser coletada no meio
+
+
 class DepsAnuncio:
     """IO real de anuncios.anunciar (POST /announce)."""
     cache = ANNOUNCE_CACHE
@@ -530,6 +546,31 @@ class DepsAnuncio:
                     return (await resp.json(content_type=None)).get("resposta")
                 except Exception:
                     return "erro"
+
+    async def comandar(self, ip, senha, comando):
+        """POST /command (spec 2026-11-24): um comando ao programa do satélite (timers_parar); só falha de conexão
+        ou prazo levanta."""
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=1.5, total=3.0)) as session:
+            async with session.post(f"http://{ip}:8700/command", json=comando,
+                                    headers={"Authorization": f"Bearer {senha}"}) as resp:
+                return await resp.json(content_type=None)
+
+    async def status(self, ip, senha):
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=1.0, total=1.0)) as session:
+            async with session.get(f"http://{ip}:8700/status", headers={"Authorization": f"Bearer {senha}"}) as resp:
+                return await resp.json(content_type=None)
+
+    async def enviar_voz_timer(self, ip, senha, timer_id, wav):
+        """POST /timer_voice (spec 2026-11-24): "ok", "sem_timer" (404: já acabou ou foi cancelado) ou "erro"; só falha
+        de conexão/prazo levanta."""
+        conectar, total = an.prazo_envio(len(wav))
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(sock_connect=conectar, total=total)) as session:
+            async with session.post(f"http://{ip}:8700/timer_voice", data=wav,
+                                    headers={"Authorization": f"Bearer {senha}", "X-Timer-Id": timer_id,
+                                             "Content-Type": "audio/wav"}) as resp:
+                if resp.status == 404:
+                    return "sem_timer"
+                return "ok" if resp.status == 200 else "erro"
 
     def registrar(self, linha):
         logger.info("entrega: " + json.dumps(linha, ensure_ascii=False))
@@ -808,8 +849,27 @@ def registrar_rotas(app):
         return JSONResponse(r)
 
 
+class GuardedMCPClient(MCPClient):
+    """MCP client that, for a satellite session, corrects a made-up music player to the satellite's own before the
+    call reaches HA (player_guard). Any failure of the guard lets the call through unchanged."""
+
+    def __init__(self, *args, own_player: str, ha_token: str, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._own_player = own_player
+        self._ha_token = ha_token
+
+    async def _read_player_state(self, entity_id):
+        return await pgd.read_state_http(entity_id, HA_URL, self._ha_token)
+
+    async def _call_tool_text(self, function_name, arguments) -> str:
+        arguments, early = await pgd.safe_guard(function_name, arguments, self._own_player, self._read_player_state)
+        if early is not None:
+            return json.dumps(early)
+        return await super()._call_tool_text(function_name, arguments)
+
+
 async def build_tools(eh_satelite: bool = False, brain_desc: str | None = None, skill_tools: bool = False,
-                      search_tool: bool = False, apresentacao: bool = False) -> tuple:
+                      search_tool: bool = False, apresentacao: bool = False, own_player: str | None = None) -> tuple:
     """(ToolsSchema, cliente do MCP ou None, nomes das ferramentas vindas do MCP)."""
     brain = BRAIN_FUNCTION if brain_desc is None else _brain_function(brain_desc)
     standard = [brain] + (
@@ -823,12 +883,12 @@ async def build_tools(eh_satelite: bool = False, brain_desc: str | None = None, 
         standard.append(SEARCH_SKILLS_FUNCTION)
     mcp, nomes_mcp = None, set()
     try:
-        mcp = MCPClient(
-            server_params=StreamableHttpParameters(
-                url=HA_MCP_URL,
-                headers={"Authorization": f"Bearer {os.environ['FRIDAY_HA_TOKEN']}"},
-            )
-        )
+        ha_token = os.environ["FRIDAY_HA_TOKEN"]
+        mcp_params = StreamableHttpParameters(url=HA_MCP_URL, headers={"Authorization": f"Bearer {ha_token}"})
+        if eh_satelite and own_player:
+            mcp = GuardedMCPClient(server_params=mcp_params, own_player=own_player, ha_token=ha_token)
+        else:
+            mcp = MCPClient(server_params=mcp_params)
         ha_tools = await mcp.tools()
         standard = ha_tools.standard_tools + standard
         nomes_mcp = {t.name for t in ha_tools.standard_tools}
@@ -993,15 +1053,18 @@ class EntregaObserver(BaseObserver):
 class RegistroObserver(BaseObserver):
     """Grava cada turno no NDJSON do CV (spec do satélite §4). Só olha a primeira passagem de cada quadro."""
 
-    def __init__(self, turnos: rc.Turnos):
+    def __init__(self, turnos: rc.Turnos, ao_saida=None):
         super().__init__()
         self._t = turnos
+        self._ao_saida = ao_saida  # two-beam: model output or tool call = the turn was answered
 
     async def on_push_frame(self, data: FramePushed):
         if not data.first_push:
             return
         f = data.frame
         try:
+            if self._ao_saida and isinstance(f, (TTSTextFrame, FunctionCallInProgressFrame)):
+                self._ao_saida()
             if isinstance(f, TranscriptionFrame) and f.text:
                 self._t.usuario(f.text, datetime.now().timestamp())
             elif isinstance(f, TTSTextFrame) and f.text:
@@ -1204,8 +1267,10 @@ async def bot(runner_args: RunnerArguments):
     # "conexão: entrega …" e "conexão: timer …" ficam fora da medição de latência (spec 2026-10-12 §6)
     # 20/10 (spec 2026-10-20 D6): conversa aberta por um "Friday" sussurrado; só o satélite manda `whisper`
     sussurro = eh_satelite and sm.whisper(corpo)
+    pi_turns = eh_satelite and sm.pi_turns(corpo)  # 26/11: two-beam listening, the Pi drives the turns
+    turnos_pi_ativos = sussurro or pi_turns
     logger.info(f"conexão: {sm.rotulo_conexao(eh_satelite, satelite_id, comodo, id_entrega, timer, bool(apresentacao))}"
-                f"{' sussurro' if sussurro else ''}"
+                f"{' sussurro' if sussurro else ''}{' pi_turns' if pi_turns else ''}"
                 f"{' claim_id=' + str(corpo.get('claim_id')) if eh_satelite and isinstance(corpo, dict) and corpo.get('claim_id') else ''}; "
                 f"preferências: {preferencias.count(chr(10) + '- ')} diretrizes; vistas de memória: braço={arm}")
     if id_entrega and not entrega:
@@ -1224,15 +1289,35 @@ async def bot(runner_args: RunnerArguments):
     async def _cadastro():
         return await cc.read_satellites_without_blocking(SATELITES_ARQ, SATELITES_CACHE)
 
+    async def _player_do_satelite():
+        # Own player from the catalog, for the music guard (GuardedMCPClient); a read failure = no guard.
+        try:
+            return ((await _cadastro()).get(satelite_id) or {}).get("player") if eh_satelite else None
+        except Exception:
+            return None
+
     async def _estado_do_player(player):
         return await ms.player_state(player, HA_URL, os.environ["FRIDAY_HA_TOKEN"])
 
-    (ferramentas, mcp, nomes_mcp), (inventario, erro_inventario), fato_musica = await asyncio.gather(
+    player_proprio = await _player_do_satelite()
+
+    async def _alarmes_de_fora():  # nos outros satélites; nunca atrasa nem derruba a conversa (1 s por satélite)
+        try:
+            return await pt.alarmes_nas_casas(DepsAnuncio(REGISTRO_SATELITES.current()), excluir=satelite_id)
+        except Exception:
+            return []
+
+    (ferramentas, mcp, nomes_mcp), (inventario, erro_inventario), fato_musica, outros = await asyncio.gather(
         build_tools(eh_satelite, mv.brain_description(caps), skill_tools=bool(habilidades), search_tool=cortou,
-                    apresentacao=bool(apresentacao)),
+                    apresentacao=bool(apresentacao), own_player=player_proprio),
         ic.buscar(HA_MCP_URL, os.environ["FRIDAY_HA_TOKEN"]),
-        ms.music_fact_for(satelite_id, _cadastro, _estado_do_player, sm.music_fact) if eh_satelite else _vazio()
+        ms.music_fact_for(satelite_id, _cadastro, _estado_do_player, sm.music_fact) if eh_satelite else _vazio(),
+        _alarmes_de_fora() if eh_satelite else _vazio(),
     )
+    # spec 2026-11-24: a palavra dita com timers tocando leva a lista deles; a conversa fica sabendo quais tocam (aqui e
+    # nos outros satélites). Fato no contexto, não uma fala de abertura: ela não começa a falar sozinha.
+    # (também quando só OUTRO satélite toca: a palavra pode ter sido ouvida onde não toca nada)
+    alarmes_fato = sm.fato_alarmes(sm.timers_tocando(corpo), outros or []) if eh_satelite else ""
     inventario = ic.sem_frase_de_grupo(inventario)  # 23/10: a frase do HA que manda pedir o cômodo competia com as diretrizes
     if eh_satelite:  # só o satélite tem a ferramenta timer; a página segue com o texto do HA como veio
         inventario = ic.sem_frase_de_timers(inventario)
@@ -1245,7 +1330,7 @@ async def bot(runner_args: RunnerArguments):
         "voice": vs_cfg.voz(cfg_voz),
         "language": Language.PT_BR,
         "system_instruction": SYSTEM_INSTRUCTION
-        + ("\n\n" + sm.contexto_satelite(satelite_id, comodo, nao_perturbe[0], fato_musica) if eh_satelite else "")
+        + ("\n\n" + sm.contexto_satelite(satelite_id, comodo, nao_perturbe[0], fato_musica, alarmes_fato) if eh_satelite else "")
         + ("\n\n" + preferencias if preferencias else "")
         + ("\n\n" + catalogo if catalogo else "")
         + ("\n\n" + briefing if briefing else "")
@@ -1256,15 +1341,17 @@ async def bot(runner_args: RunnerArguments):
         ),
     }
 
-    fim_ms = sm.fim_de_fala_ms(corpo) if eh_satelite and not sussurro else None
+    fim_ms = sm.fim_de_fala_ms(corpo) if eh_satelite and not turnos_pi_ativos else None
     if fim_ms is not None:  # 04/11: pausa de fim de fala ajustada pela Pi (em 0,8 s nada muda no Gemini)
         settings_kwargs["vad"] = GeminiVADParams(silence_duration_ms=fim_ms)
         logger.info(f"pausa de fim de fala do satélite: {fim_ms} ms")
     llm_extra = {}
-    if sussurro:
+    if turnos_pi_ativos:
         # D7: sem a detecção de atividade do servidor; início e fim da fala vêm da Pi (PiSpeechTurns)
         settings_kwargs["vad"] = GeminiVADParams(disabled=True)
         llm_extra["user_audio_preroll_secs"] = 1.5
+        if pi_turns:
+            logger.info(f"two-beam: session sat={satelite_id} pi_turns, server VAD off, preroll 1.5s then 0.5s")
     llm = GeminiLiveLLMService(
         api_key=os.environ["GEMINI_API_KEY"],
         tools=ferramentas,
@@ -1304,6 +1391,8 @@ async def bot(runner_args: RunnerArguments):
     llm._handle_server_message = _mensagem_vigiada
 
     def vigia_fala():
+        if sem_resposta:
+            sem_resposta.respondeu()
         latencia = vigia.speech_started()
         if latencia is not None:
             logger.info(f"gemini [{sessao}] começou a falar {latencia:.1f}s após o cérebro")
@@ -1318,7 +1407,7 @@ async def bot(runner_args: RunnerArguments):
         _manter(asyncio.create_task(vigia_silencio()))
     turnos = rc.Turnos(f"friday-satelite-{satelite_id}" if eh_satelite else "friday-pagina", sessao,
                        satelite_id if eh_satelite else "pagina", whisper=sussurro,  # 22/10: marca no Logbook
-                       wake_word=sm.wake_word(corpo))  # 28/10: palavra que abriu, só no 1º turno
+                       wake_word=sm.wake_word(corpo), pi_turns=pi_turns)  # 28/10: palavra que abriu, só no 1º turno
 
     def portao_decidiu(acao, segurou_s, fecha_turno):
         if acao:
@@ -1592,6 +1681,22 @@ async def bot(runner_args: RunnerArguments):
             return
         r = sm.resultado_timer(await comandar_pi(comando))
         logger.info(f"[{sessao}] {params.function_name} {comando} -> {r}")
+        criado = tvz.timer_criado(r) if params.function_name == "criar_timer" and eh_satelite else None
+        if criado and criado[1]:  # spec 2026-11-24: o aviso falado do timer com nome é feito já, em segundo plano
+            tarefa = asyncio.create_task(tvz.avisar_voz_do_timer(
+                DepsAnuncio(REGISTRO_SATELITES.current()), satelite_id, criado[0], criado[1]))
+            _tarefas_timer_voz.add(tarefa)
+            tarefa.add_done_callback(_tarefas_timer_voz.discard)
+        await params.result_callback(r)
+
+    async def parar_timers(params: FunctionCallParams):
+        try:
+            a = pt.args_parar_timers(params.arguments)
+        except ValueError as e:
+            await params.result_callback({"ok": False, "erro": str(e)})
+            return
+        r = await pt.parar_em_todos(DepsAnuncio(REGISTRO_SATELITES.current()), **a)
+        logger.info(f"[{sessao}] parar_timers {a} -> {r}")
         await params.result_callback(r)
 
     trava_aprendizagem = sm.TravaAprendizagem()
@@ -1636,6 +1741,8 @@ async def bot(runner_args: RunnerArguments):
         llm.register_function("volume_do_satelite", volume_do_satelite, cancel_on_interruption=False)
         for nome_da_ferramenta in sm.ACAO_DA_FERRAMENTA:
             llm.register_function(nome_da_ferramenta, timer_do_satelite)
+        # um "ok" dito por cima não pode cancelar o comando depois de ele já ter ido aos satélites
+        llm.register_function("parar_timers", parar_timers, cancel_on_interruption=False)
         llm.register_function("aprendizagem_de_voz", aprendizagem_de_voz)
         # um "ok" dito por cima não pode cancelar o comando depois de a Pi já ter agendado (D28)
         llm.register_function("comecar_aprendizagem_de_voz", comecar_aprendizagem_de_voz, cancel_on_interruption=False)
@@ -1644,7 +1751,13 @@ async def bot(runner_args: RunnerArguments):
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
     # D7/D8: conversa sussurrada = turnos dirigidos pela Pi e voz do TTS sussurrado (whisper_mode.py)
-    turnos_pi = wm.PiSpeechTurns(ready=lambda: bool(getattr(llm, "_ready_for_realtime_input", True))) if sussurro else None
+    from speaker_gate_client import SombraPortao
+    sombra_portao = SombraPortao(satelite_id) if pi_turns else None
+    turnos_pi = wm.PiSpeechTurns(sink=sombra_portao.audio if sombra_portao else None,
+                                 ready=lambda: bool(getattr(llm, "_ready_for_realtime_input", True)),
+                                 preroll=(llm, 1.5, 0.5) if pi_turns else None,
+                                 sat_id=satelite_id) if turnos_pi_ativos else None
+    sem_resposta = wm.SemResposta(10.0, satelite_id) if pi_turns else None
     voz_sussurrada = None
     if sussurro:
         from google import genai as _genai
@@ -1679,7 +1792,7 @@ async def bot(runner_args: RunnerArguments):
         # enable_usage_metrics: o log passa a mostrar os tokens de cada fala, com o áudio separado.
         params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
         idle_timeout_secs=IDLE_TIMEOUT_SECS,
-        observers=[RegistroObserver(turnos), UsageObserver(ab, sessao, arm, satelite_id if eh_satelite else None, settings_kwargs["model"]), ChamadasObserver(chamadas)]
+        observers=[RegistroObserver(turnos, sem_resposta.respondeu if sem_resposta else None), UsageObserver(ab, sessao, arm, satelite_id if eh_satelite else None, settings_kwargs["model"]), ChamadasObserver(chamadas)]
                   + ([EntregaObserver(entrega.id)] if entrega else [])
                   + ([SinaisDoSatelite(avisar_pi, contador_pi)] if eh_satelite else [])
                   + [PromessaObserver(sessao, contador_pi if eh_satelite else None, avisar_pi, avisar_gemini,
@@ -1690,6 +1803,10 @@ async def bot(runner_args: RunnerArguments):
             function_call_report_level={"*": RTVIFunctionCallReportLevel.FULL}
         ),
     )
+    async def _vigiar_sem_resposta():
+        await asyncio.sleep(sem_resposta.prazo_s + 0.1)
+        sem_resposta.verificar(time.monotonic())
+
     if worker.rtvi:
         @worker.rtvi.event_handler("on_client_message")
         async def ao_msg_da_pi(rtvi, msg):
@@ -1708,9 +1825,21 @@ async def bot(runner_args: RunnerArguments):
                 logger.info(f"fala cortada pela palavra [{sessao}]: geração em curso descartada={armou}")
                 await worker.queue_frames([_quadros.InterruptionWorkerFrame()])
             elif msg.type == "speech_started" and turnos_pi:  # D7: a Pi percebeu a fala (inclusive sussurrada)
+                turnos.dois_feixes(msg.data)
+                if sombra_portao:
+                    sombra_portao.comeco_do_turno(bool(isinstance(msg.data, dict) and msg.data.get("tv_active")))
                 await turnos_pi.started()
             elif msg.type == "speech_stopped" and turnos_pi:
+                turnos.dois_feixes(msg.data)
+                if sem_resposta:
+                    sem_resposta.stopped(time.monotonic(), msg.data if isinstance(msg.data, dict) else None)
+                    _manter(asyncio.create_task(_vigiar_sem_resposta()))
                 await turnos_pi.stopped()
+                if sombra_portao:
+                    try:
+                        turnos.portao_voz(await sombra_portao.fim_do_turno())
+                    except Exception:  # noqa: BLE001 - shadow only
+                        logger.exception("two-beam: speaker gate record failed")
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
     await runner.add_workers(worker)

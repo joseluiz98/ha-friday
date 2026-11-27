@@ -1,5 +1,7 @@
 """Timers do satélite (spec 2026-10-12 §2). Lógica pura, com o término em relógio de parede (time.time()) para
 sobreviver a reinício. Quem grava o arquivo é uma função injetada. Testes: test_timers.py."""
+import os
+import re
 import secrets
 import unicodedata
 
@@ -8,6 +10,7 @@ MAX_SEGUNDOS = 24 * 3600
 TOLERANCIA_REINICIO_S = 600  # vencido com a Pi desligada há menos disso: toca ao religar
 MAX_NOME = 40
 MAX_MUSIC = 80  # spec 2026-10-21 R11: texto da busca de música do alarme
+_ID_VOZ = re.compile(r"^t[0-9a-f]{6}$")
 
 
 def _chave(nome):
@@ -97,3 +100,20 @@ class Timers:
         recentes = [x for x in venc if agora - x["termino"] < TOLERANCIA_REINICIO_S]
         velhos = [x for x in venc if agora - x["termino"] >= TOLERANCIA_REINICIO_S]
         return recentes, velhos
+
+
+def limpar_voz(pasta, manter):
+    """24/11 (spec 2026-11-24): o aviso falado de cada timer é `<id>.wav` em `pasta`; apaga o de todo timer que não está
+    em `manter` (ids ativos e dos que estão tocando) e os `.tmp` soltos. Outros arquivos ficam; pasta ausente é ok."""
+    try:
+        nomes = os.listdir(pasta)
+    except OSError:
+        return
+    for nome in nomes:
+        base = nome[:-4] if nome.endswith(".wav") else nome[:-8] if nome.endswith(".wav.tmp") else None
+        if base is None or not _ID_VOZ.match(base) or (base in manter and nome.endswith(".wav")):
+            continue
+        try:
+            os.unlink(os.path.join(pasta, nome))
+        except OSError:
+            pass

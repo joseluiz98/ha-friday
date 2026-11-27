@@ -56,7 +56,7 @@ LEGACY_VENV = f"{R}/home/jose/oww"
 # system/ file -> where it goes (mode); anything else in system/ is ignored
 SYSTEM = {
     ".service": (f"{R}/etc/systemd/system", 0o644), ".timer": (f"{R}/etc/systemd/system", 0o644),
-    "jabra.conf": (f"{R}/etc/friday-satelite/asound", 0o644), "xvf3800.conf": (f"{R}/etc/friday-satelite/asound", 0o644),
+    "jabra.conf": (f"{R}/etc/friday-audio", 0o644), "xvf3800.conf": (f"{R}/etc/friday-audio", 0o644),
     "friday-audio-select": (f"{R}/usr/local/sbin", 0o755),  # spec 2026-11-17-xvf3800-support
     "90-friday-audio.rules": (f"{R}/etc/udev/rules.d", 0o644),
     "audio-board.conf": (f"{R}/etc/systemd/system/sendspin-cli.service.d", 0o644),
@@ -68,8 +68,8 @@ SUDOERS_SRC, SUDOERS_DEST = "sudoers.friday-satellite-agent", f"{R}/etc/sudoers.
 # spec 2026-11-18 §3: what an activation overwrote or created, so a way back restores it
 SNAPSHOTS = f"{R}/var/lib/friday/ota/system-backup"
 AUDIO_DESTS = [f"{R}/{d}" for d in (  # the 0005 destinations: files a migration alone may create
-    "usr/local/sbin/friday-audio-select", "etc/friday-satelite/asound/jabra.conf",
-    "etc/friday-satelite/asound/xvf3800.conf", "etc/udev/rules.d/90-friday-audio.rules",
+    "usr/local/sbin/friday-audio-select", "etc/friday-audio/jabra.conf",
+    "etc/friday-audio/xvf3800.conf", "etc/udev/rules.d/90-friday-audio.rules",
     "etc/systemd/system/sendspin-cli.service.d/audio-board.conf", "etc/systemd/system/friday-silence.service")]
 if os.environ.get("FRIDAY_OTA_FAKE_BIN"):
     os.environ["PATH"] = os.environ["FRIDAY_OTA_FAKE_BIN"] + os.pathsep + os.environ.get("PATH", "")

@@ -663,7 +663,7 @@ class TestAprendizagemDeVoz(unittest.TestCase):
         self.assertNotIn("id", r)
 
     def test_roteiro_sem_resposta_da_pi(self):
-        self.assertEqual(sm.roteiro_aprendizagem(None)["cadastrados"], "o satélite não respondeu")
+        self.assertEqual(sm.roteiro_aprendizagem(None)["cadastrados"], "não foi possível consultar agora")
 
     def test_textos_sao_fatos(self):
         textos = (sm.DESCRICAO_APRENDIZAGEM_DE_VOZ, sm.DESCRICAO_COMECAR_APRENDIZAGEM, " ".join(sm.ROTEIRO_APRENDIZAGEM),
@@ -671,6 +671,35 @@ class TestAprendizagemDeVoz(unittest.TestCase):
         for t in textos:
             for ordem in ("Diga ", "Explique", "Pergunte", "Você deve", "Nunca", "SEMPRE", "encerrar_conversa"):
                 self.assertNotIn(ordem, t)
+
+    def test_textos_de_aprendizagem_nao_expoem_o_mecanismo(self):
+        """23/11: a voz disse "o satélite conduzirá o processo", copiando a descrição da ferramenta. A divisão modelo →
+        TTS → satélite é invisível para quem fala: os textos descrevem o que a pessoa vive, não quem faz."""
+        textos = (sm.DESCRICAO_APRENDIZAGEM_DE_VOZ, sm.DESCRICAO_COMECAR_APRENDIZAGEM, " ".join(sm.ROTEIRO_APRENDIZAGEM),
+                  sm.FATO_APRENDIZAGEM, sm.roteiro_aprendizagem(None)["cadastrados"],
+                  sm.resultado_comando(None)["erro"])
+        for t in textos:
+            for interno in ("satélite", "conduz", "cérebro", "modelo"):
+                self.assertNotIn(interno, t.lower())
+
+    def test_roteiro_inteiro_nao_expoe_o_mecanismo_com_uma_ou_duas_palavras(self):
+        import json
+        for resposta in (None, {"ok": True, "vozes": [{"nome": "Bia", "desde": "x", "palavras": ["Friday"]}]},
+                         {"ok": True, "vozes": [], "palavras": ["Friday", "Sexta-feira"]}):
+            t = json.dumps(sm.roteiro_aprendizagem(resposta), ensure_ascii=False).lower()
+            for interno in ("satélite", "satelite", "cérebro", "modelo", "conduz"):
+                self.assertNotIn(interno, t)
+
+    def test_roteiro_de_uma_palavra_e_o_de_sempre(self):
+        r = sm.roteiro_aprendizagem({"ok": True, "vozes": [], "palavras": ["Friday"]})
+        self.assertEqual((r["roteiro"], r["palavras"], r["gravacao_minutos"]), (sm.ROTEIRO_APRENDIZAGEM, ["Friday"], 2))
+        self.assertEqual(sm.roteiro_aprendizagem(None)["palavras"], ["Friday"])
+
+    def test_roteiro_de_duas_palavras_cita_as_duas_e_o_tempo(self):
+        r = sm.roteiro_aprendizagem({"ok": True, "vozes": [], "palavras": ["Friday", "Sexta-feira"]})
+        self.assertEqual((r["palavras"], r["gravacao_minutos"]), (["Friday", "Sexta-feira"], 4))
+        self.assertTrue(any("Friday, Sexta-feira" in p for p in r["roteiro"]))
+        self.assertTrue(any("bipe" in p for p in r["roteiro"]))
 
     def test_trava(self):
         t = sm.TravaAprendizagem()
@@ -682,7 +711,7 @@ class TestAprendizagemDeVoz(unittest.TestCase):
     def test_resultado_tira_o_id_do_comando(self):
         self.assertEqual(sm.resultado_comando({"id": "c2", "ok": True, "nome": "Bia", "id_pessoa": "bia"}),
                          {"ok": True, "nome": "Bia", "id_pessoa": "bia"})
-        self.assertEqual(sm.resultado_comando(None), {"ok": False, "erro": "o satélite não confirmou"})
+        self.assertEqual(sm.resultado_comando(None), {"ok": False, "erro": "a gravação não foi confirmada"})
 
     def test_abertura_do_resultado_nomeia_a_fonte_verdadeira(self):
         c = sm.mensagem_de_abertura("a voz de Bia foi aprendida", None, "aprendizagem")["content"]
@@ -711,6 +740,15 @@ class TestWhisper(unittest.TestCase):
         for ruim in (dict(base), dict(base, whisper="sim"), dict(base, whisper=1), dict(base, whisper=False), None, "x",
                      {"whisper": True}):
             self.assertFalse(sm.whisper(ruim), ruim)
+
+
+class TestPiTurns(unittest.TestCase):
+    def test_pi_turns_only_from_satellite_and_true(self):
+        base = {"origem": "satelite", "satelite_id": "sat-7f3a2c"}
+        self.assertTrue(sm.pi_turns(dict(base, pi_turns=True)))
+        for bad in (dict(base), dict(base, pi_turns="yes"), dict(base, pi_turns=1), dict(base, pi_turns=False), None,
+                    "x", {"pi_turns": True}, {"origem": "pagina", "pi_turns": True}):
+            self.assertFalse(sm.pi_turns(bad), bad)
 
 
 class TestWakeWord(unittest.TestCase):
@@ -843,6 +881,12 @@ class TestEnderecamento(unittest.TestCase):
         t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")).read()
         self.assertIn("Se o usuário interromper você, pare e escute", t)
         self.assertIn("não é interrupção", t)
+
+    def test_system_instruction_diz_que_a_assistente_e_uma_so(self):
+        import os
+        t = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.py")).read()
+        self.assertIn("percebe uma só assistente", t)
+        self.assertIn("mecanismo por dentro", t)
         self.assertNotIn("Se o Alex interromper", t)
 
 
@@ -885,3 +929,37 @@ class TestInstalarAtualizacao(unittest.TestCase):
         self.assertIn("conversa terminar", d)
         for proibido in ("diga", "responda", "fale", "canal"):
             self.assertNotIn(proibido, d.lower())
+
+class TestAlarmesTocando(unittest.TestCase):
+    """Spec 2026-11-24 goal 6: a palavra durante o alarme leva a lista dos timers que tocam; ela fica sabendo quais."""
+    def test_timers_tocando_parses_the_connection_extras(self):
+        corpo = {"timers_tocando": [{"id": "t111111", "nome": "arroz"}, {"id": "t222222", "nome": None}]}
+        self.assertEqual(sm.timers_tocando(corpo), [{"id": "t111111", "nome": "arroz"}, {"id": "t222222", "nome": None}])
+
+    def test_timers_tocando_ignores_garbage(self):
+        for ruim in (None, {}, {"timers_tocando": "x"}, {"timers_tocando": [{"id": "../x"}]}, {"timers_tocando": ["t1"]}):
+            self.assertEqual(sm.timers_tocando(ruim), [], ruim)
+        self.assertEqual(sm.timers_tocando({"timers_tocando": [{"id": "t111111", "nome": 5}]}),
+                         [{"id": "t111111", "nome": None}])  # nome inválido vira "sem nome", o timer continua na lista
+
+    def test_fato_alarmes_states_facts_and_that_nothing_was_stopped(self):
+        t = sm.fato_alarmes([{"id": "t111111", "nome": "arroz"}, {"id": "t222222", "nome": None}],
+                            [{"nome": "pizza", "comodo": "Escritório"}])
+        for trecho in ("«arroz»", "sem nome", "«pizza»", "Escritório", "em pausa", "Nada foi parado ainda"):
+            self.assertIn(trecho, t)
+        self.assertNotIn("deve", t.lower())  # fato, não ordem
+
+    def test_fato_alarmes_empty_is_empty(self):
+        self.assertEqual(sm.fato_alarmes([], []), "")
+
+    def test_the_context_carries_the_fact(self):
+        self.assertIn("«arroz»", sm.contexto_satelite("sat-1", "Sala", False, "", sm.fato_alarmes([{"id": "t111111", "nome": "arroz"}], [])))
+
+    def test_stop_tool_description_is_about_ringing_timers_and_cancel_points_to_it(self):
+        self.assertIn("todos os satélites", sm.DESCRICAO_PARAR_TIMERS)
+        self.assertIn("tocando", sm.DESCRICAO_PARAR_TIMERS)
+        self.assertIn("parar_timers", sm.DESCRICAO_CANCELAR_TIMER)
+
+
+if __name__ == "__main__":
+    unittest.main()

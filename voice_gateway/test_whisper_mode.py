@@ -317,5 +317,75 @@ class TestJanelaComAudio(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([type(f) for f in saida], [UserStartedSpeakingFrame, UserStoppedSpeakingFrame])
 
 
+    async def test_window_without_audio_warning_prefix_by_mode(self):
+        for preroll, esperado in (((_FakeLlm(), 1.5, 0.5), "two-beam: window without audio"),
+                                  (None, "whisper: fim da fala sem")):
+            p = wm.PiSpeechTurns(stop_timeout_s=0.1, preroll=preroll)
+            await ligar(p)
+            with _CapturaLoguru() as cap:
+                await p.started(); await p.stopped()
+                await asyncio.sleep(0.3)
+            self.assertTrue(any(esperado in m for m in cap), (preroll, cap))
+
+
+class _FakeLlm:
+    _user_audio_preroll_secs = 1.5
+
+
+@unittest.skipUnless(IN_CONTAINER, "needs pipecat: runs in the friday image (scripts/test-all.sh)")
+class TestPreroll(unittest.IsolatedAsyncioTestCase):
+    async def test_first_turn_preroll_then_short(self):
+        llm = _FakeLlm()
+        p = wm.PiSpeechTurns(min_audio_s=0, preroll=(llm, 1.5, 0.5))
+        await ligar(p)
+        await p.started()
+        self.assertEqual(llm._user_audio_preroll_secs, 1.5)
+        await p.stopped()
+        self.assertEqual(llm._user_audio_preroll_secs, 0.5)
+
+    async def test_whisper_keeps_long_preroll(self):
+        llm = _FakeLlm()
+        p = wm.PiSpeechTurns(min_audio_s=0)  # whispers pass no preroll
+        await ligar(p)
+        await p.started()
+        await p.stopped()
+        self.assertEqual(llm._user_audio_preroll_secs, 1.5)
+
+    def test_pipecat_preroll_attribute_exists(self):
+        import inspect
+        from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
+        self.assertIn("self._user_audio_preroll_secs", inspect.getsource(GeminiLiveLLMService.__init__))
+
+    def test_no_answer_logged_once_after_10s(self):
+        w = wm.SemResposta(10.0, "sat-1")
+        w.stopped(100.0)
+        with _CapturaLoguru() as cap:
+            self.assertFalse(w.verificar(105.0))
+            self.assertTrue(w.verificar(110.5))
+            self.assertFalse(w.verificar(120.0))
+        self.assertEqual(sum("two-beam: no answer" in m for m in cap), 1)
+
+    def test_no_answer_line_carries_the_turn_payload(self):
+        w = wm.SemResposta(10.0, "sat-1")
+        w.stopped(100.0, {"by": "pause", "tv_runs": 2})
+        with _CapturaLoguru() as cap:
+            w.verificar(111.0)
+        self.assertTrue(any("twoBeam={'by': 'pause', 'tv_runs': 2}" in m for m in cap), cap)
+        w.stopped(200.0); w.respondeu()
+        self.assertFalse(w.verificar(230.0))
+
+
+class _CapturaLoguru:
+    def __enter__(self):
+        from loguru import logger
+        self.msgs = []
+        self._id = logger.add(lambda m: self.msgs.append(str(m)), level="WARNING")
+        return self.msgs
+
+    def __exit__(self, *a):
+        from loguru import logger
+        logger.remove(self._id)
+
+
 if __name__ == "__main__":
     unittest.main()

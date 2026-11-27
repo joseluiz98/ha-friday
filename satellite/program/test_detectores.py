@@ -1,6 +1,6 @@
 """cd /homeassistant/tools/satelite/programa && python3 -m unittest test_detectores -v"""
 import unittest
-from detectores import (DetectorFala, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
+from detectores import (JanelaPi, OuvidoDoisFeixes, ResumoDoisFeixes, DetectorFala, DetectorQuemChamou, EnergiaFeixes, DetectorMudo, DetectorPalavra, EpisodioVerificador, RejeicaoEpisodio,
                         trecho_do_episodio)
 
 ZERO = bytes(2560)
@@ -453,3 +453,239 @@ class TestBotaoComBitDoMudo(unittest.TestCase):
         d2 = DetectorBotaoTelefone()
         d2.comandou(0x00 | 0x04, 0.0)
         self.assertEqual(d2.relatorio(0x05, 5.0), "verde")
+
+
+def _q(d, prob, eA, eT, t):
+    return d.alimentar(prob, (eA, eT, 0.0), t, t)
+
+
+class TestQuemChamou(unittest.TestCase):
+    def test_caller_frame_when_margin_met(self):
+        self.assertEqual(_q(DetectorQuemChamou(True), 0.9, 4, 1, 0.0), (1.0, "caller"))
+
+    def test_tv_frame_when_tv_dominates(self):
+        d = DetectorQuemChamou(True)
+        self.assertEqual(_q(d, 0.9, 1, 4.5, 0.0), (0.0, "tv"))
+        self.assertEqual(_q(d, 0.9, 0, 1, 0.1)[1], "tv")
+        self.assertEqual(_q(d, 0.9, 1, 3, 0.2)[1], "unclear")
+
+    def test_unclear_between_margins(self):
+        self.assertEqual(_q(DetectorQuemChamou(True), 0.8, 1.5, 1, 0.0), (0.8, "unclear"))
+
+    def test_tv_silent_means_caller(self):
+        self.assertEqual(_q(DetectorQuemChamou(True), 0.9, 0.5, 0, 0.0), (1.0, "caller"))
+
+    def test_below_limiar_is_silence(self):
+        self.assertEqual(_q(DetectorQuemChamou(True), 0.2, 4, 1, 0.0), (0.0, "silence"))
+
+    def test_passthrough_without_tv_direction(self):
+        d = DetectorQuemChamou(False)
+        self.assertEqual(d.alimentar(0.9, (4, 1, 0), 0.0, 0.0), (0.9, "unclear"))
+        self.assertEqual(d.motivo_passagem, "no_tv")
+        self.assertEqual(d.alimentar(0.2, None, None, 0.1), (0.0, "silence"))
+
+    def test_stale_energy_falls_back_to_passthrough(self):
+        d = DetectorQuemChamou(True)
+        self.assertEqual(d.alimentar(0.9, (1, 4.5, 0), 0.0, 1.2), (0.9, "unclear"))
+        self.assertEqual((d.em_passagem, d.motivo_passagem), (True, "stale"))
+        self.assertEqual(d.alimentar(0.9, None, None, 1.3), (0.9, "unclear"))
+        d.alimentar(0.9, (4, 1, 0), 1.3, 1.3)
+        self.assertEqual((d.em_passagem, d.motivo_passagem), (False, None))
+
+    def test_caller_silence_zeroes_unclear_tail(self):
+        d = DetectorQuemChamou(True)
+        t = 0.0
+        for _ in range(12):  # ~1 s de quem chamou
+            _q(d, 0.9, 4, 1, t)
+            t += 0.08
+        ultimo = t - 0.08
+        while t - ultimo < 1.5 - 1e-9:
+            self.assertEqual(_q(d, 0.9, 1.5, 1, t), (0.9, "unclear"))
+            self.assertFalse(d.cortou_por_voz)
+            t += 0.08
+        self.assertEqual(_q(d, 0.9, 1.5, 1, t), (0.0, "unclear"))
+        self.assertTrue(d.cortou_por_voz)
+        # pausa de >= 0.8 s zera o segmento
+        for _ in range(11):
+            t += 0.08
+            _q(d, 0.1, 1, 1, t)
+        t += 0.08
+        self.assertEqual(_q(d, 0.9, 1.5, 1, t), (0.9, "unclear"))
+        self.assertFalse(d.cortou_por_voz)
+
+    def test_stats_count_classes_and_median_ratio(self):
+        d = DetectorQuemChamou(True)
+        _q(d, 0.9, 4, 1, 0.0)      # 6.02 dB
+        _q(d, 0.9, 1.5, 1, 0.1)    # 1.76 dB
+        _q(d, 0.9, 1, 4.5, 0.2)    # -6.53 dB
+        e = d.estatisticas()
+        self.assertEqual(e["frames"], {"caller": 1, "tv": 1, "unclear": 1})
+        self.assertAlmostEqual(e["ratio_db_median"], 1.76, places=1)
+        d.zerar_estatisticas()
+        self.assertEqual(d.estatisticas()["ratio_db_median"], None)
+
+    def test_tv_run_reported_once_after_half_second(self):
+        d = DetectorQuemChamou(True)
+        t = 0.0
+        for _ in range(7):
+            _q(d, 0.9, 1, 4.5, t)
+            t += 0.08
+        self.assertIsNone(d.trecho_tv())
+        _q(d, 0.9, 4, 1, t)
+        r = d.trecho_tv()
+        self.assertAlmostEqual(r["s"], 0.56)
+        self.assertLess(r["ratio_db_median"], -6)
+        self.assertIsNone(d.trecho_tv())
+        self.assertEqual(d.estatisticas()["tv_runs"], 1)
+        for _ in range(3):  # corrida curta não conta
+            t += 0.08
+            _q(d, 0.9, 1, 4.5, t)
+        t += 0.08
+        _q(d, 0.9, 4, 1, t)
+        self.assertIsNone(d.trecho_tv())
+
+    def test_energia_feixes(self):
+        e = EnergiaFeixes()
+        self.assertEqual(e.ultimas(), (None, None))
+        e.atualizar(1.0, [1, 2, 3, 4])
+        self.assertEqual(e.ultimas(), ((1.0, 2.0, 3.0), 1.0))
+        e.atualizar(2.0, None)  # a failed read keeps the last good values and instant (I6)
+        self.assertEqual(e.ultimas(), ((1.0, 2.0, 3.0), 1.0))
+
+    def test_one_failed_read_is_not_stale_before_one_second(self):
+        o = OuvidoDoisFeixes(DetectorQuemChamou(True), EnergiaFeixes(), ResumoDoisFeixes())
+        o.energia.atualizar(10.0, [4.0, 1.0, 1.0, 1.0])
+        o.energia.atualizar(10.125, None)  # one transient failure
+        linhas = []
+        for i in range(8):  # 0.64 s later the energies are still valid: still `caller`, no pass-through, no line
+            eff, _, l = o.alimentar(0.9, 10.2 + i * 0.08, True, True, "ouvindo")
+            linhas += l
+            self.assertEqual(o.det.motivo_passagem, None)
+            self.assertEqual(eff, 1.0)
+        self.assertEqual(linhas, [])
+        eff, _, l = o.alimentar(0.9, 11.2, True, True, "ouvindo")  # failing for over 1 s: stale
+        self.assertEqual(o.det.motivo_passagem, "stale")
+
+    def test_both_zero_is_unclear(self):
+        d = DetectorQuemChamou(True)
+        self.assertEqual(_q(d, 0.9, 0, 0, 0.0), (0.9, "unclear"))
+        self.assertEqual(_q(d, 0.9, 0.5, 0, 0.1), (1.0, "caller"))  # a silent TV beam with a live caller beam is still the caller
+        self.assertEqual(_q(d, 0.9, 0, 1, 0.2), (0.0, "tv"))
+
+
+class TestTeto(unittest.TestCase):
+    def test_turn_ceiling_splits_turn(self):
+        d = DetectorFala(max_quadros=750)
+        ev = [d.alimentar(1.0) for _ in range(760)]
+        nomes = [(i, x) for i, x in enumerate(ev) if x]
+        self.assertEqual([x for _, x in nomes], ["fala_comecou", "fala_parou", "fala_comecou"])
+        self.assertTrue(d.falando or d.parou_por_teto is False)
+        self.assertLessEqual(nomes[2][0] - nomes[1][0], 2)
+
+    def test_parou_por_teto_flag(self):
+        d = DetectorFala(max_quadros=5)
+        for _ in range(8):
+            if d.alimentar(1.0) == "fala_parou":
+                self.assertTrue(d.parou_por_teto)
+                return
+        self.fail("sem fala_parou")
+
+
+TRECHO = {"s": 0.6, "ratio_db_median": -8.04}
+
+
+class TestResumoDoisFeixes(unittest.TestCase):
+    STATS = {"frames": {"caller": 5, "tv": 2, "unclear": 1}, "ratio_db_median": 1.0, "tv_runs": 1}
+
+    def test_summary_counts_turns_by_reason(self):
+        r = ResumoDoisFeixes(falhas_ini=2)
+        for por in ("pause", "pause", "ceiling", "caller_voice"):
+            r.turno(por)
+            r.somar(self.STATS)
+        r.reapontou()
+        r.energia_ruim(2.04)
+        f = r.fechar(falhas=5, lock_s=12.34, release="closed")
+        self.assertEqual(f["turns"], 4)
+        self.assertEqual(f["by"], {"pause": 2, "caller_voice": 1, "ceiling": 1})
+        self.assertEqual(f["frames"], {"caller": 20, "tv": 8, "unclear": 4})
+        self.assertEqual((f["tv_runs"], f["reaims"], f["failed_reads"]), (4, 1, 3))
+        self.assertEqual((f["energy_stale_s"], f["lock_s"], f["release"]), (2.0, 12.3, "closed"))
+
+    def test_dropped_candidate_rule(self):
+        r = ResumoDoisFeixes()
+        # a caller frame inside the next second saves the run
+        r.trecho_tv(TRECHO, 10.0, mic_aberto=True, em_turno=False, estado="ouvindo")
+        self.assertIsNone(r.candidato(10.5))
+        r.quadro_quem_chamou()
+        self.assertIsNone(r.candidato(11.5))
+        # mic closed, or a turn in progress: never a candidate
+        r.trecho_tv(TRECHO, 20.0, mic_aberto=False, em_turno=False, estado="ouvindo")
+        r.trecho_tv(TRECHO, 21.0, mic_aberto=True, em_turno=True, estado="ouvindo")
+        self.assertIsNone(r.candidato(23.0))
+        # the rule: mic open, no turn, a whole second without a caller frame; reported once
+        r.trecho_tv(TRECHO, 30.0, mic_aberto=True, em_turno=False, estado="ouvindo")
+        self.assertEqual(r.candidato(31.0), {"s": 0.6, "ratio_db_median": -8.0, "state": "ouvindo"})
+        self.assertIsNone(r.candidato(32.0))
+        self.assertEqual(r.fechar(0, 0, "closed")["dropped_candidates"], 1)
+
+
+class TestJanelaPi(unittest.TestCase):
+    def test_window_tracks_started_and_stopped(self):
+        j = JanelaPi()
+        self.assertFalse(j.aberta)
+        j.enviou("speech_started")
+        self.assertTrue(j.aberta)
+        j.enviou("speech_stopped")
+        self.assertFalse(j.aberta)
+
+
+class _Energia:
+    def __init__(self): self.v = ((4.0, 1.0, 1.0), 0.0)
+    def ultimas(self): return self.v
+
+
+class TestOuvidoDoisFeixes(unittest.TestCase):
+    def _ouvido(self, tv=True):
+        e = _Energia()
+        return OuvidoDoisFeixes(DetectorQuemChamou(tv_configurada=tv), e, ResumoDoisFeixes()), e
+
+    def test_caller_event_at_most_once_per_second(self):
+        o, e = self._ouvido()
+        postados = 0
+        for i in range(25):  # 2 s of caller frames
+            t = i * 0.08
+            e.v = ((4.0, 1.0, 1.0), t)
+            _, postar, _ = o.alimentar(0.9, t, True, True, "ouvindo")
+            postados += postar
+        self.assertEqual(postados, 2)
+
+    def test_turn_payload_has_stats_reason_and_beams_then_resets(self):
+        o, e = self._ouvido()
+        for i in range(5):
+            e.v = ((4.0, 1.0, 1.0), i * 0.08)
+            o.alimentar(0.9, i * 0.08, True, True, "ouvindo")
+        payload, linhas = o.fala("fala_parou", 1.0, False, 40.04, None)
+        self.assertEqual(payload["frames"]["caller"], 5)
+        self.assertEqual((payload["by"], payload["beam_a_deg"], payload["beam_t_deg"]), ("pause", 40.0, None))
+        self.assertEqual(linhas, [])
+        payload, _ = o.fala("fala_parou", 2.0, False, 40.0, None)
+        self.assertEqual(payload["frames"]["caller"], 0)
+
+    def test_ceiling_turn_prints_one_line(self):
+        o, _ = self._ouvido()
+        o.fala("fala_comecou", 0.0, False, 0, 0)
+        payload, linhas = o.fala("fala_parou", 60.04, True, 0, 0)
+        self.assertEqual(payload["by"], "ceiling")
+        self.assertEqual(linhas[0]["two_beam_turn_ceiling"]["turn_s"], 60.0)
+
+    def test_stale_energy_prints_once_per_episode(self):
+        o, e = self._ouvido()
+        e.v = ((4.0, 1.0, 1.0), 0.0)
+        todas = []
+        for i in range(60):  # energy stops at t=0: stale after 1 s; then it comes back
+            t = i * 0.08
+            if i == 50:
+                e.v = ((4.0, 1.0, 1.0), t)
+            todas += o.alimentar(0.9, t, True, True, "ouvindo")[2]
+        estados = [l["two_beam_energy"]["state"] for l in todas]
+        self.assertEqual(estados, ["stale", "ok"])

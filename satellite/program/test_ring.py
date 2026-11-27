@@ -82,8 +82,8 @@ class TestXvf(unittest.TestCase):
         self.assertEqual(self.t.chamadas, [])
 
     def test_respirando(self):
-        casos = {"alarm": (0xFF8000, ring.SPEED_FAST),
-                 "setup": (0xFF8000, ring.SPEED_SLOW), "updating": (0xFFFFFF, ring.SPEED_SLOW),
+        casos = {"alarm": (ring.COR_ALARME, ring.SPEED_FAST),
+                 "setup": (ring.COR_SISTEMA, ring.SPEED_SLOW), "updating": (ring.COR_SISTEMA, ring.SPEED_UPDATING),
                  "error": (0xFF0000, ring.SPEED_SLOW)}
         for estado, (cor, vel) in casos.items():
             with self.subTest(estado):
@@ -172,9 +172,15 @@ class TestXvf(unittest.TestCase):
         r2.show("error")
         self.assertEqual(r2._t.chamadas, persistent)
 
+    def test_system_orange_is_dimmed_and_distinct_from_alarm(self):
+        # 23/11 (dono): update e setup em laranja fraco; instalando pulsa mais rápido, mas não como o alarme
+        self.assertEqual(ring.COR_SISTEMA, ring.escalar(0xFF8000, ring.COR_SISTEMA_FATOR))
+        self.assertLess(ring.COR_SISTEMA_FATOR, 1)
+        self.assertTrue(ring.SPEED_SLOW < ring.SPEED_UPDATING < ring.SPEED_FAST)
+
     def test_xvf_pending_color(self):
         self.assertEqual(self.mostrar("update_pending"),
-                         [W("LED_COLOR", 0xFFC800), W("LED_SPEED", ring.SPEED_SLOW),
+                         [W("LED_COLOR", ring.COR_SISTEMA), W("LED_SPEED", ring.SPEED_SLOW),
                           W("LED_BRIGHTNESS", ring.BRIGHTNESS), W("LED_EFFECT", 1)])
 
     def test_pending_replaces_off_only(self):
@@ -195,7 +201,7 @@ class TestXvf(unittest.TestCase):
         self.t.chamadas.clear()
         self.r.set_pending(True)
         self.assertEqual(self.t.chamadas[-1], W("LED_EFFECT", 1))
-        self.assertEqual(self.t.chamadas[0], W("LED_COLOR", 0xFFC800))
+        self.assertEqual(self.t.chamadas[0], W("LED_COLOR", ring.COR_SISTEMA))
         self.t.chamadas.clear()
         self.r.set_pending(False)
         self.assertEqual(self.t.chamadas, [W("LED_EFFECT", 0)])
@@ -205,7 +211,7 @@ class TestXvf(unittest.TestCase):
         self.t.chamadas.clear()
         self.r.set_pending(True)
         self.assertEqual(self.t.chamadas, [])
-        self.assertEqual(self.mostrar("off")[0], W("LED_COLOR", 0xFFC800))
+        self.assertEqual(self.mostrar("off")[0], W("LED_COLOR", ring.COR_SISTEMA))
 
     def test_set_pending_before_any_show_draws_nothing(self):
         self.r.set_pending(True)
@@ -217,7 +223,7 @@ class TestXvf(unittest.TestCase):
         self.r.show("error")
         self.t.chamadas.clear()
         self.timers[-1].fn()
-        self.assertEqual(self.t.chamadas[0], W("LED_COLOR", 0xFFC800))
+        self.assertEqual(self.t.chamadas[0], W("LED_COLOR", ring.COR_SISTEMA))
 
     def test_muted_fica_ate_mudar(self):
         self.r.show("muted")
@@ -542,7 +548,7 @@ class TestComposicaoXvf(unittest.TestCase):
         erro = [x for x in self.timers if x.atraso == ring.ERROR_HOLD_S][-1]
         self.t.chamadas.clear()
         erro.fn()
-        self.assertEqual(self.t.chamadas[0], W("LED_COLOR", 0xFFFFFF))  # updating
+        self.assertEqual(self.t.chamadas[0], W("LED_COLOR", ring.COR_SISTEMA))  # updating
 
     def test_xvf_mute_frame(self):
         self.r.show_maestro("think")
@@ -585,6 +591,13 @@ class TestComposicaoXvf(unittest.TestCase):
         proximo = self.timers[-1]
         self.r.show_maestro("listen")
         self.assertTrue(proximo.cancelado)
+
+    def test_alarm_is_purple_at_40_percent_and_pulses_faster_than_dnd(self):  # 24/11 (dono): laranja é só do sistema
+        self.assertEqual(ring.COR_ALARME, ring.escalar(0x8000FF, 0.4))
+        self.assertEqual(ring._XVF["alarm"][1], ring.COR_ALARME)
+        self.assertGreater(ring._XVF["alarm"][2], ring._XVF["dnd"][2])
+        self.assertNotEqual(ring._XVF["alarm"][1], ring.COR_SISTEMA)
+        self.assertEqual(ring._XVF["dnd"][1], 0x8000FF)  # o não perturbe segue como estava (25% fixo + respiro)
 
     def test_dnd_values(self):
         self.assertEqual((ring.DND_LOW, ring.DND_PULSE_EVERY_S, ring.DND_PULSE_S), (0.25, 30.0, 2.0))

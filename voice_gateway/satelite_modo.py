@@ -12,8 +12,8 @@ MSG_ENTREGANDO = {"evento": "cerebro_entregando"}
 MSG_ENCERRAR = {"evento": "encerrar"}
 # 07/10: informação, não ordem nem frase pronta (regra de autonomia da Friday).
 DESCRICAO_ENCERRAR = (
-    "Encerra a conversa no satélite na hora: a sua fala é cortada, o microfone fecha e a conexão termina, "
-    "sem esperar a continuação. Com um pedido ao cérebro em andamento a conversa não fecha: o satélite espera "
+    "Encerra a conversa na hora: a sua fala é cortada, o microfone fecha e a conexão termina, "
+    "sem esperar a continuação. Com um pedido ao cérebro em andamento a conversa não fecha: fica aberta "
     "em silêncio, com luz e som, e a resposta é falada quando chegar; um pedido cuja resposta vai pelo Telegram "
     "(mandar_resposta_pelo_telegram) não segura a conversa. Serve para quando "
     "quem fala pede para parar ou encerrar, e para quando você percebe que o que o microfone capta não é "
@@ -23,14 +23,14 @@ DESCRICAO_ENCERRAR = (
 # sem ter como mandar e fechou a conversa, e a resposta ficou só no registro.
 DESCRICAO_RESPOSTA_PELO_TELEGRAM = (
     "Faz a resposta dos pedidos ao cérebro ainda em andamento nesta conversa ir só pelo Telegram do " + DONO + ", "
-    "inteira, quando chegar, em vez de ser falada aqui; esses pedidos deixam de segurar a conversa no satélite. "
+    "inteira, quando chegar, em vez de ser falada aqui; esses pedidos deixam de segurar a conversa. "
     "Serve para quando o pedido de receber pelo Telegram vem depois do pedido ao cérebro. Sem pedido em andamento, "
     "nada muda. Fora desta ferramenta a voz não manda mensagens pelo Telegram.")
 
 
 def resultado_encerrar_com_pendente(n: int) -> dict:
     return {"fechada": False, "pedidos_em_andamento": int(n),
-            "situacao": ("A conversa continua aberta porque há pedido ao cérebro em andamento: o satélite espera em "
+            "situacao": ("A conversa continua aberta porque há pedido ao cérebro em andamento: ela espera em "
                          "silêncio, com luz e som, e a resposta será falada quando chegar.")}
 
 
@@ -95,8 +95,8 @@ MOTIVO_NAO_PERTURBE = "calada pelo não perturbe"
 
 
 # D27: "aprende a minha voz" compete com "lembrar de algo → cérebro" na instrução de sistema; o fato diz onde mora.
-FATO_APRENDIZAGEM = ("Este satélite tem um programa de aprendizagem de voz, local, que ensina o satélite a reconhecer o "
-                     "\"Friday\" de cada pessoa da casa (ferramentas aprendizagem_de_voz e comecar_aprendizagem_de_voz).")
+FATO_APRENDIZAGEM = ("Existe um programa de aprendizagem de voz, local, que ensina a casa a reconhecer as palavras de "
+                     "ativação de cada pessoa da casa (ferramentas aprendizagem_de_voz e comecar_aprendizagem_de_voz).")
 
 
 def music_fact(player, estado) -> str:
@@ -117,7 +117,8 @@ def music_fact(player, estado) -> str:
     return t
 
 
-def contexto_satelite(sid: str, comodo_: str = None, nao_perturbe_: bool = False, music_fact: str = "") -> str:
+def contexto_satelite(sid: str, comodo_: str = None, nao_perturbe_: bool = False, music_fact: str = "",
+                      alarmes_fact: str = "") -> str:
     # Informação, não ordem (regra de autonomia da Friday): ela decide como lidar.
     onde = f"Este satélite fica no cômodo {comodo_} da casa. " if comodo_ else ""
     return (f"Esta conversa vem do satélite de voz {sid}, um alto-falante com microfone num cômodo da casa. "
@@ -131,7 +132,8 @@ def contexto_satelite(sid: str, comodo_: str = None, nao_perturbe_: bool = False
             "desnecessária. "
             + f"O não perturbe deste satélite está {'ligado' if nao_perturbe_ else 'desligado'}. "
             + FATO_APRENDIZAGEM
-            + (" " + music_fact if music_fact else ""))
+            + (" " + music_fact if music_fact else "")
+            + (" " + alarmes_fact if alarmes_fact else ""))
 
 
 def pedido_com_origem(pedido: str, sid: str) -> str:
@@ -311,7 +313,13 @@ DESCRICAO_CONSULTAR_TIMERS = (
 DESCRICAO_CANCELAR_TIMER = (
     _TIMERS_BASE + "Cancela timers: pelo id (um timer só), pelo nome, ou todos=true (todos os timers); sem nenhum dos "
     "três, cancela o único ativo. Se houver mais de um timer ativo (ou mais de um com o mesmo nome) e o pedido não disser "
-    "qual, nada é cancelado e a resposta traz a lista dos candidatos, cada um com id, nome, duração e quanto falta.")
+    "qual, nada é cancelado e a resposta traz a lista dos candidatos, cada um com id, nome, duração e quanto falta. "
+    "Um timer que já venceu e está tocando não é cancelado por aqui: para esse existe parar_timers.")
+DESCRICAO_PARAR_TIMERS = (
+    "Para os timers que estão tocando agora (o alarme de um timer vencido), em todos os satélites da casa. Sem nome nem "
+    "cômodo, para todos os que tocam; com nome, só o timer com esse nome; com cômodo, só os daquele cômodo. Devolve cada "
+    "timer parado e o cômodo dele, e os cômodos que não responderam. Um timer que ainda está contando não é afetado "
+    "por esta ferramenta: esse é o cancelar_timer.")
 ACAO_DA_FERRAMENTA = {"criar_timer": "criar", "consultar_timers": "consultar", "cancelar_timer": "cancelar"}
 _ID_ENTREGA = re.compile(r"^[a-z0-9]{8,32}$")
 _ID_TIMER = re.compile(r"^t[0-9a-f]{6}$")
@@ -480,6 +488,42 @@ def entrega(body):
     return eid if isinstance(eid, str) and _ID_ENTREGA.match(eid) else None
 
 
+def timers_tocando(body) -> list:
+    """Spec 2026-11-24: a palavra dita com timers tocando leva a lista deles ({"id", "nome"}); lixo vira lista vazia."""
+    lista = body.get("timers_tocando") if isinstance(body, dict) else None
+    r = []
+    for t in (lista[:10] if isinstance(lista, list) else []):
+        if not isinstance(t, dict) or not isinstance(t.get("id"), str) or not _ID_TIMER.match(t["id"]):
+            continue
+        nome = t.get("nome")
+        nome = nome.strip() if isinstance(nome, str) and _NOME_TIMER.match(nome.strip()) else None
+        r.append({"id": t["id"], "nome": nome})
+    return r
+
+
+def fato_alarmes(locais: list, outros: list) -> str:
+    """O fato (sem ordem) de que há timers tocando quando a pessoa disse a palavra. `locais`: os deste satélite
+    ({"id","nome"}); `outros`: os de outros cômodos ({"nome","comodo"})."""
+    if not locais and not outros:
+        return ""
+
+    def rotulo(nome):
+        return f"«{nome}»" if nome else "um timer sem nome"
+
+    partes = []
+    if locais:
+        partes.append("neste satélite, " + ", ".join(rotulo(t.get("nome")) for t in locais))
+    por_comodo = {}
+    for t in outros:
+        por_comodo.setdefault(t.get("comodo") or "outro cômodo", []).append(rotulo(t.get("nome")))
+    for comodo_, nomes in por_comodo.items():
+        partes.append(f"no cômodo {comodo_}, " + ", ".join(nomes))
+    t = "Timers vencidos tocando agora: " + "; ".join(partes) + "."
+    if locais:
+        t += " O alarme deste satélite está em pausa enquanto a conversa dura e volta a tocar se nada for parado."
+    return t + " Nada foi parado ainda (a ferramenta parar_timers para os que tocam)."
+
+
 def timer_vencido(body):
     t = body.get("timer") if isinstance(body, dict) else None
     if not isinstance(t, dict):
@@ -550,19 +594,20 @@ def mensagem_de_abertura(texto_entrega, timer, tipo_entrega="lembrete"):
 
 # ---- spec 2026-10-15: programa de aprendizagem de voz (item 4). Textos: fatos, sem ordens (skill designing-for-friday).
 DESCRICAO_APRENDIZAGEM_DE_VOZ = (
-    "Programa de aprendizagem de voz deste satélite: ensina o satélite a reconhecer o \"Friday\" dito por uma pessoa da "
-    "casa, para a palavra acordar com quem mora aqui e não com outras vozes. Vale para qualquer jeito de pedir isso. "
-    "Devolve o roteiro da gravação e as pessoas já cadastradas. Esta chamada não grava nada.")
+    "Programa de aprendizagem de voz: ensina a casa a reconhecer as palavras de ativação ditas por uma pessoa que "
+    "mora aqui, para elas acordarem com ela e não com outras vozes. Vale para qualquer jeito de pedir isso. "
+    "Devolve o roteiro da gravação, as palavras que ela cobre e as pessoas já cadastradas. Esta chamada não grava nada.")
 DESCRICAO_COMECAR_APRENDIZAGEM = (
-    "Começa a gravação do programa de aprendizagem de voz para a pessoa com este nome. A conversa fecha quando a sua "
-    "fala termina, e o satélite conduz a gravação sozinho, com falas gravadas e bipes; a pessoa precisa estar perto "
-    "do satélite. Só funciona depois de aprendizagem_de_voz nesta conversa.")
+    "Começa a gravação do programa de aprendizagem de voz para a pessoa com este nome. A gravação começa quando a sua "
+    "fala termina e segue sozinha, com falas gravadas e bipes, e a conversa fecha nesse momento; a pessoa precisa "
+    "estar perto do aparelho. Quem já está cadastrado em algumas palavras grava só as que faltam. Só funciona depois "
+    "de aprendizagem_de_voz nesta conversa.")
 ROTEIRO_APRENDIZAGEM = [
-    "o satélite toca uma fala gravada explicando o que fazer",
+    "uma fala gravada explica o que fazer",
     "dez bipes, um a cada 6 segundos; a cada bipe a pessoa diz Friday uma vez",
     "na metade, uma fala gravada pede para mudar de lugar, uns 3 metros",
     "depois, 30 segundos de fala livre, sem dizer a palavra",
-    "no fim, uma fala gravada avisa que o treino começou; o resultado vem falado neste satélite e por Telegram ao " + DONO,
+    "no fim, uma fala gravada avisa que o treino começou; o resultado vem falado aqui e por Telegram ao " + DONO,
 ]
 ERRO_SEM_ROTEIRO = {"ok": False, "erro": "o roteiro ainda não foi passado nesta conversa"}
 
@@ -570,20 +615,38 @@ ERRO_SEM_ROTEIRO = {"ok": False, "erro": "o roteiro ainda não foi passado nesta
 def resultado_comando(resposta) -> dict:
     """Resposta da Pi sem o id do comando (o envelope é do canal, não da voz)."""
     if not isinstance(resposta, dict):
-        return {"ok": False, "erro": "o satélite não confirmou"}
+        return {"ok": False, "erro": "a gravação não foi confirmada"}
     return {k: v for k, v in resposta.items() if k != "id"}
 
 
+def roteiro_para(palavras) -> list:
+    """O roteiro em fatos: o que a pessoa vive, palavra por palavra. Uma palavra só é o roteiro de sempre."""
+    if len(palavras) <= 1:
+        return ROTEIRO_APRENDIZAGEM
+    return [
+        "uma fala gravada explica o que fazer",
+        "para cada palavra (" + ", ".join(palavras) + "), dez bipes, um a cada 6 segundos; a cada bipe a pessoa diz a "
+        "palavra uma vez",
+        "na metade de cada palavra, uma fala gravada pede para mudar de lugar, uns 3 metros",
+        "depois, 30 segundos de fala livre, sem repetir as palavras",
+        "no fim, uma fala gravada avisa que o treino começou; o resultado vem falado aqui e por Telegram ao " + DONO,
+    ]
+
+
 def roteiro_aprendizagem(resposta) -> dict:
-    vozes = resposta.get("vozes") if isinstance(resposta, dict) and resposta.get("ok") else None
+    ok = isinstance(resposta, dict) and resposta.get("ok")
+    vozes = resposta.get("vozes") if ok else None
+    palavras = [p for p in (resposta.get("palavras") if ok else None) or [] if isinstance(p, str)] or ["Friday"]
     return {
-        "roteiro": ROTEIRO_APRENDIZAGEM,
-        "gravacao_minutos": 2,
-        "treino_minutos": "de 5 a 20",
+        "roteiro": roteiro_para(palavras),
+        "palavras": palavras,
+        "gravacao_minutos": 2 + 2 * (len(palavras) - 1),
+        "treino_minutos": "de 5 a 20 por palavra",
         "antes_de_comecar": "falta o nome de quem vai gravar e a concordância dessa pessoa",
-        "gravar_de_novo_o_mesmo_nome": "substitui o cadastro anterior dessa pessoa, se o novo for aprovado",
-        "botao_do_satelite": "cancela a gravação",
-        "cadastrados": vozes if vozes is not None else "o satélite não respondeu",
+        "gravar_de_novo_o_mesmo_nome": "substitui o cadastro anterior dessa pessoa nas palavras regravadas, se o novo "
+                                       "for aprovado",
+        "botao_do_aparelho": "cancela a gravação",
+        "cadastrados": vozes if vozes is not None else "não foi possível consultar agora",
     }
 
 
@@ -595,6 +658,11 @@ class TravaAprendizagem:
 
     def passou(self):
         self.permite = True
+
+
+def pi_turns(body) -> bool:
+    """Two-beam listening (spec 2026-11-26 D1): the Pi drives the turns (`pi_turns: true`), satellite origin only."""
+    return isinstance(body, dict) and body.get("origem") == "satelite" and body.get("pi_turns") is True
 
 
 def whisper(body) -> bool:

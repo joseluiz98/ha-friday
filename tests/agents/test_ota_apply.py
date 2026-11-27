@@ -155,6 +155,22 @@ def test_stage_same_lock_hardlinks_the_running_venv(env):
     assert (rel / ".complete").exists() and current(env) == "releases/v0.1.0"
 
 
+def test_audio_board_file_installed_under_friday_audio(env):
+    installed_current(env)
+    staged(env, "v0.2.0", system={"friday-satelite.service": "x", "jabra.conf": "pcm.!default {}"})
+    r = helper(env, "activate", "v0.2.0")
+    assert r.returncode == 0
+    d = env["root"] / "etc/friday-audio"
+    for _ in range(100):
+        if (d / "jabra.conf").exists():
+            break
+        time.sleep(0.1)
+    assert (d / "jabra.conf").read_text() == "pcm.!default {}"
+    assert oct((d / "jabra.conf").stat().st_mode & 0o777) == "0o644"
+    assert oct(d.stat().st_mode & 0o777) == "0o755"
+    assert not (env["root"] / "etc/friday-satelite/asound/jabra.conf").exists()
+
+
 def test_activate_survives_caller_exit(env):
     installed_current(env)
     staged(env, "v0.2.0")
