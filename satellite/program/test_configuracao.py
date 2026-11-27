@@ -193,6 +193,46 @@ class TestTwoBeam(unittest.TestCase):
         self.assertFalse(c.dois_feixes_permitido({**cfg, "only_wake_word_interrupts": False}, "xvf3800"))
 
 
+class TestVolumeFino(unittest.TestCase):
+    def _carregar(self, **gravado):
+        import json, shutil, tempfile, os
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "config.json")
+        with open(p, "w") as f:
+            json.dump(dict(gravado, senha_porta_local="x" * 32), f)
+        cfg = c.carregar(p, os.path.join(d, "house.json"))
+        return cfg.get("volume_pct"), cfg.get("volume")
+
+    def test_new_satellite_has_no_volume(self):
+        self.assertEqual(self._carregar(), (None, None))
+
+    def test_old_config_keeps_the_loudness(self):
+        self.assertEqual(self._carregar(volume=9), (82, 9))
+
+    def test_consistent_pair_keeps_the_percent(self):
+        self.assertEqual(self._carregar(volume_pct=70, volume=8), (70, 8))
+
+    def test_rollback_change_wins(self):
+        self.assertEqual(self._carregar(volume_pct=70, volume=3), (27, 3))
+
+    def test_leftover_webhook_key_still_loads(self):
+        self.assertEqual(self._carregar(volume_webhook_url="http://x/api/webhook/y", volume=3), (27, 3))
+        self.assertNotIn("volume_webhook_url", c.PADROES)
+
+    def test_changes_keep_the_pair_consistent(self):
+        atual = dict(c.PADROES, senha_porta_local="x" * 32, volume=8, volume_pct=70)
+        n = c.validar_mudancas(atual, {"volume_pct": 75})
+        self.assertEqual((n["volume_pct"], n["volume"]), (75, 9))
+        n = c.validar_mudancas(atual, {"volume": 3})
+        self.assertEqual((n["volume_pct"], n["volume"]), (27, 3))
+        n = c.validar_mudancas(atual, {"nao_perturbe": True})
+        self.assertEqual((n["volume_pct"], n["volume"]), (70, 8))
+        for ruim in (101, -1, 5.5, True):
+            with self.assertRaises(ValueError):
+                c.validar_mudancas(atual, {"volume_pct": ruim})
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -1,6 +1,8 @@
 """Identificador e configuração do satélite (spec §2.1). Um arquivo só, nada fixo no código."""
 import datetime, json, os, secrets, tempfile
 
+import escala
+
 PADROES = {
     "espera_inicial_s": 4, "continuacao_s": 5, "cerebro_fim_s": 8, "espera_resposta_s": 8, "limiar_palavra": 0.5,
     "limiar_voz_palavra": 0.6,  # a palavra só vale com voz humana junto (VAD); 0 desliga
@@ -8,11 +10,11 @@ PADROES = {
     # do modelo sobe no fim da palavra, quando a voz já passou (ensaio vad_gate_trial.py: 10 = 0,8 s recupera "Friday"
     # com música)
     "janela_voz_palavra": 6,
-    # volume = posição do Jabra (0–11; None = usar o que o aparelho tem); volume_alertas = escala falada 1–10
-    # (spec 2026-10-12 §1 e §2)
+    # volume_pct = o volume (0–100; None = usar o que o aparelho tem); volume = a posição dele, 0–11 (guardada para o
+    # rollback). volume_alertas = escala falada 1–10 (spec 2026-10-12 §1 e §2)
     # volume_sons: previsto na spec de 05/10 (sons de turno −12 dB abaixo da voz), NUNCA aplicado: os sons tocam no
     # volume geral. Fora da página do HA desde 10/11; a chave segue aceita só para não quebrar config antiga.
-    "volume": None, "volume_alertas": 6, "volume_sons": -12, "nao_perturbe": False,
+    "volume": None, "volume_pct": None, "volume_alertas": 6, "volume_sons": -12, "nao_perturbe": False,
     # 17/11: tons de fábrica = conjunto ElevenLabs escolhido pelo dono em 20/10 (migração 0003 troca os antigos)
     "sons": {"inicio": "inicio_elevenlabs.wav", "fim": "fim_elevenlabs_20261020.wav", "erro": "erro_b.wav",
              "volume": "volume_a.wav", "alarme": "alarme_elevenlabs.wav", "lembrete": "lembrete_elevenlabs.wav", "anuncio": "anuncio_elevenlabs.wav",
@@ -31,9 +33,6 @@ PADROES = {
     # spec 2026-10-21 §6.2/§11: ducking da música (% do controle `Music` enquanto se fala; 0–25) e quanto
     # esperar depois do fim da conversa/alerta para a música voltar a 100%
     "music_duck_percent": 15, "music_restore_s": 1.0,
-    # spec 2026-10-21 §6.2: webhook do HA que recebe cada mudança do volume normal (espelho usado pelo Music
-    # Assistant); None = sem ponte. Fica fora das _REGRAS: a URL é segredo, não muda pela porta.
-    "volume_webhook_url": None,
     # spec 2026-10-29: agente local que recebe eventos (ativação, config, conversa); None desliga
     "agente_url": "http://127.0.0.1:8701",
     # spec 2026-10-29 (integração HA): mudo = corta a captura do Jabra por software (padrão: microfone aberto);
@@ -82,7 +81,7 @@ _REGRAS = {
     "cerebro_fim_s": ((int, float), 0, 60),
     "limiar_palavra": ((int, float), 0.05, 0.99), "limiar_voz_palavra": ((int, float), 0, 0.99),
     "janela_voz_palavra": ((int,), 1, 25),
-    "volume": ((int,), 0, 11), "volume_alertas": ((int,), 1, 10),
+    "volume": ((int,), 0, 11), "volume_pct": ((int,), 0, 100), "volume_alertas": ((int,), 1, 10),
     "volume_sons": ((int, float), -40, 0), "nao_perturbe": ((bool,), None, None),
     "pre_gravacao_s": ((int, float), 0, PRE_GRAVACAO_MAX_S), "gravar_ativacoes": ((bool,), None, None),
     "comodo": ((str,), 1, 40),  # texto: mínimo e máximo valem para o tamanho
@@ -159,6 +158,22 @@ def validar_palavras_extras(lista) -> list:
     return saida
 
 
+def pct_efetivo(cfg: dict):
+    """O volume em %. `volume_pct` vale enquanto combina com `volume`; se não combina, um programa antigo (rollback)
+    mudou `volume`, que é a mudança mais nova. None = nenhum dos dois."""
+    pct, pos = cfg.get("volume_pct"), cfg.get("volume")
+    if pct is None:
+        return None if pos is None else escala.grade(pos)
+    if pos is not None and escala.posicao_de_pct(pct) != pos:
+        return escala.grade(pos)
+    return pct
+
+
+def _par_volume(cfg: dict, pct) -> None:
+    if pct is not None:
+        cfg["volume_pct"], cfg["volume"] = pct, escala.posicao_de_pct(pct)
+
+
 def ler_ou_criar_id(caminho: str) -> str:
     if os.path.exists(caminho):
         with open(caminho) as f:
@@ -220,6 +235,7 @@ def carregar(caminho: str, casa: str = CASA) -> dict:
         cfg.update({k: v for k, v in gravado.items() if not (v is None and da_casa.get(k) is not None)})
         # sons: mescla, senão um config.json antigo (só inicio/fim/erro) apagaria os sons novos
         cfg["sons"] = dict(PADROES["sons"], **(gravado.get("sons") or {}))
+    _par_volume(cfg, pct_efetivo(cfg))
     if not cfg.get("senha_porta_local"):
         cfg["senha_porta_local"] = secrets.token_urlsafe(32)
         gravar(caminho, cfg)
@@ -314,4 +330,8 @@ def validar_mudancas(atual: dict, mudancas: dict) -> dict:
         if minimo is not None and not (minimo <= medida <= maximo):
             raise ValueError(f"{k}: fora de {minimo}..{maximo}")
         novo[k] = v
+    if mudancas.get("volume_pct") is not None:
+        _par_volume(novo, novo["volume_pct"])
+    elif mudancas.get("volume") is not None:
+        _par_volume(novo, escala.grade(novo["volume"]))
     return novo

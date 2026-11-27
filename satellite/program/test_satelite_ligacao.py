@@ -37,6 +37,12 @@ class MusicMixer:
     def prime(self): F.primed = True
 
 
+class FineMixer:
+    def __init__(self, card="USB", control="Fine"): self.card = card
+    def write(self, db): pass
+    def prime(self): pass
+
+
 class AltoFalante:
     ultimo_envio = None
     def tocar_wav(self, p): F.sons.append(os.path.basename(p))
@@ -73,6 +79,7 @@ class Conexao:
 
 hw = types.ModuleType("hardware")
 hw.AltoFalante, hw.Anel, hw.Mixer, hw.MusicMixer = AltoFalante, Anel, Mixer, MusicMixer
+hw.FineMixer = FineMixer
 hw.ControleMudo = ControleMudo
 hw.Botao = hw.Captura = hw.CapturaDupla = hw.TeclasVolume = object
 sys.modules["hardware"] = hw
@@ -116,6 +123,8 @@ class Base(unittest.IsolatedAsyncioTestCase):
                              ("lembrete_elevenlabs.wav", "lembrete_a.wav")):
             if not os.path.exists(os.path.join(self.d, novo)):
                 shutil.copy(os.path.join(self.d, gerado), os.path.join(self.d, novo))
+        self.p_atraso = mock.patch.object(fs.Satelite, "ATRASO_FINO_S", 0)
+        self.p_atraso.start()
         self.s = fs.Satelite(asyncio.get_running_loop())
         import cadastro
         self.s.vozes = cadastro.Vozes(os.path.join(self.d, "vozes"))  # never the Pi's /home/jose/vozes
@@ -123,6 +132,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.s._parar_alarme()
+        self.p_atraso.stop()
         self.p_placa.stop()
         self.p.stop()
 
@@ -241,7 +251,7 @@ class TestComandos(Base):
     async def test_mudanca_de_volume_pela_voz_emite_config_com_origem_voz(self):
         self.s.emissor = EmissorFalso()
         self.s._de_fora("comando", {"evento": "comando", "id": "c9", "acao": "volume", "numero": 7})
-        self.assertIn(("config", {"mudancas": {"volume": 7}, "origem": "voz"}), self.s.emissor.eventos)
+        self.assertIn(("config", {"mudancas": {"volume_pct": 64}, "origem": "voz"}), self.s.emissor.eventos)
 
     async def test_volume_pela_conversa_escreve_toca_bip_e_responde_com_o_id(self):
         self.s.maestro.evento("palavra", 0.0)
@@ -296,7 +306,7 @@ class TestTimers(Base):
         self.s.timers.criar(1, "ovo", time.time() - 5)
         self.s.tique()
         self.assertEqual(self.s.maestro.estado, "alarme")
-        self.assertEqual(self.s.volume.atual, 6)  # volume_alertas padrão
+        self.assertEqual(self.s.volume.posicao, 6)  # volume_alertas padrão
         await asyncio.sleep(0.05)
         self.assertIn("alarme_elevenlabs.wav", F.sons)
         self.s.evento("botao")
@@ -562,7 +572,7 @@ class TestVolumeFisico(Base):
             self.assertEqual(json.load(f)["volume"], 5)
 
     async def test_put_config_muda_volume_e_alertas(self):
-        novo = dict(self.s.cfg, volume=9, volume_alertas=8)
+        novo = dict(self.s.cfg, volume=9, volume_pct=82, volume_alertas=8)
         self.s.ao_mudar_config(novo)
         self.assertEqual((F.escritas[-1], self.s.volume.alertas_numero), (9, 8))
 
