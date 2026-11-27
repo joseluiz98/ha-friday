@@ -63,7 +63,8 @@ class TestXvfLink(unittest.TestCase):
 
     def test_startup_order_and_values(self):
         xvf_link.apply_startup(self.link, {"xvf_sys_delay": 3}, mudo=True)
-        self.assertEqual(self.dev.calls, [("AEC_FIXEDBEAMSONOFF", [0]), ("AUDIO_MGR_OP_L", [8, 0]),
+        self.assertEqual(self.dev.calls, [("AEC_FIXEDBEAMSONOFF", [0]), ("AEC_FIXEDBEAMSELEVATION_VALUES", [0.0, 0.0]),
+                                          ("AUDIO_MGR_OP_L", [8, 0]),
                                           ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_SYS_DELAY", [3]),
                                           ("GPO_WRITE_VALUE", [30, 1])])
 
@@ -72,10 +73,97 @@ class TestXvfLink(unittest.TestCase):
         self.assertIn(("AUDIO_MGR_SYS_DELAY", [12]), self.dev.calls)
         self.assertEqual(self.dev.calls[-1], ("GPO_WRITE_VALUE", [30, 0]))
 
+    def test_startup_resets_elevation(self):
+        xvf_link.apply_startup(self.link, {}, mudo=False)
+        self.assertEqual(self.dev.calls[1], ("AEC_FIXEDBEAMSELEVATION_VALUES", [0.0, 0.0]))
+
     def test_never_saves_or_reboots_the_board(self):
         src = open(xvf_link.__file__).read()
         self.assertNotIn("SAVE_CONFIGURATION", src.replace("# nunca SAVE_CONFIGURATION", ""))
         self.assertNotIn('"REBOOT"', src)
+
+
+class FakeUsb:
+    def __init__(self, respostas):
+        self.respostas, self.chamadas = list(respostas), []
+
+    def ctrl_transfer(self, req, request, wvalue, windex, length, timeout):
+        self.chamadas.append((req, request, wvalue, windex, length, timeout))
+        r = self.respostas.pop(0) if len(self.respostas) > 1 else self.respostas[0]
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+
+class VendorDev(Dev):
+    """Falso do vendor com `.dev` (pyusb) e a tabela PARAMETERS: nome -> (resid, cmdid, n, rw, tipo, descricao)."""
+    def __init__(self, respostas):
+        super().__init__()
+        self.dev = FakeUsb(respostas)
+        self.PARAMETERS = {"AEC_SPENERGY_VALUES": (33, 80, 4, "ro", "float", ""),
+                           "DOA_VALUE": (20, 18, 2, "ro", "uint16", ""),
+                           "AEC_FIXEDBEAMSONOFF": (33, 37, 1, "rw", "int32", ""),
+                           "AUDIO_MGR_OP_L": (35, 15, 2, "rw", "uint8", "")}
+
+
+class TestReadBounded(unittest.TestCase):
+    def setUp(self):
+        self.log = []
+
+    def link(self, dev):
+        return xvf_link.XvfLink(lambda: dev, log=self.log.append)
+
+    def test_read_bounded_decodes_floats(self):
+        import struct
+        dev = VendorDev([bytes([0]) + struct.pack("<4f", 0.5, 1.5, -2.0, 0.25)])
+        self.assertEqual(self.link(dev).read_bounded("AEC_SPENERGY_VALUES"), [0.5, 1.5, -2.0, 0.25])
+        req, request, wvalue, windex, length, timeout = dev.dev.chamadas[0]
+        self.assertEqual((req, request, wvalue, windex, length, timeout), (0xC0, 0, 0x80 | 80, 33, 17, 300))
+
+    def test_read_bounded_decodes_other_types(self):
+        import struct
+        dev = VendorDev([bytes([0]) + struct.pack("<2H", 90, 1)])
+        self.assertEqual(self.link(dev).read_bounded("DOA_VALUE"), [90, 1])
+        dev = VendorDev([bytes([0]) + struct.pack("<i", -3)])
+        self.assertEqual(self.link(dev).read_bounded("AEC_FIXEDBEAMSONOFF"), [-3])
+        dev = VendorDev([bytes([0, 8, 0])])
+        self.assertEqual(self.link(dev).read_bounded("AUDIO_MGR_OP_L"), [8, 0])
+
+    def test_read_bounded_gives_up_after_max_retries(self):
+        dev = VendorDev([bytes([64])])
+        link = self.link(dev)
+        self.assertIsNone(link.read_bounded("AEC_SPENERGY_VALUES", max_retries=3))
+        self.assertEqual(len(dev.dev.chamadas), 4)
+        self.assertEqual(link.falhas_leitura, 1)
+
+    def test_read_bounded_other_status_is_none(self):
+        dev = VendorDev([bytes([1])])
+        self.assertIsNone(self.link(dev).read_bounded("AEC_SPENERGY_VALUES"))
+        self.assertEqual(len(dev.dev.chamadas), 1)
+
+    def test_read_bounded_unknown_name_none(self):
+        dev = VendorDev([bytes([0])])
+        link = self.link(dev)
+        self.assertIsNone(link.read_bounded("NAO_EXISTE"))
+        self.assertEqual(dev.dev.chamadas, [])
+        self.assertEqual(link.falhas_leitura, 1)
+
+    def test_read_bounded_usb_error_reopens(self):
+        import struct
+        ruim = VendorDev([OSError("usb")])
+        bom = VendorDev([bytes([0]) + struct.pack("<4f", 1, 2, 3, 4)])
+        devs = [ruim, bom]
+        link = xvf_link.XvfLink(lambda: devs.pop(0), log=self.log.append)
+        self.assertIsNone(link.read_bounded("AEC_SPENERGY_VALUES"))
+        self.assertEqual(link.read_bounded("AEC_SPENERGY_VALUES"), [1.0, 2.0, 3.0, 4.0])
+        self.assertEqual(devs, [])
+
+    def test_read_bounded_busy_lock_is_none(self):
+        dev = VendorDev([bytes([0])])
+        link = xvf_link.XvfLink(lambda: dev, log=self.log.append, lock_timeout_s=0.01)
+        with link._lock:
+            self.assertIsNone(link.read_bounded("AEC_SPENERGY_VALUES"))
+        self.assertEqual(dev.dev.chamadas, [])
 
 
 class TestRingCalibration(unittest.TestCase):

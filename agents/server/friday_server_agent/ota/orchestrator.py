@@ -28,6 +28,7 @@ from friday_agent_core.ota.constants import KEEP_RELEASES, SOAK_S
 from . import github as gh
 from . import notify as nt
 from . import packages as pk
+from . import server_install as si
 from . import wheels as wh
 
 LOG = logging.getLogger("friday_server_agent.ota")
@@ -46,6 +47,10 @@ REPORT_IDS_KEPT = 20  # per device: the newest report ids, to drop a resend
 BUILD_RETRY_S = 3600  # a release that failed to package is retried at most once an hour
 PROMOTE_RETRY_S = 3600  # a failed promotion on GitHub is retried at most once an hour
 WAITING_PUSH_AFTER_S = 3600  # a satellite waiting for the server: first push after an hour of waiting
+# offers with no package for a satellite that has a newer target: all are listed in `ota_waiting_server`
+REFUSED_WHY = {"server_older": "o agente do servidor é mais antigo que a release (server_older)",
+               "package_missing": "o pacote da release não pôde ser montado (package_missing)"}
+HELD_REASONS = ("waiting_server", *REFUSED_WHY)
 
 
 def parse_report(data: dict) -> dict:
@@ -92,7 +97,8 @@ class Orchestrator:
     def __init__(self, store, tokens, watcher, repo, vault, notifier, build: Callable = pk.build_release,
                  wheels: Callable = wh.build, root: str = OTA_ROOT, clock: Callable[[], float] = time.time,
                  prune: Callable = pk.prune_packages, installer=None, images=None, publisher=None,
-                 own_version: Callable[[], str] = version.installed_version):
+                 own_version: Callable[[], str] = version.installed_version,
+                 own_sha: Callable[[], str | None] = version.installed_sha):
         self.store, self.tokens, self.watcher, self.repo = store, tokens, watcher, repo
         self.vault, self.notifier, self._build, self._wheels = vault, notifier, build, wheels
         self.root, self._clock, self._prune = root, clock, prune
@@ -105,6 +111,8 @@ class Orchestrator:
         self.publisher = publisher  # None (no GitHub token file): no automatic promotion
         self._promote_tried: dict[str, float] = {}
         self._own_version = own_version
+        self._own_sha = own_sha
+        self._matched: set[tuple[str, str]] = set()  # (agent sha, release sha) proven to hold the same agent code
         self._older_refused: set[str] = set()  # tags whose stale package an older agent refused to serve
 
     # ---- reads under the state lock
@@ -206,10 +214,31 @@ class Orchestrator:
             pass
         return False
 
+    def _agent_matches(self, tag: str, sha: str) -> bool:
+        """True when the installer's own rule would keep this agent for the release at `sha`: its code is the
+        release's, even with an older version label. Anything not proven is False."""
+        own = self._own_sha()
+        if not own:
+            return False
+        if (own, sha) in self._matched:
+            return True
+        try:
+            man = self._manifest(sha)
+        except Exception as err:  # noqa: BLE001 - the VM repo unreadable now: not proven
+            LOG.warning("OTA: manifest of %s unreadable: %s", tag, type(err).__name__)
+            return False
+        paths = man.components.get("server-agent") if man else None
+        if not paths or si.needs_install(self.repo, own, sha, paths):
+            return False  # a failed diff is not cached: tried again at the next call
+        self._matched.add((own, sha))
+        return True
+
     def _satellite_package(self, tag: str) -> dict | None:
         """The only door for satellite consumers (offer, package files, provisioning, image). A package packed by an
         agent older than the release may miss files the release declares (spec 2026-11-18): it is rebuilt by a new
-        enough agent, refused by an older one, and kept as is once a device holds it."""
+        enough agent, refused by an older one, and kept as is once a device holds it. New enough = its version is at
+        least the release's, or its code is the release's (`_agent_matches`: a release that leaves the agent alone
+        never changes its version)."""
         meta = self._package(tag)
         if not meta:
             return None
@@ -225,17 +254,21 @@ class Orchestrator:
             return meta
         own_raw = self._own_version()
         own = lead_tag(own_raw)
-        if own is None or ch.version_key(own) < ch.version_key(tag):
-            self._older_refused.add(tag)
+        with self.store.lock:
+            info = self.store.release_infos().get(tag)
+        if info is None:
             return None
+        if own is None or ch.version_key(own) < ch.version_key(tag):
+            if not self._agent_matches(tag, info.release.sha):
+                self._older_refused.add(tag)
+                return None
+            if meta.get("built_by") == own_raw:
+                self._older_refused.discard(tag)
+                return meta
         self._older_refused.discard(tag)
         with self._build_lock:
             if self.meta.get(tag) is not meta:  # another thread already rebuilt it
                 return self.meta.get(tag)
-            with self.store.lock:
-                info = self.store.release_infos().get(tag)
-            if info is None:
-                return None
             LOG.info("OTA: package %s packed by %s; rebuilding its satellite part with %s", tag,
                      meta.get("built_by") or "an older agent", own_raw)
             try:  # satellite.tar.gz only: the server's archive.tar stays (spec 2026-11-18, review finding 2)
@@ -552,7 +585,8 @@ class Orchestrator:
     def offer(self, sat_id: str, channel: str, installed: str | None, protocol: int, lock_sha256: str) -> dict:
         out, tag = self._offer(sat_id, channel, installed, protocol, lock_sha256)
         try:
-            self._waiting_server(sat_id, tag, out.get("reason") == "waiting_server" and out.get("tag") is None)
+            reason = out.get("reason")
+            self._waiting_server(sat_id, tag, reason if out.get("tag") is None and reason in HELD_REASONS else None)
         except Exception as err:  # noqa: BLE001 - the offer itself must reach the satellite
             LOG.warning("OTA: waiting-server bookkeeping failed: %s", type(err).__name__)
         return out
@@ -570,21 +604,28 @@ class Orchestrator:
             return "tentativas esgotadas"
         return "aguardando a janela de instalação"
 
-    def _waiting_server(self, sat_id: str, tag: str | None, waiting: bool) -> None:
-        """A satellite held by the server-first gate: remembered with the tag it waits for. The owner is told by
-        Home Assistant (sensor `ota_waiting_server`, house push in civil hours), never by this agent."""
+    def _waiting_server(self, sat_id: str, tag: str | None, reason: str | None) -> None:
+        """A satellite held back from a newer target (the server-first gate, or a package it cannot get): remembered
+        with the tag it waits for. The owner is told by Home Assistant (sensor `ota_waiting_server`, house push in
+        civil hours), never by this agent. A refused package is also logged, once per tag and reason."""
         now = self._clock()
         with self.store.lock:
             d = self.store.device(sat_id)
-            if not waiting or not tag:
+            if not reason or not tag:
                 if d.get("waiting_server_since") is not None:
-                    d.pop("waiting_server_since", None)
-                    d.pop("waiting_server_tag", None)
+                    for key in ("waiting_server_since", "waiting_server_tag", "waiting_server_reason"):
+                        d.pop(key, None)
                     self._save_quiet()
                 return
-            if d.get("waiting_server_since") is None or d.get("waiting_server_tag") != tag:
+            new = d.get("waiting_server_since") is None or d.get("waiting_server_tag") != tag
+            if not new and d.get("waiting_server_reason") == reason:
+                return
+            if new:
                 d["waiting_server_since"], d["waiting_server_tag"] = now, tag
-                self._save_quiet()
+            d["waiting_server_reason"] = reason
+            if reason in REFUSED_WHY:
+                LOG.warning("OTA: package %s refused to %s: %s", tag, sat_id, reason)
+            self._save_quiet()
 
     def alpha_promotion(self) -> tuple[str | None, dict]:
         """(state, attributes) of the sensor `ota_alpha_promotion`: when the tracked alpha will be promoted to stable.
@@ -711,14 +752,15 @@ class Orchestrator:
         """{sat_id: {tag, since, why}} for satellites held by the server for at least WAITING_PUSH_AFTER_S."""
         now = self._clock()
         with self.store.lock:
-            held = {s: (d["waiting_server_tag"], d["waiting_server_since"])
+            held = {s: (d["waiting_server_tag"], d["waiting_server_since"], d.get("waiting_server_reason"))
                     for s, d in self.store.data["devices"].items()
                     if d.get("waiting_server_since") is not None and d.get("waiting_server_tag")
                     and now - d["waiting_server_since"] >= WAITING_PUSH_AFTER_S}
         if not held:
             return {}
         why = self._waiting_reason()
-        return {s: {"tag": t, "since": since, "why": why} for s, (t, since) in sorted(held.items())}
+        return {s: {"tag": t, "since": since, "why": REFUSED_WHY.get(reason, why)}
+                for s, (t, since, reason) in sorted(held.items())}
 
     def _offer(self, sat_id: str, channel: str, installed: str | None, protocol: int,
                lock_sha256: str) -> tuple[dict, str | None]:

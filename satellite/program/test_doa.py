@@ -87,7 +87,8 @@ class TestTrava(unittest.TestCase):
         t.travar(rad(30)); link.escritas.clear()
         self.assertTrue(t.soltar())
         self.assertEqual(link.escritas,
-                         [("AEC_FIXEDBEAMSONOFF", [0]), ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])])
+                         [("AEC_FIXEDBEAMSONOFF", [0]), ("AEC_FIXEDBEAMSELEVATION_VALUES", [0.0, 0.0]),
+                          ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])])
         self.assertFalse(t.travado)
 
     def test_failed_lock_unlocks(self):
@@ -95,8 +96,9 @@ class TestTrava(unittest.TestCase):
         t = doa.TravaFeixe(link, log=lambda m: None, relogio=lambda: 100.0)
         self.assertFalse(t.travar(rad(30)))
         self.assertFalse(t.travado)
-        self.assertEqual(link.escritas[-3:],
-                         [("AEC_FIXEDBEAMSONOFF", [0]), ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])])
+        self.assertEqual(link.escritas[-4:],
+                         [("AEC_FIXEDBEAMSONOFF", [0]), ("AEC_FIXEDBEAMSELEVATION_VALUES", [0.0, 0.0]),
+                          ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])])
 
     def test_ceiling_unlocks(self):
         agora = {"t": 100.0}
@@ -160,3 +162,298 @@ class TestRevisaoDoa(unittest.TestCase):
         link = Link()
         doa.TravaFeixe(link, log=lambda m: None, relogio=lambda: 1.0).travar(rad(-90))
         self.assertAlmostEqual(link.escritas[0][1][0], rad(270))
+
+
+class TestDoisFeixes(unittest.TestCase):
+    def test_two_beam_lock_writes_both_azimuths_and_elevation(self):
+        link = Link()
+        t = doa.TravaFeixe(link, log=lambda m: None, relogio=lambda: 1.0)
+        self.assertTrue(t.travar(rad(140), rad(10), rad(45)))
+        self.assertEqual([e[0] for e in link.escritas],
+                         ["AEC_FIXEDBEAMSAZIMUTH_VALUES", "AEC_FIXEDBEAMSELEVATION_VALUES", "AEC_FIXEDBEAMSONOFF",
+                          "AUDIO_MGR_OP_R", "AUDIO_MGR_OP_L"])
+        self.assertAlmostEqual(link.escritas[0][1][0], rad(140)); self.assertAlmostEqual(link.escritas[0][1][1], rad(10))
+        self.assertEqual(link.escritas[1][1][0], 0.0); self.assertAlmostEqual(link.escritas[1][1][1], rad(45))
+        self.assertEqual(link.escritas[2][1], [1]); self.assertEqual(link.escritas[3][1], [7, 0])
+        self.assertEqual(link.escritas[4][1], [6, 0])
+        self.assertAlmostEqual(t.theta_a, rad(140)); self.assertAlmostEqual(t.theta_t, rad(10))
+
+    def test_release_resets_elevation(self):
+        link, logs = Link(), []
+        t = doa.TravaFeixe(link, log=logs.append, relogio=lambda: 1.0)
+        t.travar(rad(140), rad(10), rad(45)); link.escritas.clear()
+        t.soltar()
+        self.assertEqual(link.escritas, [("AEC_FIXEDBEAMSONOFF", [0]), ("AEC_FIXEDBEAMSELEVATION_VALUES", [0.0, 0.0]),
+                                         ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])])
+        self.assertEqual(t.motivo_soltura, "closed")
+        self.assertTrue(any("beam_t_deg" in m for m in logs if isinstance(m, str)))
+
+    def test_log_has_no_tv_field_without_tv(self):
+        logs = []
+        t = doa.TravaFeixe(Link(), log=logs.append, relogio=lambda: 1.0)
+        t.travar(rad(30)); t.soltar()
+        self.assertFalse(any("beam_t_deg" in m for m in logs))
+
+    def test_decide_retries_without_tv_sector(self):
+        d = doa.Direcao()
+        for i, g in enumerate((10, 140, 10, 140, 10, 140)):
+            d.alimentar(9.0 + i * 0.15, rad(g))
+        self.assertIsNone(d.decidir(10.0))
+        self.assertAlmostEqual(math.degrees(d.decidir(10.0, excluir=(rad(10), 30))), 140, delta=0.5)
+
+    def test_whole_conversation_lock_survives_first_answer(self):
+        link = Link()
+        d = doa.Direcao()
+        for t in (9.0, 9.2, 9.4):
+            d.alimentar(t, rad(140))
+        trava = doa.TravaFeixe(link, log=lambda m: None, relogio=lambda: 10.0)
+        r = doa.Regra(d, trava, ligada=lambda: True, dois_feixes=lambda: True, tv=lambda: (rad(10), rad(45)))
+        self.assertAlmostEqual(r.palavra(10.0), 140, delta=0.5)
+        self.assertEqual(r.ultima_decisao, "locked")
+        r.resposta_acabou()
+        self.assertTrue(trava.travado)
+        r.conversa_fechou()
+        self.assertFalse(trava.travado)
+        self.assertFalse(r.dois_feixes_ativo)
+
+    def test_two_beam_locks_even_with_beam_lock_off(self):
+        d = doa.Direcao()
+        for t in (9.0, 9.2, 9.4):
+            d.alimentar(t, rad(140))
+        trava = doa.TravaFeixe(Link(), log=lambda m: None, relogio=lambda: 10.0)
+        r = doa.Regra(d, trava, ligada=lambda: False, dois_feixes=lambda: True)
+        self.assertIsNotNone(r.palavra(10.0))
+        self.assertTrue(trava.travado)
+
+    def test_two_beam_retry_excludes_tv_sector(self):
+        d = doa.Direcao()
+        for i, g in enumerate((10, 140, 10, 140, 10, 140)):
+            d.alimentar(9.0 + i * 0.15, rad(g))
+        link = Link()
+        trava = doa.TravaFeixe(link, log=lambda m: None, relogio=lambda: 10.0)
+        r = doa.Regra(d, trava, ligada=lambda: True, dois_feixes=lambda: True, tv=lambda: (rad(10), rad(45)))
+        self.assertAlmostEqual(r.palavra(10.0), 140, delta=0.5)
+        self.assertEqual(r.ultima_decisao, "locked_tv_excluded")
+        self.assertAlmostEqual(trava.theta_t, rad(10))
+
+    def test_two_beam_lock_failed_reason(self):
+        trava = doa.TravaFeixe(Link(), log=lambda m: None, relogio=lambda: 10.0)
+        r = doa.Regra(doa.Direcao(), trava, ligada=lambda: True, dois_feixes=lambda: True)
+        self.assertIsNone(r.palavra(10.0))
+        self.assertEqual(r.ultima_decisao, "lock_failed")
+        self.assertFalse(r.dois_feixes_ativo)
+
+    def test_reaponta_needs_three_of_four_far_from_beams(self):
+        r = doa.Reaponta()
+        for i in range(4):
+            r.alimentar(10.0 + i * 0.125, rad(230), 1.0)
+        self.assertAlmostEqual(math.degrees(r.decidir(10.4, rad(140), rad(10))) % 360, 230, delta=0.5)
+        r.zerar()
+        for i in range(4):
+            r.alimentar(10.0 + i * 0.125, rad(150), 1.0)
+        self.assertIsNone(r.decidir(10.4, rad(140), rad(10)))
+        r.zerar()
+        for i, e in enumerate((1.0, 0.0, 0.0, 1.0)):
+            r.alimentar(10.0 + i * 0.125, rad(230), e)
+        self.assertIsNone(r.decidir(10.4, rad(140), rad(10)))
+        r.zerar()
+        for i in range(4):
+            r.alimentar(10.0 + i * 0.125, rad(15), 1.0)  # near T
+        self.assertIsNone(r.decidir(10.4, rad(140), rad(10)))
+        self.assertAlmostEqual(math.degrees(r.decidir(10.4, rad(140), None)), 15, delta=0.5)
+
+    def test_reaim_rewrites_azimuth_pair_and_logs(self):
+        link, logs = Link(), []
+        t = doa.TravaFeixe(link, log=logs.append, relogio=lambda: 1.0)
+        t.travar(rad(140), rad(10), rad(45)); link.escritas.clear()
+        self.assertTrue(t.reapontar(rad(230), causa="follow_up", polls=4))
+        self.assertEqual(len(link.escritas), 1)
+        self.assertEqual(link.escritas[0][0], "AEC_FIXEDBEAMSAZIMUTH_VALUES")
+        self.assertAlmostEqual(link.escritas[0][1][0], rad(230)); self.assertAlmostEqual(link.escritas[0][1][1], rad(10))
+        ev = [m for m in logs if isinstance(m, dict)]
+        self.assertEqual(ev, [{"two_beam_reaim": {"cause": "follow_up", "from_deg": 140.0, "to_deg": 230.0, "polls": 4}}])
+        self.assertAlmostEqual(t.theta_a, rad(230))
+
+    def test_ceiling_rearmed_by_renovar(self):
+        agora = {"t": 0.0}
+        t = doa.TravaFeixe(Link(), log=lambda m: None, teto_s=90, relogio=lambda: agora["t"])
+        t.travar(rad(30))
+        agora["t"] = 80.0; t.renovar()
+        agora["t"] = 100.0; t.tique(); self.assertTrue(t.travado)
+        agora["t"] = 171.0; t.tique(); self.assertFalse(t.travado)
+        self.assertEqual(t.motivo_soltura, "ceiling90")
+
+    def test_direction_history_prunes_and_medians(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = os.path.join(tmp, "caller_directions.ndjson")
+            now = 10 * 86400.0
+            doa.registrar_direcao(caminho, rad(100), now - 8 * 86400)  # old, pruned on the next write
+            self.assertIsNone(doa.mediana_direcoes(caminho, now))
+            for i, g in enumerate((130, 140, 150, 140, 135, 145, 140, 138, 142, 90, 200)):
+                doa.registrar_direcao(caminho, rad(g), now - 1000 + i)
+            with open(caminho) as f:
+                self.assertEqual(len(f.read().splitlines()), 11)
+            self.assertAlmostEqual(math.degrees(doa.mediana_direcoes(caminho, now)), 140, delta=3)
+            self.assertIsNone(doa.mediana_direcoes(caminho, now + 9 * 86400))  # all too old
+
+
+class TestLerContinuoDoisFeixes(unittest.TestCase):
+    class LinkLeitura:
+        def __init__(self): self.limitadas = []
+        def read(self, nome): return [1.0]
+        def read_bounded(self, nome):
+            self.limitadas.append(nome)
+            return [1.0, 1.0, 2.0, 3.0] if nome == "AEC_SPENERGY_VALUES" else [0.1, 0.2, 0.3, 0.4]
+
+    class Parar:
+        def __init__(self, n): self.n = n
+        def wait(self, _):
+            self.n -= 1
+            return self.n < 0
+
+    def test_two_beam_reads_energy_and_feeds_reaim(self):
+        import threading
+        from detectores import EnergiaFeixes
+        link, en, re, ciclos = self.LinkLeitura(), EnergiaFeixes(), doa.Reaponta(), []
+        doa.ler_continuo(link, doa.Direcao(), self.Parar(2), relogio=lambda: 5.0, energia=en, reaponta=re,
+                         ativo=lambda: True, ao_ciclo=ciclos.append)
+        self.assertEqual(link.limitadas, ["AEC_SPENERGY_VALUES", "AEC_AZIMUTH_VALUES"] * 2)
+        self.assertEqual(en.ultimas(), ((1.0, 1.0, 2.0), 5.0))
+        self.assertEqual(ciclos, [5.0, 5.0])
+        self.assertEqual(list(re._polls)[-1], (5.0, 0.3, 2.0))
+
+    def test_two_beam_feeds_the_free_beam_direction_only_with_energy(self):
+        link, livre = self.LinkLeitura(), doa.Direcao()
+        doa.ler_continuo(link, doa.Direcao(), self.Parar(2), relogio=lambda: 5.0, ativo=lambda: True, livre=livre)
+        self.assertAlmostEqual(livre.decidir(5.0, 1.0) or 0.0, 0.0)  # fewer than 3 samples: no decision, but they are in
+        self.assertEqual([a for _, a in livre._amostras], [0.3, 0.3])
+        link.read_bounded = lambda nome: [1.0, 1.0, 0.0, 3.0] if nome == "AEC_SPENERGY_VALUES" else [0.1, 0.2, 0.3, 0.4]
+        livre2 = doa.Direcao()
+        doa.ler_continuo(link, doa.Direcao(), self.Parar(1), relogio=lambda: 6.0, ativo=lambda: True, livre=livre2)
+        self.assertEqual([a for _, a in livre2._amostras], [None])  # no energy on the free beam: no direction
+
+    def test_inactive_does_not_touch_the_bounded_reads(self):
+        link = self.LinkLeitura()
+        doa.ler_continuo(link, doa.Direcao(), self.Parar(2), relogio=lambda: 5.0, ativo=lambda: False)
+        self.assertEqual(link.limitadas, [])
+
+    def test_wake_word_direction_excludes_the_tv_sector(self):
+        d = doa.Direcao()
+        for t in (9.4, 9.6, 9.8, 10.0):
+            d.alimentar(t, math.radians(90))
+        self.assertAlmostEqual(math.degrees(doa.direcao_da_palavra(d, 10.0, None)), 90, delta=1)
+        self.assertIsNone(doa.direcao_da_palavra(d, 10.0, (math.radians(100), 0.0)))
+
+
+class TestDirecaoDaPalavraReaponta(unittest.TestCase):
+    def _livre(self, graus):
+        d = doa.Direcao()
+        for t in (9.4, 9.6, 9.8, 10.0):
+            d.alimentar(t, math.radians(graus))
+        return d
+
+    def test_word_from_another_corner_gives_its_direction(self):
+        theta = doa.direcao_da_palavra(self._livre(300), 10.0, (math.radians(200), 0.0), math.radians(45))
+        self.assertAlmostEqual(math.degrees(theta) % 360, 300, delta=1)
+
+    def test_word_within_30_degrees_of_beam_a_is_no_reaim(self):
+        self.assertIsNone(doa.direcao_da_palavra(self._livre(60), 10.0, (math.radians(200), 0.0), math.radians(45)))
+        self.assertIsNotNone(doa.direcao_da_palavra(self._livre(80), 10.0, (math.radians(200), 0.0), math.radians(45)))
+
+    def test_release_time_is_kept_for_the_lock_duration(self):
+        t = [100.0]
+        trava = doa.TravaFeixe(Link(), lambda m: None, teto_s=90.0, relogio=lambda: t[0])
+        trava.travar(1.0)
+        t[0] = 191.0
+        trava.tique()  # ceiling90
+        self.assertEqual((trava.motivo_soltura, trava.soltada_em), ("ceiling90", 191.0))
+        t[0] = 400.0
+        trava.soltar("closed")  # already released: the first release time stands
+        self.assertEqual(trava.soltada_em, 191.0)
+
+
+class TestAprenderTv(unittest.TestCase):
+    class Placa:
+        """Fake board: a clock the sleeps advance; azimuth/energy by phase; optional failure on the Nth write."""
+        def __init__(self, az_deg=12.0, espalhado=False, pico=45, falha_na_escrita=None, parar_na_elev=None):
+            self.t, self.az, self.espalhado, self.pico = 0.0, az_deg, espalhado, pico
+            self.escritas, self.falha, self.phi = [], falha_na_escrita, 0
+            self.parar_na_elev, self.n = parar_na_elev, 0
+
+        def agora(self): return self.t
+        def dormir(self, s): self.t += s
+
+        def write(self, nome, valores):
+            self.escritas.append((nome, list(valores)))
+            if self.falha is not None and len(self.escritas) == self.falha:
+                raise OSError("usb")
+            if nome == "AEC_FIXEDBEAMSELEVATION_VALUES":
+                self.phi = round(math.degrees(valores[0]))
+                self.n += 1
+            return True
+
+        def read_bounded(self, nome):
+            if nome == "AEC_AZIMUTH_VALUES":
+                off = (int(self.t * 8) % 5 - 2) * (30 if self.espalhado else 1)
+                return [0.0, 0.0, math.radians(self.az + off) % (2 * math.pi), 0.0]
+            return [1.0 - abs(self.phi - self.pico) / 100, 1.0, 1.0, 0.0]
+
+        def parar(self):
+            return self.parar_na_elev is not None and self.n >= self.parar_na_elev
+
+    def rodar(self, p, hist=None):
+        return doa.aprender_tv(p, p.agora, p.dormir, p.parar, hist)
+
+    def fim_liberado(self, p):
+        self.assertEqual(p.escritas[-4:], [("AEC_FIXEDBEAMSONOFF", [0]), ("AEC_FIXEDBEAMSELEVATION_VALUES", [0.0, 0.0]),
+                                           ("AUDIO_MGR_OP_R", [7, 3]), ("AUDIO_MGR_OP_L", [8, 0])])
+
+    def test_calibration_stores_median_and_best_elevation(self):
+        p = self.Placa()
+        r = self.rodar(p)
+        self.assertEqual((r["result"], r["elevation_deg"]), ("stored", 45))
+        self.assertAlmostEqual(r["azimuth_deg"], 12, delta=1)
+        self.assertGreaterEqual(r["frames"], 150)
+        self.assertEqual(len(r["energy_by_elevation"]), 6)
+        self.fim_liberado(p)
+
+    def test_calibration_azimuth_near_360_stays_below_360(self):
+        r = self.rodar(self.Placa(az_deg=359.97))
+        self.assertEqual(r["result"], "stored")
+        self.assertLess(r["azimuth_deg"], 360.0)
+        self.assertEqual(r["azimuth_deg"], 0.0)
+
+    def test_calibration_refuses_spread(self):
+        r = self.rodar(self.Placa(espalhado=True))
+        self.assertEqual((r["result"], r["reason"]), ("refused", "spread"))
+
+    def test_calibration_refuses_near_caller(self):
+        r = self.rodar(self.Placa(), hist=rad(40))
+        self.assertEqual((r["result"], r["reason"]), ("refused", "near_caller"))
+        self.assertEqual(self.rodar(self.Placa(), hist=rad(200))["result"], "stored")
+
+    def test_calibration_refuses_too_few_frames(self):
+        p = self.Placa()
+        p.read_bounded = lambda nome: [0.0, 0.0, 0.0, 0.0]  # no energy on the free beam
+        self.assertEqual(self.rodar(p)["reason"], "too_few_frames")
+
+    def test_calibration_abort_releases(self):
+        p = self.Placa(parar_na_elev=3)
+        r = self.rodar(p)
+        self.assertEqual((r["result"], r["reason"]), ("refused", "aborted"))
+        self.fim_liberado(p)
+
+    def test_calibration_always_ends_released(self):
+        p = self.Placa()
+        p.falha = 1 + 3 * 3 + 1  # inside the sweep, after a few elevations
+        r = self.rodar(p)
+        self.assertEqual((r["result"], r["reason"]), ("refused", "error"))
+        self.fim_liberado(p)
+
+    def test_busy_regra_does_not_lock(self):
+        trava = doa.TravaFeixe(Link(), lambda m: None)
+        regra = doa.Regra(doa.Direcao(), trava, lambda: True)
+        regra.ocupada = True
+        self.assertIsNone(regra.palavra(1.0))
+        self.assertFalse(trava.travado)

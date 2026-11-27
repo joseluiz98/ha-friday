@@ -159,6 +159,40 @@ class TestEnderecoDaCasa(unittest.TestCase):
             cfg = c.carregar(os.path.join(d, "config.json"), casa=os.path.join(d, "absent.json"))
             self.assertIsNone(cfg["endereco_friday"])
 
+class TestTwoBeam(unittest.TestCase):
+    def test_two_beam_defaults(self):
+        p = c.PADROES
+        self.assertIs(p["two_beam_listening"], True)
+        self.assertIsNone(p["tv_azimuth_deg"])
+        self.assertEqual((p["tv_elevation_deg"], p["caller_margin_db"], p["tv_margin_db"],
+                          p["caller_silence_s"], p["turn_max_s"]), (0, 3.0, 6.0, 1.5, 60))
+
+    def test_tv_azimuth_none_allowed_and_range_checked(self):
+        base = dict(c.PADROES)
+        self.assertIsNone(c.validar_mudancas(base, {"tv_azimuth_deg": None})["tv_azimuth_deg"])
+        self.assertEqual(c.validar_mudancas(base, {"tv_azimuth_deg": 359.9})["tv_azimuth_deg"], 359.9)
+        for ruim in (360, -1, "90", True):
+            with self.assertRaises(ValueError, msg=ruim):
+                c.validar_mudancas(base, {"tv_azimuth_deg": ruim})
+        with self.assertRaises(ValueError):
+            c.validar_mudancas(base, {"tv_elevation_deg": 81})
+        with self.assertRaises(ValueError):
+            c.validar_mudancas(base, {"turn_max_s": 9})
+
+    def test_pi_turns_in_connect_body_only_when_true(self):
+        self.assertIs(c.dados_conexao("sat-1", {}, {"pi_turns": True})["pi_turns"], True)
+        for v in (False, None, 1, "yes"):
+            self.assertNotIn("pi_turns", c.dados_conexao("sat-1", {}, {"pi_turns": v}))
+        self.assertNotIn("pi_turns", c.dados_conexao("sat-1", {}))
+
+    def test_two_beam_needs_xvf_and_only_word_interrupts(self):
+        cfg = dict(c.PADROES)
+        self.assertTrue(c.dois_feixes_permitido(cfg, "xvf3800"))
+        self.assertFalse(c.dois_feixes_permitido(cfg, "outra"))
+        self.assertFalse(c.dois_feixes_permitido({**cfg, "two_beam_listening": False}, "xvf3800"))
+        self.assertFalse(c.dois_feixes_permitido({**cfg, "only_wake_word_interrupts": False}, "xvf3800"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

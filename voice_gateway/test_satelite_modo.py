@@ -742,6 +742,15 @@ class TestWhisper(unittest.TestCase):
             self.assertFalse(sm.whisper(ruim), ruim)
 
 
+class TestPiTurns(unittest.TestCase):
+    def test_pi_turns_only_from_satellite_and_true(self):
+        base = {"origem": "satelite", "satelite_id": "sat-7f3a2c"}
+        self.assertTrue(sm.pi_turns(dict(base, pi_turns=True)))
+        for bad in (dict(base), dict(base, pi_turns="yes"), dict(base, pi_turns=1), dict(base, pi_turns=False), None,
+                    "x", {"pi_turns": True}, {"origem": "pagina", "pi_turns": True}):
+            self.assertFalse(sm.pi_turns(bad), bad)
+
+
 class TestWakeWord(unittest.TestCase):
     def test_nome_da_palavra_so_do_satelite_e_bem_formado(self):  # 28/10
         base = {"origem": "satelite", "satelite_id": "sat-7f3a2c"}

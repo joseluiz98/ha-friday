@@ -660,6 +660,11 @@ class TravaAprendizagem:
         self.permite = True
 
 
+def pi_turns(body) -> bool:
+    """Two-beam listening (spec 2026-11-26 D1): the Pi drives the turns (`pi_turns: true`), satellite origin only."""
+    return isinstance(body, dict) and body.get("origem") == "satelite" and body.get("pi_turns") is True
+
+
 def whisper(body) -> bool:
     """Conversa sussurrada (spec 2026-10-20 D6): a Pi manda `whisper: true` na oferta, só para o satélite."""
     return isinstance(body, dict) and body.get("origem") == "satelite" and body.get("whisper") is True

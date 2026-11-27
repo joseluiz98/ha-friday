@@ -103,8 +103,12 @@ class Maestro:
         self._completa = False
         self.mudo_software = False  # v0.3.7: mudo pela config; o anel leva o bit do mudo, então as luzes podem passar
         self._prazo = None  # (motivo, instante)
+        self.pi_turns = False  # two-beam: the Pi's speech start/stop drive the bot's turns (set by turnos_pi at connect)
         self._alguem_falando = False
         self._fala_desde = None  # R13: instante em que a fala contínua atual começou
+        # 25/11: what the speech detector hears now, in any state (even while a recado ignores it), and since when; a
+        # conversation opening or a mic reopening inherits it, and her own close waits for speech begun after she stopped
+        self._detector_falando, self._detector_desde, self._ela_parou_em = False, None, None
         self._ela_falando = False
         self._abertura = None
         self._motivo_corte = None
@@ -238,8 +242,11 @@ class Maestro:
         acoes = [("som", "inicio"), ("luz", "ouvindo")]
         if self.estado == PARADA:
             # conversa nova: nada herdado de uma conexão anterior (revisão final I1)
-            self.pendentes, self._ela_falando, self._alguem_falando = 0, False, False
-            self._fala_desde = None
+            self.pendentes, self._ela_falando, self._ela_parou_em = 0, False, None
+            # 25/11: "Friday, <request>" in one breath: the detector's segment began with the word and emits no new
+            # fala_comecou, so the speech already running counts (the continuous sound cutoff counts from here)
+            self._alguem_falando = self._detector_falando
+            self._fala_desde = agora if self._alguem_falando else None
             if self.whisper:  # a captura começa o DetectorFala "falando" (a frase segue depois da palavra)
                 self._alguem_falando, self._fala_desde = True, agora
             self.estado = CONECTANDO
@@ -449,10 +456,14 @@ class Maestro:
     def _palavra(valor):
         return valor.get("wake_word") if isinstance(valor, dict) else None
 
+    def turnos_pi(self, ativo: bool) -> None:
+        """Two-beam: the program calls it right after deciding the mode at `conectar`; `_zerar` clears it."""
+        self.pi_turns = bool(ativo)
+
     def _aviso(self, e, tipo):
         """D7: em conversa sussurrada aberta, o início/fim da fala vai ao bot (o Live roda sem VAD do servidor)."""
         # revisão final (20/10): só com a conexão aberta; o que aconteceu antes vai no `conectou`
-        return [("avisar_bot", tipo)] if self.whisper and e == OUVINDO else []
+        return [("avisar_bot", tipo)] if (self.whisper or self.pi_turns) and e == OUVINDO else []
 
     def _da_conversa(self, como):
         return self._abertura is not None and self._abertura["como_abriu"] == como
@@ -621,7 +632,13 @@ class Maestro:
         if nome == "palavra":
             if self._recado and e in ABERTO and self.mudo is False:  # só a palavra ativa corta o recado
                 self._recado, self._recado_fim, self._resposta_normal, self._completa = False, None, False, False
-                return [("parar_fala", None), ("microfone", True), ("luz", "ouvindo"), ("fim_da_resposta", None)]
+                herdada = []
+                if self.pi_turns and self._detector_falando and not self._alguem_falando:
+                    # two-beam: "Friday, <request>" in one breath cuts her with the speech already running
+                    self._alguem_falando, self._fala_desde = True, agora
+                    herdada = [("avisar_bot", "speech_started")]
+                return [("parar_fala", None), ("microfone", True), ("luz", "ouvindo")] + herdada \
+                    + [("fim_da_resposta", None)]
             if self.mudo is not False or e in ABERTO:
                 return []
             return self._abrir(agora, "palavra" if e == PARADA else self._abertura["como_abriu"],
@@ -643,6 +660,12 @@ class Maestro:
                         self._prazo = None
                     return [("avisar_bot", "speech_started")]
                 return [("avisar_bot", "speech_started"), ("avisar_bot", "speech_stopped")]
+            if self.pi_turns and e in ABERTO:  # two-beam: the turn opens only if someone is speaking right now
+                return [("avisar_bot", "speech_started")] if self._alguem_falando else []
+            return []
+        if nome == "fala_quem_chamou":  # two-beam: the caller is speaking: never ages into the continuous-sound cutoff
+            if e in ABERTO and self._alguem_falando:
+                self._fala_desde = agora
             return []
         if nome in ("falha_conexao", "caiu"):
             if e == PARADA:
@@ -650,6 +673,7 @@ class Maestro:
             # conversa do timer que falhou: o alarme volta sozinho, sem o som de erro por cima
             return self._fechar(agora, "falha", som=None if self._alarme is not None else "erro")
         if nome == "fala_comecou":
+            self._detector_falando, self._detector_desde = True, agora
             if self._recado and e in ABERTO:  # 19/11 (revisão I2): fala da sala no recado não chega a ela nem conta prazo
                 return []
             self._completa = False  # a new utterance: a leftover `resposta_completa` must not reopen the next answer
@@ -657,8 +681,11 @@ class Maestro:
             self._fala_desde = agora
             if self._prazo and self._prazo[0] in ("espera_inicial", "continuacao"):
                 self._prazo = None
+            if self.pi_turns and self._mic_fechado:  # the mic is cut: no audio would reach a window opened now
+                return []
             return self._aviso(e, "speech_started")
         if nome == "fala_parou":
+            self._detector_falando = False
             self._alguem_falando = False
             self._fala_desde = None
             if self._recado and e in ABERTO:  # 19/11 (revisão I2): idem; nem mede espera nem fecha o microfone
@@ -687,8 +714,13 @@ class Maestro:
                 self._recado, self._resposta_normal = True, True  # 21/11: toda resposta fecha o mic; só a palavra corta
             if self._recado:
                 self._mic_fechado = False
+                if self.pi_turns and self._alguem_falando:
+                    # two-beam: her answer closes the mic over a turn still open at the bot: close it here, so the
+                    # maestro knows nobody is "speaking" for the bot; `_reabrir`/the word reopen it if she is still talking
+                    reabrir = [("avisar_bot", "speech_stopped")]
+                    self._alguem_falando, self._fala_desde = False, None
                 # 19/11 (revisão I1): a luz acompanha o mic
-                reabrir = [("microfone", False), ("luz", "respondendo" if self._resposta_normal else "falando")]
+                reabrir += [("microfone", False), ("luz", "respondendo" if self._resposta_normal else "falando")]
             elif self._mic_fechado:  # 04/11: ela vai responder: o microfone volta (interrupção e continuação)
                 self._mic_fechado = False
                 reabrir = [("microfone", True), ("luz", "respondendo")]
@@ -712,6 +744,7 @@ class Maestro:
             return []
         if nome == "ela_parou":
             self._ela_falando = False
+            self._ela_parou_em = agora
             if self._recado and e in ABERTO:  # pausa ou fim do recado: o mic abre se ela não voltar logo (_tique)
                 if not self.a.only_wake_word_interrupts:  # switch off: the recado as before 21/11
                     self._recado_fim = agora + RECADO_PAUSA_S
@@ -746,6 +779,9 @@ class Maestro:
                 return []
             if valor == "comando_casa" and (not self.a.no_follow_up_after_home_commands or self._alguem_falando):
                 return []  # 04/11: switch desligado ou alguém já falando: a conversa segue normal
+            if valor in (None, "agradecimento") and self._fala_nova():  # 25/11: she closed over a new sentence
+                self._abertura["encerrar_ignorado"] = self._abertura.get("encerrar_ignorado", 0) + 1
+                return []
             if valor == "agradecimento" and self.pendentes > 0:  # revisão final I1: a resposta do cérebro ainda vem
                 return [] if e == AGUARDANDO else self._aguardar_cerebro()
             return self._fechar(agora, valor or "encerrar", som=None if e == CORTADA else "fim")
@@ -763,7 +799,11 @@ class Maestro:
         """End of a recado (21/11): the mic opens as before v0.3.7 and the program learns the answer ended (the beam lock
         releases). `parou` = when she really stopped: the follow-up deadlines count from there."""
         self._recado, self._recado_fim, self._resposta_normal, self._completa = False, None, False, False
-        acoes = [("microfone", True), ("luz", "ouvindo")] + self._trata("ela_parou", parou, None)
+        herdada = []
+        if self._detector_falando and not self._alguem_falando:  # 25/11: speech begun during the recado now counts
+            self._alguem_falando, self._fala_desde = True, parou
+            herdada = [("avisar_bot", "speech_started")] if (self.whisper or self.pi_turns) else []
+        acoes = [("microfone", True), ("luz", "ouvindo")] + herdada + self._trata("ela_parou", parou, None)
         if ("fim_da_resposta", None) not in acoes:
             acoes.append(("fim_da_resposta", None))
         return acoes
@@ -785,6 +825,12 @@ class Maestro:
         próximo `fala_parou` rearma o prazo. Os prazos de resposta só seguravam com keep_listening_while_speaking."""
         return self._alguem_falando and (motivo not in ("resposta", "resposta_curta")
                                          or self.a.keep_listening_while_speaking)
+
+    def _fala_nova(self):
+        """25/11: someone began speaking after her last answer ended and is still speaking (sound already running
+        when she stopped, such as TV, does not count)."""
+        return (self._detector_falando and not self._ela_falando and self._abertura is not None
+                and self._ela_parou_em is not None and self._detector_desde >= self._ela_parou_em)
 
     def _aguardar_cerebro(self):
         self.estado = AGUARDANDO

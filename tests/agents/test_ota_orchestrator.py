@@ -30,6 +30,8 @@ class World:
         self.manifests = {r.release.sha: man() for r in releases} if manifests is None else manifests
         self.built, self.pushed, self.now, self.rebuilds = [], [], 1000.0, []
         self.repo_calls, self.repo_down, self.build_fails, self.gate = [], False, False, None
+        # what `git diff <agent sha> <release sha>` lists; None = the diff cannot be computed
+        self.changed, self.diffs, self.own_sha = ["server-agent/code.py"], [], "a" * 40
         self.store = st.OtaStore(str(tmp / "state.json"), str(tmp / "events.ndjson"))
         self.tokens = st.TokenBook(str(tmp / "tokens.json"))
         world = self
@@ -50,6 +52,12 @@ class World:
 
             def manifest(self, sha):
                 return world.manifests.get(sha)
+
+            def changed_paths(self, old_sha, new_sha):
+                if world.changed is None:
+                    raise OSError("unknown sha")
+                world.diffs.append((old_sha, new_sha))
+                return list(world.changed)
 
         class Notifier:
             def queue(self, text, pushes):
@@ -76,7 +84,7 @@ class World:
         self.orch = orc.Orchestrator(self.store, self.tokens, Watcher(), Repo(), vault=None, notifier=Notifier(),
                                      build=build, wheels=lambda *a: "", root=str(tmp / "ota"),
                                      clock=lambda: world.now, prune=lambda root, keep: [],
-                                     own_version=lambda: world.own)
+                                     own_version=lambda: world.own, own_sha=lambda: world.own_sha)
 
     def server_at(self, tag):
         self.store.data["server_ota"]["installed_tag"] = tag
@@ -1203,3 +1211,70 @@ def test_alpha_promotion_shows_the_alpha_promoted_first(tmp_path):
     state, attrs = w.orch.alpha_promotion()
     assert attrs["tag"] == "v1.1.0" and state == _iso(t0 + SOAK_S) and attrs["status"] == "soaking"
     assert [r["tag"] for r in attrs["alphas"]] == ["v1.2.0", "v1.1.0"]
+
+
+# ---- a release that leaves the server agent untouched (v0.4.6, 26/11: MK1 got nothing for 14 h)
+
+
+def _untouched_agent(tmp_path):
+    w = World(tmp_path, [rel("v0.4.0", pre=True)], own="v0.3.0")  # the installer skipped the agent: old label
+    w.changed = ["satellite/program/maestro.py", "docs/release-notes/v0.4.0.md"]
+    w.images = FakeImages()
+    w.orch.images = w.images
+    w.offer("alpha")
+    w.orch.poll()
+    return w
+
+
+def test_unchanged_agent_serves_the_package_of_a_newer_release(tmp_path):
+    w = _untouched_agent(tmp_path)
+    assert w.offer("alpha")["tag"] == "v0.4.0"
+    assert w.offer("alpha")["tag"] == "v0.4.0"
+    assert w.built == ["v0.4.0"] and w.rebuilds == []  # packed by this very agent: nothing to rebuild
+    assert (w.own_sha, rel("v0.4.0").release.sha) in w.diffs
+    assert w.orch.image_build("v0.4.0")["ok"] is True
+
+
+def test_equivalent_agent_rebuilds_once_a_package_from_another_agent(tmp_path):
+    w = _untouched_agent(tmp_path)
+    w.agent_at("v0.3.1")  # packed by v0.3.0; v0.3.1 is installed now and also matches the release
+    assert w.offer("alpha")["tag"] == "v0.4.0"
+    assert w.offer("alpha")["tag"] == "v0.4.0"
+    assert w.rebuilds == [True] and w.orch.meta["v0.4.0"]["built_by"] == "v0.3.1"
+
+
+@pytest.mark.parametrize("changed, own_sha", [
+    (["agents/server/x.py", "server-agent/x.py"], "a" * 40),  # the agent's code differs
+    (None, "a" * 40),                                           # the diff cannot be computed
+    ([], None),                                                 # the agent does not know its own sha
+])
+def test_agent_not_proven_equivalent_still_refuses(tmp_path, changed, own_sha):
+    w = _untouched_agent(tmp_path)
+    w.changed, w.own_sha = changed, own_sha
+    o = w.offer("alpha")
+    assert o["tag"] is None and o["reason"] == "server_older"
+
+
+def test_a_diff_that_failed_is_tried_again(tmp_path):
+    w = _untouched_agent(tmp_path)
+    w.changed = None
+    assert w.offer("alpha")["tag"] is None
+    w.changed = []
+    assert w.offer("alpha")["tag"] == "v0.4.0"
+
+
+@pytest.mark.parametrize("reason", ["server_older", "package_missing"])
+def test_a_refused_package_is_reported_like_waiting_for_the_server(tmp_path, caplog, reason):
+    w = World(tmp_path, [rel("v0.4.0", pre=True)], own="v0.3.0")
+    w.build_fails = reason == "package_missing"
+    w.offer("alpha")
+    w.orch.poll()
+    with caplog.at_level("WARNING"):
+        assert w.offer("alpha")["reason"] == reason
+        assert w.offer("alpha")["reason"] == reason
+    assert [r.getMessage() for r in caplog.records if "refused" in r.getMessage()] == [
+        f"OTA: package v0.4.0 refused to {SAT}: {reason}"]
+    assert w.orch.waiting_server() == {}
+    w.now += orc.WAITING_PUSH_AFTER_S
+    held = w.orch.waiting_server()[SAT]
+    assert held["tag"] == "v0.4.0" and reason in held["why"]
