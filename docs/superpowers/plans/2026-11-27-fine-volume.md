@@ -240,7 +240,7 @@ def test_dragging_does_not_save_every_value():  definir(50, agora=0.0) .. defini
 
 - [ ] **Step 4: Run** the program suite. Expected: FAIL on the new tests.
 - [ ] **Step 5: Implement.** In `friday_satelite.py`:
-  - build `MixerFino(camada["mixer"], camada["fine_mixer"], camada["tabela"], agendar=loop.call_later)` (the object is created before the loop runs: use a small lambda that resolves the loop at call time, thread-safe like the old `_avisar_volume` did with `call_soon_threadsafe`); `fine_mixer.prime()` before the first write, failure logged, never fatal (same pattern as `music_mixer.prime`).
+  - build `MixerFino(camada["mixer"], camada["fine_mixer"], camada["escala"], agendar=loop.call_later)` (the object is created before the loop runs: use a small lambda that resolves the loop at call time, thread-safe like the old `_avisar_volume` did with `call_soon_threadsafe`); `fine_mixer.prime()` before the first write, failure logged, never fatal (same pattern as `music_mixer.prime`).
   - Factory (`volume` and `volume_pct` both None): after `volume_inicial.aplicar()`, initial = `pct_de_db(NIVEIS[placa][self._ler_mixer()], placa)` (Jabra 65% -> 64; XVF raw 75% = raw 45 -> 50: the factory loudness is now the real raw 45, 2 dB above today's, which rounded it down to raw 43).
   - `_gravar_volume(pct)` writes `volume_pct` and `volume = posicao_de_pct(pct)` (position 0-11 on both boards, never the XVF raw level).
   - `ao_mudar_config`: compare `volume_pct`; a PUT carrying only `volume` means `grade(volume)`; call `definir(pct, agora=time.monotonic())`; do not write the config file a second time with a stale value.
