@@ -31,6 +31,7 @@ Two separate faults, found on 27/11 on the first satellite (MK1, Jabra):
 - A second volume the owner can see or has to keep in step.
 - A satellite that is silent or stuck loud after a reboot, an update or a rollback.
 - A loud blip while the slider moves.
+- A music player volume of its own coming back through Sendspin: it stays at 100.
 
 ## Approaches
 - **A. Keep 12 steps.** Cheapest. MA's slider is always 0-100, so the gaps stay.
@@ -83,24 +84,40 @@ the two writes. A short dip is acceptable. The bench decides the delay.
   raw 75%.
 - Answers to the voice gateway keep the same keys; `percentual` is the exact value.
 
+A drag in MA sends many changes in a row (today most of them change nothing). The latest value wins: pending
+writes and boundary delays are replaced, never queued. The `config.json` write is delayed until changes stop (as for
+the buttons), on the local-port path too, to spare the SD card.
+
 ### Agent and integration
 The `volume` number reports and sets `volume_pct`. Same entity, same range. A change made by voice, button or HA
 shows in the entity at once, without waiting for the 20 s poll (check the existing event path; add it if missing).
+During a drag, neither the poll nor the HA-change tracking may republish an older value.
+
+The entity goes unavailable while the program does not answer (updates, restarts, outages), and the old mirror never
+did. MA reads a state it cannot parse as volume 0. Before the switch, restart the program with music playing and
+record what MA shows, whether it sends a volume when the entity returns, and whether it falls back to Sendspin's own
+volume. Acceptable: MA shows a wrong number while the satellite is down. Not acceptable: loudness changes by itself
+or Sendspin's volume moves. If it is not acceptable, the design comes back to the owner (fallback: a house-side
+`input_number` kept in step with the entity, with no password or IP).
 
 ### Retiring the bridge
 - MA: each satellite player's "volume control" becomes its integration number (MA's Home Assistant plugin accepts
   `number` entities; checked in MA 2.10.x source). MK1 and MK2. This is a manual MA setting, so it goes into the
-  new-satellite runbook.
+  new-satellite runbook. Before switching MK2, record what controls its MA volume today and Sendspin's current
+  level: if MA drives Sendspin and it is below 100, the switch changes how loud music is.
 - This step does not depend on the OTA: it fixes the 401 today, still with 12 steps.
 - Remove from the house, with backups, after MA is proven on the new entity: the volume bridge package, its two
-  secrets and, optionally, `volume_webhook_url` in the Pi config.
+  secrets, its test (`tools/friday_music/test_satellite_volume_package.py`) and, optionally, `volume_webhook_url` in
+  the Pi config. Update the production doc, the new-satellite runbook and the memory note that describe the bridge.
 - Remove the webhook code from the program. A leftover `volume_webhook_url` key stays harmless.
 
 ### Delivery and image
 - Existing satellites: OTA. A new migration (0009) installs the two ALSA files and restarts what holds the output
-  open (`sendspin-cli`, `friday-silence`), like 0008; activation alone restarts only the program and the agent.
-  A rollback must bring back the old ALSA files and restart the same two (check that the activation snapshot covers
-  what the migration writes).
+  open (`sendspin-cli`, `friday-silence`), like 0008. It must install them itself: activation runs migrations before
+  it installs system files, and restarts only the program and the agent. The activation snapshot, taken before the
+  migrations, already covers both files, so a rollback restores them.
+- Accepted edge: after a rollback `sendspin-cli` keeps the new chain, at the last trim, until it restarts, so music
+  and voice can differ by up to 4 dB until then.
 - New satellites: the image already takes both ALSA files from the release. `verify_image.sh` also checks that they
   define the `Fine` control, and the migration is recorded as done by the existing baking step.
 - Release number: decided when it is cut.
@@ -112,8 +129,9 @@ shows in the entity at once, without waiting for the 20 s poll (check the existi
 - Bench (MK1 with the Jabra, MK2 with the XVF3800): the `Fine` control exists and acts on voice and on music; a
   microphone capture shows loudness changing inside one step; no loud blip while dragging the slider with music
   playing; no new Sendspin dropouts in 1 h; on the XVF3800 the wake word with music is no worse than before.
-- End to end: MA slider moves the sound at each point and stays put; the entity follows voice and the Jabra buttons;
-  no feedback loop between MA and the entity.
+- End to end: MA slider moves the sound at each point and stays put, also while being dragged with music; the entity
+  follows voice and the Jabra buttons; no feedback loop between MA and the entity; Sendspin's own volume stays at 100;
+  a program restart with music does not change loudness.
 - The OTA gate is the usual one: satellites are tested on the alpha channel; promotion to stable is the merge gate.
 
 ## Left to the builder
