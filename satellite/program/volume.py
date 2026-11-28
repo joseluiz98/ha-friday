@@ -88,11 +88,11 @@ class ControleVolume:
         """Botão +/− do Jabra (só o Jabra tem): o aparelho já mudou um degrau; regrava para sincronizar o driver."""
         if self.atual is None:
             return
-        antes = self._mixer.nivel
-        nivel = min(len(escala.NIVEIS[self._mixer.placa]) - 1, max(0, antes + delta))
-        self._mixer.sincronizar(nivel)
-        if nivel != antes:
-            self.atual = escala.pct_de_db(self._mixer.db(), self._mixer.placa)
+        # o aparelho parte do nível que está na placa, não do pedido: numa subida pendente os dois diferem
+        base = self._mixer.na_placa if self._mixer.na_placa is not None else self._mixer.nivel
+        self._mixer.sincronizar(min(len(escala.NIVEIS[self._mixer.placa]) - 1, max(0, base + delta)))
+        # recalcula sempre: mesmo no fim da escala o aperto pode ter cancelado uma subida pendente
+        self.atual = escala.pct_de_db(self._mixer.db(), self._mixer.placa)
         if not self.em_alerta:
             self._mudou_normal(self.atual, agora)
 

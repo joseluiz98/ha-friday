@@ -17,12 +17,22 @@ class MixerFino:
         self.trim = 0.0
         self._na_placa = None  # nível já gravado na placa
         self._pendente = None
+        self._fine_falhando = False  # uma falha do Fine por sequência vai para o log; um sucesso rearma
+
+    @property
+    def na_placa(self):
+        """Nível que a placa tem agora (None antes da primeira gravação); `nivel` pode estar à frente numa subida."""
+        return self._na_placa
 
     def _gravar_fino(self, db):
         try:
             self._fino.write(db)
         except Exception as e:  # sem o Fine o volume fica no degrau da placa; nunca derruba o programa
-            self._log(json.dumps({"fine_error": f"{type(e).__name__}: {e}"}))
+            if not self._fine_falhando:
+                self._log(json.dumps({"fine_error": f"{type(e).__name__}: {e}"}))
+            self._fine_falhando = True
+        else:
+            self._fine_falhando = False
 
     def _gravar_placa(self, nivel):
         self._hw.escrever(nivel)

@@ -150,8 +150,11 @@ class Satelite:
         if fabrica:
             print(json.dumps({"volume_inicial": volume_inicial.aplicar()}), flush=True)
             nivel = self._ler_mixer()
-            inicial = None if nivel is None else escala.pct_de_db(escala.NIVEIS[camada["escala"]][nivel],
-                                                                  camada["escala"])
+            inicial = None
+            if nivel is not None:
+                niveis = escala.NIVEIS[camada["escala"]]
+                nivel = min(len(niveis) - 1, max(0, nivel))  # leitura fora da tabela não pode prender o boot em queda
+                inicial = escala.pct_de_db(niveis[nivel], camada["escala"])
         else:
             inicial = self.cfg["volume_pct"]
         self.volume = vol.ControleVolume(self.mixer_fino, self._gravar_volume, inicial, self.cfg["volume_alertas"])

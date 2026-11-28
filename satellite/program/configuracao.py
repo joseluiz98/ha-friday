@@ -10,7 +10,7 @@ PADROES = {
     # do modelo sobe no fim da palavra, quando a voz já passou (ensaio vad_gate_trial.py: 10 = 0,8 s recupera "Friday"
     # com música)
     "janela_voz_palavra": 6,
-    # volume_pct = o volume (0–100; None = usar o que o aparelho tem); volume = a posição dele, 0–11 (guardada para o
+    # volume_pct = o volume (0–100; None = usar o que o aparelho tem); volume = a posição dele, 1–11 (guardada para o
     # rollback). volume_alertas = escala falada 1–10 (spec 2026-10-12 §1 e §2)
     # volume_sons: previsto na spec de 05/10 (sons de turno −12 dB abaixo da voz), NUNCA aplicado: os sons tocam no
     # volume geral. Fora da página do HA desde 10/11; a chave segue aceita só para não quebrar config antiga.
@@ -158,20 +158,26 @@ def validar_palavras_extras(lista) -> list:
     return saida
 
 
+def _posicao_gravada(pct: int) -> int:
+    """A chave `volume` do config.json, nunca abaixo de 1: após um rollback, a versão anterior deixa o XVF3800 quase
+    mudo na posição 0. Só o que é gravado; a posição falada e a das respostas continuam podendo ser 0."""
+    return max(1, escala.posicao_de_pct(pct))
+
+
 def pct_efetivo(cfg: dict):
     """O volume em %. `volume_pct` vale enquanto combina com `volume`; se não combina, um programa antigo (rollback)
     mudou `volume`, que é a mudança mais nova. None = nenhum dos dois."""
     pct, pos = cfg.get("volume_pct"), cfg.get("volume")
     if pct is None:
         return None if pos is None else escala.grade(pos)
-    if pos is not None and escala.posicao_de_pct(pct) != pos:
+    if pos is not None and _posicao_gravada(pct) != pos:
         return escala.grade(pos)
     return pct
 
 
 def _par_volume(cfg: dict, pct) -> None:
     if pct is not None:
-        cfg["volume_pct"], cfg["volume"] = pct, escala.posicao_de_pct(pct)
+        cfg["volume_pct"], cfg["volume"] = pct, _posicao_gravada(pct)
 
 
 def ler_ou_criar_id(caminho: str) -> str:

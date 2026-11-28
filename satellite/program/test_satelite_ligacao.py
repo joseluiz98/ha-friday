@@ -562,6 +562,19 @@ class TestAnuncio(Base):
         self.assertTrue(os.path.isdir(self.pasta))
 
 
+class TestVolumeDeFabrica(Base):
+    """Primeira partida (sem volume na config) com uma leitura do aparelho fora da tabela de níveis."""
+    async def test_out_of_range_mixer_reading_is_clamped(self):
+        for lido, esperado in ((99, 100), (-1, 0)):
+            if os.path.exists(fs.CFG):
+                os.remove(fs.CFG)
+            with mock.patch.object(Mixer, "ler", lambda _s, n=lido: n), \
+                    mock.patch.object(fs.volume_inicial, "aplicar", return_value={}):
+                s = fs.Satelite(asyncio.get_running_loop())
+            self.assertEqual((s.volume.atual, s.cfg["volume_pct"]), (esperado, esperado), lido)
+            s.volume.iniciar()
+
+
 class TestVolumeFisico(Base):
     async def test_botao_mais_do_jabra_sincroniza_e_grava(self):
         self.s.volume.iniciar()

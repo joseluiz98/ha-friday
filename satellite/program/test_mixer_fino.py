@@ -163,6 +163,31 @@ class TestMixerFino(unittest.TestCase):
         m.forcar(36)
         self.assertTrue(any("fine_error" in d for d in ditos))
 
+    def test_na_placa_is_the_level_already_on_the_board(self):
+        m, _, ag = novo(73)
+        m.escrever(75)
+        self.assertEqual((m.na_placa, m.nivel), (8, 9))
+        ag.disparar()
+        self.assertEqual(m.na_placa, 9)
+        with self.assertRaises(AttributeError):
+            m.na_placa = 1
+
+    def test_fine_failure_is_logged_once_per_streak(self):
+        falhas = iter([True, True, False, True])
+
+        class Instavel:
+            def write(self, db):
+                if next(falhas):
+                    raise OSError("sem controle")
+        ditos = []
+        m = MixerFino(Hw([]), Instavel(), "jabra", agendar=Agenda(), log=ditos.append)
+        m.escrever(73)
+        m.escrever(72)
+        self.assertEqual(len(ditos), 1)
+        m.escrever(71)  # funcionou: rearma
+        m.escrever(70)
+        self.assertEqual(len(ditos), 2)
+
     def test_ler_reads_the_board(self):
         self.assertEqual(novo(73)[0].ler(), 7)
 

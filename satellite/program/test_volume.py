@@ -2,7 +2,7 @@
 import unittest
 import escala as e
 import volume as v
-from test_mixer_fino import mixer_falso
+from test_mixer_fino import mixer_falso, novo
 
 
 class TestConversao(unittest.TestCase):
@@ -234,6 +234,29 @@ class TestVolumeFino(unittest.TestCase):
         trim = e.trim_db(70, "jabra")
         c.apertou(-1, 0.0)
         self.assertEqual(c.atual, e.pct_de_db(e.NIVEIS["jabra"][7] + trim, "jabra"))
+
+    def _subida_pendente(self, antes, depois):
+        m, log, agenda = novo(antes)
+        c = v.ControleVolume(m, lambda p: None, antes)
+        c.definir(depois)
+        self.assertEqual(len(agenda.vivos()), 1)  # a placa ainda não subiu
+        log.clear()
+        return c, m, log, agenda
+
+    def test_button_during_pending_step_up_moves_one_step_from_the_board(self):
+        c, m, log, agenda = self._subida_pendente(73, 75)
+        c.apertou(+1, 0.0)  # o aparelho estava no 8 e foi a 9, o mesmo nível já pedido
+        self.assertEqual([x for q, x in log if q == "hw"], [9])
+        self.assertEqual(agenda.vivos(), [])
+        self.assertEqual((c.atual, c.normal), (75, 75))
+        self.assertEqual(c.atual, e.pct_de_db(m.db(), "jabra"))
+
+    def test_button_down_during_pending_step_up_matches_what_is_heard(self):
+        c, m, log, _ = self._subida_pendente(0, 5)
+        c.apertou(-1, 0.0)  # já no fundo: fica no nível 0 da placa, com o trim novo
+        self.assertEqual([x for q, x in log if q == "hw"], [0])
+        self.assertEqual(c.atual, e.pct_de_db(m.db(), "jabra"))
+        self.assertEqual(c.normal, c.atual)
 
     def test_restore_after_alert_returns_exact_percent(self):
         c, _ = controle(4)

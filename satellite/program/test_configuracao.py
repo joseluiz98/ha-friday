@@ -216,6 +216,16 @@ class TestVolumeFino(unittest.TestCase):
     def test_rollback_change_wins(self):
         self.assertEqual(self._carregar(volume_pct=70, volume=3), (27, 3))
 
+    def test_zero_percent_never_stores_legacy_zero(self):
+        # a versão anterior trata a posição 0 do XVF como quase mudo (rollback)
+        self.assertEqual(self._carregar(volume_pct=0, volume=1), (0, 1))
+        self.assertEqual(self._carregar(volume=0), (0, 1))
+        atual = dict(c.PADROES, senha_porta_local="x" * 32, volume=8, volume_pct=70)
+        for mudanca in ({"volume_pct": 0}, {"volume": 0}):
+            n = c.validar_mudancas(atual, mudanca)
+            self.assertEqual((n["volume_pct"], n["volume"]), (0, 1))
+        self.assertEqual(self._carregar(**{k: n[k] for k in ("volume_pct", "volume")}), (0, 1))
+
     def test_leftover_webhook_key_still_loads(self):
         self.assertEqual(self._carregar(volume_webhook_url="http://x/api/webhook/y", volume=3), (27, 3))
         self.assertNotIn("volume_webhook_url", c.PADROES)

@@ -74,10 +74,11 @@ program must never let the sum get louder than both the old and the new volume: 
 the two writes. A short dip is acceptable. The bench decides the delay.
 
 ### Program
-- `config.json` gets `volume_pct` (0-100). `volume` (position 0-11) is still written, as today, so a
+- `config.json` gets `volume_pct` (0-100). `volume` (position 1-11) is still written, as today, so a
   rollback to the previous release keeps a close volume. Without `volume_pct`, it is derived from `volume`
   (`round(k*100/11)`): nothing changes loudness on update. If an older program changed `volume` after a rollback
-  (it no longer matches the position of `volume_pct`), `volume` wins on the next load.
+  (it no longer matches the position of `volume_pct`), `volume` wins on the next load. The stored legacy `volume`
+  is never below 1 (0% stores 1): the previous release leaves the XVF3800 nearly silent at position 0.
 - Voice `numero`: the position's grid percent. `percentual`: that exact percent. `mais`/`menos`: one hardware step
   from the current level, keeping the trim (4 dB on the Jabra, as today).
 - Jabra +/- buttons: the board moves one step by itself; the trim stays; the program recomputes the percent from
@@ -89,8 +90,9 @@ the two writes. A short dip is acceptable. The bench decides the delay.
 - Answers to the voice gateway keep the same keys; `percentual` is the exact value.
 
 A drag in MA sends many changes in a row (today most of them change nothing). The latest value wins: pending
-writes and boundary delays are replaced, never queued. The `config.json` write is delayed until changes stop (as for
-the buttons), on the local-port path too, to spare the SD card.
+writes and boundary delays are replaced, never queued. The local-port PUT keeps writing `config.json` immediately,
+because GET /config reads the file and a delayed write would return stale values to HA. For buttons and voice the
+write stays delayed until changes stop, to spare the SD card.
 
 ### Agent and integration
 The `volume` number reports and sets `volume_pct`. Same entity, same range. A change made by voice, button or HA
