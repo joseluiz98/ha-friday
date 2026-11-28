@@ -1,6 +1,8 @@
 """Testes do volume: cd /homeassistant/tools/satelite/programa && python3 -m unittest test_volume -v"""
 import unittest
+import escala as e
 import volume as v
+from test_mixer_fino import mixer_falso, novo
 
 
 class TestConversao(unittest.TestCase):
@@ -29,10 +31,11 @@ class TestConversao(unittest.TestCase):
             with self.assertRaises(ValueError):
                 v.posicao_de_percentual(p)
 
-    def test_descricao_da_posicao(self):
-        self.assertEqual(v.descrever(4), {"posicao": 4, "volume": 4, "percentual": 36})
-        self.assertEqual(v.descrever(11), {"posicao": 11, "volume": 10, "percentual": 100})
-        self.assertEqual(v.descrever(10), {"posicao": 10, "volume": None, "percentual": 91})
+    def test_descricao_do_percentual(self):
+        self.assertEqual(v.descrever(36), {"posicao": 4, "volume": 4, "percentual": 36})
+        self.assertEqual(v.descrever(100), {"posicao": 11, "volume": 10, "percentual": 100})
+        self.assertEqual(v.descrever(91), {"posicao": 10, "volume": None, "percentual": 91})
+        self.assertEqual(v.descrever(70), {"posicao": 8, "volume": 8, "percentual": 70})
 
 
 class Falso:
@@ -42,65 +45,73 @@ class Falso:
 
 def controle(inicial=4, alertas=6):
     f = Falso()
-    c = v.ControleVolume(f.escritas.append, f.gravados.append, inicial, alertas)
+    c = v.ControleVolume(mixer_falso(f.escritas), f.gravados.append, None if inicial is None else e.grade(inicial),
+                         alertas)
+    if inicial is not None:
+        c.iniciar()
+        f.escritas.clear()
     return c, f
 
 
 class TestControle(unittest.TestCase):
     def test_iniciar_forca_a_escrita_com_um_vizinho(self):
         # o driver USB não envia valor igual ao último que ele mesmo gravou (teste de 12/10)
-        c, f = controle(4)
+        f = Falso()
+        c = v.ControleVolume(mixer_falso(f.escritas), f.gravados.append, e.grade(4), 6)
         c.iniciar()
         self.assertEqual(f.escritas, [3, 4])
 
     def test_iniciar_no_zero_usa_o_vizinho_de_cima(self):
-        c, f = controle(0)
+        f = Falso()
+        c = v.ControleVolume(mixer_falso(f.escritas), f.gravados.append, e.grade(0), 6)
         c.iniciar()
         self.assertEqual(f.escritas, [1, 0])
 
     def test_definir_escreve_e_grava_como_normal(self):
         c, f = controle(4)
-        self.assertEqual(c.definir(7), 7)
-        self.assertEqual((f.escritas, c.normal, c.atual), ([7], 7, 7))
+        self.assertEqual(c.definir(e.grade(7)), e.grade(7))
+        self.assertEqual((f.escritas, e.posicao_de_pct(c.normal), c.posicao), ([7], 7, 7))
         c.tique(100.0)
-        self.assertEqual(f.gravados, [7])
+        self.assertEqual(f.gravados, [e.grade(7)])
 
     def test_definir_fora_recusa(self):
         c, _ = controle(4)
-        for k in (-1, 12, "3", None):
+        for k in (-1, 101, "3", None, 5.0):
             with self.assertRaises(ValueError):
                 c.definir(k)
 
     def test_passo_parte_do_nivel_real_e_fica_entre_1_e_11(self):
         c, _ = controle(11)
-        self.assertEqual(c.passo(+1), 11)
+        self.assertEqual(e.posicao_de_pct(c.passo(+1)), 11)
         c, _ = controle(1)
-        self.assertEqual(c.passo(-1), 1)
+        self.assertEqual(e.posicao_de_pct(c.passo(-1)), 1)
         c, _ = controle(4)
         c.apertou(+1, 0.0)  # botão físico: aparelho foi para 5
-        self.assertEqual(c.passo(+1), 6)
+        self.assertEqual(e.posicao_de_pct(c.passo(+1)), 6)
 
     def test_aperto_regrava_o_nivel_para_sincronizar_o_driver(self):
         c, f = controle(4)
         c.apertou(+1, 0.0)
         c.apertou(+1, 0.1)
         self.assertEqual(f.escritas, [5, 6])
-        self.assertEqual(c.normal, 6)
+        self.assertEqual(e.posicao_de_pct(c.normal), 6)
 
     def test_aperto_respeita_0_e_11(self):
         c, _ = controle(0)
         c.apertou(-1, 0.0)
+        self.assertEqual(c.posicao, 0)
         self.assertEqual(c.atual, 0)
         c, _ = controle(11)
         c.apertou(+1, 0.0)
-        self.assertEqual(c.atual, 11)
+        self.assertEqual(c.posicao, 11)
+        self.assertEqual(c.atual, 100)
 
     def test_volume_igual_depois_de_apertos_ainda_e_enviado(self):
         # pegadinha: a Pi achava 4, o botão levou a 6; "volume 4" precisa chegar ao aparelho
         c, f = controle(4)
         c.apertou(+1, 0.0)
         c.apertou(+1, 0.1)
-        c.definir(4)
+        c.definir(e.grade(4))
         self.assertEqual(f.escritas[-1], 4)
 
     def test_gravacao_espera_intervalo_minimo(self):
@@ -110,38 +121,38 @@ class TestControle(unittest.TestCase):
         self.assertEqual(f.gravados, [])
         c.apertou(+1, 11.0)
         c.tique(14.0)
-        self.assertEqual(f.gravados, [6])
+        self.assertEqual(f.gravados, [e.grade(6)])
         c.tique(20.0)
-        self.assertEqual(f.gravados, [6])  # nada pendente, nada gravado de novo
+        self.assertEqual(f.gravados, [e.grade(6)])  # nada pendente, nada gravado de novo
 
     def test_alerta_aplica_e_volta_ao_normal(self):
         c, f = controle(4, alertas=6)
         c.entrar_alerta()
-        self.assertEqual((c.atual, f.escritas), (6, [6]))
+        self.assertEqual((c.posicao, f.escritas), (6, [6]))
         c.sair_alerta()
-        self.assertEqual((c.atual, f.escritas[-1]), (4, 4))
+        self.assertEqual((c.posicao, f.escritas[-1]), (4, 4))
 
     def test_alerta_10_e_o_maximo(self):
         c, _ = controle(4, alertas=10)
         c.entrar_alerta()
-        self.assertEqual(c.atual, 11)
+        self.assertEqual(c.posicao, 11)
 
     def test_botao_durante_alerta_nao_muda_o_normal(self):
         c, f = controle(4, alertas=6)
         c.entrar_alerta()
         c.apertou(+1, 0.0)
-        self.assertEqual((c.atual, c.normal), (7, 4))
+        self.assertEqual((c.posicao, e.posicao_de_pct(c.normal)), (7, 4))
         c.tique(100.0)
         self.assertEqual(f.gravados, [])
         c.sair_alerta()
-        self.assertEqual(c.atual, 4)
+        self.assertEqual(c.posicao, 4)
 
     def test_entrar_alerta_duas_vezes_nao_perde_o_normal(self):
         c, _ = controle(4)
         c.entrar_alerta()
         c.entrar_alerta()
         c.sair_alerta()
-        self.assertEqual(c.atual, 4)
+        self.assertEqual(c.posicao, 4)
 
     def test_sair_sem_alerta_nao_escreve(self):
         c, f = controle(4)
@@ -151,10 +162,10 @@ class TestControle(unittest.TestCase):
     def test_definir_durante_alerta_muda_o_normal_e_aplica(self):
         c, f = controle(4)
         c.entrar_alerta()
-        c.definir(3)
-        self.assertEqual((c.atual, c.normal), (3, 3))
+        c.definir(e.grade(3))
+        self.assertEqual((c.posicao, e.posicao_de_pct(c.normal)), (3, 3))
         c.sair_alerta()
-        self.assertEqual(c.atual, 3)
+        self.assertEqual(c.posicao, 3)
 
     def test_inicial_desconhecido_nao_escreve(self):
         c, f = controle(None)
@@ -179,7 +190,7 @@ class TestRampaDeAlarme(unittest.TestCase):
             c.tique(float(t))
         self.assertEqual(f.escritas, sorted(f.escritas))
         self.assertEqual(f.escritas[-1], 8)
-        self.assertEqual(c.atual, 8)
+        self.assertEqual(c.posicao, 8)
         self.assertEqual(len(set(f.escritas)), 8)  # passa por todas as posições de 1 a 8
 
     def test_alarm_ramp_does_not_change_the_saved_normal_volume(self):
@@ -187,61 +198,81 @@ class TestRampaDeAlarme(unittest.TestCase):
         c.entrar_alerta(rampa_s=30, agora=100.0)
         c.tique(110.0)
         c.sair_alerta()
-        self.assertEqual((c.atual, f.escritas[-1]), (4, 4))
+        self.assertEqual((c.posicao, f.escritas[-1]), (4, 4))
         c.tique(200.0)
         self.assertEqual(f.escritas[-1], 4)  # a rampa não continua depois de sair do alerta
 
     def test_alarm_ramp_ends_when_volume_is_set(self):
         c, f = controle(4, alertas=8)
         c.entrar_alerta(rampa_s=30, agora=100.0)
-        c.definir(3)
+        c.definir(e.grade(3))
         c.tique(129.0)
-        self.assertEqual(c.atual, 3)
+        self.assertEqual(c.posicao, 3)
 
 
-class TestAvisoDeMudanca(unittest.TestCase):
-    """Spec 2026-10-21 §6.2 (ponte de volume): toda mudança do volume NORMAL avisa o HA; o volume de alerta não."""
-    def novo(self, inicial=4):
-        avisos = []
-        c = v.ControleVolume(lambda k: None, lambda k: None, inicial, 6, avisar=avisos.append)
-        return c, avisos
+class TestVolumeFino(unittest.TestCase):
+    def test_percent_is_kept_exactly(self):
+        c, _ = controle(4)
+        c.definir(70)
+        self.assertEqual((c.normal, c.posicao), (70, 8))
 
-    def test_definir_avisa_a_posicao(self):
-        c, a = self.novo()
-        c.definir(7)
-        self.assertEqual(a, [7])
+    def test_step_keeps_the_offset(self):
+        for placa in ("jabra", "xvf3800"):
+            c = v.ControleVolume(mixer_falso([], placa), lambda p: None, 70)
+            c.iniciar()
+            folga = e.alvo_db(70, placa) - e.ANCORAS[placa][8]
+            self.assertEqual(c.passo(+1), e.pct_de_db(e.ANCORAS[placa][9] + folga, placa))
 
-    def test_passo_avisa(self):
-        c, a = self.novo(4)
-        c.passo(+1)
-        self.assertEqual(a, [5])
+    def test_step_never_moves_the_wrong_way(self):
+        c, _ = controle(4)
+        c.definir(5)
+        self.assertEqual(c.passo(-1), 5)
 
-    def test_aperto_avisa_fora_do_alerta(self):
-        c, a = self.novo(4)
+    def test_button_recomputes_percent(self):
+        c, _ = controle(4)
+        c.definir(70)
+        trim = e.trim_db(70, "jabra")
         c.apertou(-1, 0.0)
-        self.assertEqual(a, [3])
+        self.assertEqual(c.atual, e.pct_de_db(e.NIVEIS["jabra"][7] + trim, "jabra"))
 
-    def test_alerta_nao_avisa(self):
-        c, a = self.novo(4)
+    def _subida_pendente(self, antes, depois):
+        m, log, agenda = novo(antes)
+        c = v.ControleVolume(m, lambda p: None, antes)
+        c.definir(depois)
+        self.assertEqual(len(agenda.vivos()), 1)  # a placa ainda não subiu
+        log.clear()
+        return c, m, log, agenda
+
+    def test_button_during_pending_step_up_moves_one_step_from_the_board(self):
+        c, m, log, agenda = self._subida_pendente(73, 75)
+        c.apertou(+1, 0.0)  # o aparelho estava no 8 e foi a 9, o mesmo nível já pedido
+        self.assertEqual([x for q, x in log if q == "hw"], [9])
+        self.assertEqual(agenda.vivos(), [])
+        self.assertEqual((c.atual, c.normal), (75, 75))
+        self.assertEqual(c.atual, e.pct_de_db(m.db(), "jabra"))
+
+    def test_button_down_during_pending_step_up_matches_what_is_heard(self):
+        c, m, log, _ = self._subida_pendente(0, 5)
+        c.apertou(-1, 0.0)  # já no fundo: fica no nível 0 da placa, com o trim novo
+        self.assertEqual([x for q, x in log if q == "hw"], [0])
+        self.assertEqual(c.atual, e.pct_de_db(m.db(), "jabra"))
+        self.assertEqual(c.normal, c.atual)
+
+    def test_restore_after_alert_returns_exact_percent(self):
+        c, _ = controle(4)
+        c.definir(70)
         c.entrar_alerta()
-        c.apertou(+1, 0.0)
         c.sair_alerta()
-        self.assertEqual(a, [])
+        self.assertEqual(c.atual, 70)
 
-    def test_iniciar_avisa_uma_vez_o_volume_gravado(self):
-        c, a = self.novo(4)
-        c.iniciar()
-        self.assertEqual(a, [4])
-
-    def test_falha_do_aviso_nao_derruba(self):
-        def explode(k):
-            raise RuntimeError("HA fora")
-        c = v.ControleVolume(lambda k: None, lambda k: None, 4, 6, avisar=explode)
-        self.assertEqual(c.definir(6), 6)
-
-    def test_sem_aviso_funciona_como_antes(self):
+    def test_dragging_saves_only_after_it_stops(self):
         c, f = controle(4)
-        self.assertEqual(c.definir(5), 5)
+        for i, p in enumerate(range(50, 61)):
+            c.definir(p, agora=i * 0.05)
+        c.tique(1.0)
+        self.assertEqual(f.gravados, [])
+        c.tique(10.0)
+        self.assertEqual(f.gravados, [60])
 
 
 if __name__ == "__main__":

@@ -8,12 +8,10 @@ import re
 import subprocess
 
 import hardware
+from escala import VOLUME_XVF  # curva de altura do XVF; os níveis de hardware são os 61 crus
 
 ARQUIVO_PLACA = "/etc/friday-satelite/audio_board"
 PLACAS = ("xvf3800", "jabra", "none")
-# posição 0–11 do volume.py -> valor cru do controle PCM do XVF (0–60, −60…0 dB). A posição 11 (= número 10) é 0 dB;
-# a 10 não tem número (volume.py as pula). 1 = −30 dB … 60 = 0 dB: acima disso seria só corte digital.
-VOLUME_XVF = [0, 30, 33, 37, 40, 43, 47, 50, 53, 57, 58, 60]
 PINO_MUDO = 30  # X0D30: o botão de mudo da placa corta o microfone em hardware e este pino reflete o estado
 
 
@@ -28,21 +26,21 @@ def ler_placa(caminho=ARQUIVO_PLACA) -> str:
 
 
 class MixerXvf:
-    """Controle PCM do card Array. Mesma interface do hardware.Mixer: posição 0–11 <-> valor cru da tabela."""
+    """Controle PCM do card Array: escreve e lê o nível cru 0–60 (1 dB cada)."""
     def __init__(self, card="Array", controle="PCM", executar=subprocess.run):
         self.card, self.controle, self._executar = card, controle, executar
 
     def ler(self) -> int:
+        """Nível cru 0–60 (1 dB cada)."""
         r = self._executar(["amixer", "-c", self.card, "sget", self.controle], capture_output=True, text=True,
                            timeout=5)
         m = re.search(r"Playback (\d+) \[", r.stdout or "")
         if not m:
             raise RuntimeError(f"amixer sem a posição do {self.controle}")
-        cru = int(m.group(1))
-        return min(range(len(VOLUME_XVF)), key=lambda i: (abs(VOLUME_XVF[i] - cru), i))
+        return int(m.group(1))
 
-    def escrever(self, posicao: int):
-        valor = VOLUME_XVF[max(0, min(len(VOLUME_XVF) - 1, int(posicao)))]
+    def escrever(self, nivel: int):
+        valor = max(0, min(60, int(nivel)))
         self._executar(["amixer", "-q", "-c", self.card, "sset", self.controle, f"{valor},{valor}"], timeout=5)
 
     def fixar_mestre(self) -> bool:
@@ -82,6 +80,7 @@ def montar(placa: str, link=None) -> dict:
     """{"mixer", "music_mixer", "controle_mudo", "botao"}; `botao` é a classe do botão do Jabra, None no XVF."""
     if placa == "xvf3800":
         return {"mixer": MixerXvf(), "music_mixer": hardware.MusicMixer(card="Array"),
-                "controle_mudo": MudoXvf(link), "botao": None}
+                "controle_mudo": MudoXvf(link), "botao": None, "fine_mixer": hardware.FineMixer(card="Array"),
+                "escala": "xvf3800"}
     return {"mixer": hardware.Mixer(), "music_mixer": hardware.MusicMixer(), "controle_mudo": hardware.ControleMudo(),
-            "botao": hardware.Botao}
+            "botao": hardware.Botao, "fine_mixer": hardware.FineMixer(), "escala": "jabra"}

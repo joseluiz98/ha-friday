@@ -4,12 +4,15 @@ import unittest
 import comandos
 from timers import Timers
 from volume import ControleVolume
+from test_mixer_fino import mixer_falso
 
 
 class Base(unittest.TestCase):
     def setUp(self):
         self.escritas = []
-        self.vol = ControleVolume(self.escritas.append, lambda k: None, 4, 6)
+        self.vol = ControleVolume(mixer_falso(self.escritas), lambda k: None, 36, 6)
+        self.vol.iniciar()
+        self.escritas.clear()
         self.tim = Timers(lambda lista: None)
 
     def run_(self, **cmd):
@@ -41,6 +44,12 @@ class TestVolume(Base):
     def test_percentual(self):
         r, _ = self.run_(acao="volume", percentual=45)
         self.assertEqual(r["posicao"], 5)
+
+    def test_percentual_exato(self):
+        self.assertEqual(self.run_(acao="volume", percentual=70)[0]["percentual"], 70)
+
+    def test_numero_vira_o_percentual_de_grade(self):
+        self.assertEqual(self.run_(acao="volume", numero=7)[0]["percentual"], 64)
 
     def test_mais_e_menos(self):
         self.assertEqual(self.run_(acao="volume", ajuste="mais")[0]["posicao"], 5)
@@ -207,7 +216,8 @@ class TestProvisionamento(unittest.TestCase):
         os.makedirs(os.path.join(self.d, "onboarding"))
         for k in ("setup_mode", "digit_1"):
             open(os.path.join(self.d, "onboarding", k + ".wav"), "wb").write(b"x")
-        self.vol = ControleVolume(lambda k: None, lambda k: None, 4, 6)
+        self.vol = ControleVolume(mixer_falso([]), lambda k: None, 36, 6)
+        self.vol.iniciar()
         self.tim = Timers(lambda lista: None)
 
     def run_(self, estado="parada", **cmd):

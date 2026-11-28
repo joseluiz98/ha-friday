@@ -36,6 +36,8 @@ from emissor import Emissor
 import timers as tm
 from whisper import noise_floor_rms, whisper_ratio_db
 import volume as vol
+import escala
+from mixer_fino import MixerFino
 
 # spec 2026-11-16 (final review): during the <=0.3 s claim wait these events make the word stale, even if the
 # conversation then closed; a conversation closing by itself (bot, idle) still lets the won word open a new one.
@@ -65,6 +67,8 @@ def para_apos_de(cfg: dict) -> int:
 
 
 class Satelite:
+    ATRASO_FINO_S = 0.4  # o Fine se ouve ~0,4 s depois (buffer); medido na bancada
+
     def __init__(self, loop):
         self.loop = loop
         self.sendspin_timeout_s = 2.0  # consulta de música (04/11); injetável nos testes
@@ -135,13 +139,25 @@ class Satelite:
         self.ambiente = ambiente.GravadorAmbiente()  # 02/11: gravação contínua para o retreino (gravar_ambiente_ate)
         # spec 2026-10-12: volume (o gravado, ou o que o aparelho tem) e timers
         self.controle_mudo = camada["controle_mudo"]
-        fabrica = self.cfg["volume"] is None  # 06/11: Mark novo começa em 65%, não no que o aparelho guardou
+        fine = camada["fine_mixer"]
+        try:  # o softvol `Fine` só nasce no primeiro uso do PCM
+            fine.prime()
+        except Exception as e:
+            print(json.dumps({"fine_prime_error": f"{type(e).__name__}: {e}"}), flush=True)
+        self.mixer_fino = MixerFino(self.mixer, fine, camada["escala"], agendar=self.loop.call_later,
+                                    atraso_s=self.ATRASO_FINO_S)
+        fabrica = self.cfg["volume_pct"] is None  # 06/11: Mark novo não fica no volume que o aparelho guardou
         if fabrica:
             print(json.dumps({"volume_inicial": volume_inicial.aplicar()}), flush=True)
-        inicial = self.cfg["volume"] if not fabrica else self._ler_mixer()
-        self._volume_aviso = None  # spec 2026-10-21 §6.2: posição mais nova a mandar ao espelho do HA
-        self.volume = vol.ControleVolume(self.mixer.escrever, self._gravar_volume, inicial, self.cfg["volume_alertas"],
-                                         avisar=self._avisar_volume)
+            nivel = self._ler_mixer()
+            inicial = None
+            if nivel is not None:
+                niveis = escala.NIVEIS[camada["escala"]]
+                nivel = min(len(niveis) - 1, max(0, nivel))  # leitura fora da tabela não pode prender o boot em queda
+                inicial = escala.pct_de_db(niveis[nivel], camada["escala"])
+        else:
+            inicial = self.cfg["volume_pct"]
+        self.volume = vol.ControleVolume(self.mixer_fino, self._gravar_volume, inicial, self.cfg["volume_alertas"])
         if fabrica and inicial is not None:
             self._gravar_volume(inicial)
         self.timers = tm.Timers(self._gravar_timers)
@@ -169,8 +185,8 @@ class Satelite:
             print(json.dumps({"volume_ilegivel": f"{type(e).__name__}: {e}"}), flush=True)
             return None
 
-    def _gravar_volume(self, posicao):
-        self.cfg = cfgmod.validar_mudancas(self.cfg, {"volume": posicao})
+    def _gravar_volume(self, pct):
+        self.cfg = cfgmod.validar_mudancas(self.cfg, {"volume_pct": pct})
         cfgmod.gravar(CFG, self.cfg)
 
     def _gravar_timers(self, lista):
@@ -195,7 +211,8 @@ class Satelite:
 
     def estado_publico(self):
         agora = time.time()
-        return dict(self.maestro.publico(), volume=self.volume.atual, update_pendente=bool(self.anel.pendente),
+        return dict(self.maestro.publico(), volume=self.volume.posicao, volume_pct=self.volume.normal,
+                    update_pendente=bool(self.anel.pendente),
                     palavras=self._modos_palavras(),  # spec 2026-10-24: {nome: modo}, para o futuro sensor do HA
                     palavras_carregadas=sorted(self.palavras_carregadas()),  # saúde do OTA (spec 2026-11-10 §6.9)
                     captura_taxa=None if self.taxa_captura.atual() is None else round(self.taxa_captura.atual(), 3),
@@ -830,28 +847,6 @@ class Satelite:
             self.alto.tocar_wav(caminho)
             await asyncio.sleep(volta)
 
-    def _avisar_volume(self, posicao):
-        """Ponte de volume (spec 2026-10-21 §6.2): manda a posição ao espelho no HA (`volume_webhook_url` da config;
-        sem ela, nada). Pode vir de qualquer thread; uma rajada de apertos vira um envio só, com a posição final."""
-        if not self.cfg.get("volume_webhook_url"):
-            return
-        pendente, self._volume_aviso = self._volume_aviso is not None, posicao
-        if not pendente:
-            self.loop.call_soon_threadsafe(lambda: asyncio.ensure_future(self._enviar_volume()))
-
-    async def _enviar_volume(self):
-        await asyncio.sleep(0.3)  # junta a rajada de apertos do Jabra
-        posicao, self._volume_aviso = self._volume_aviso, None
-        corpo = {"satellite": self.sid, "position": posicao, "percent": vol.descrever(posicao)["percentual"]}
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.post(self.cfg["volume_webhook_url"], json=corpo,
-                                  timeout=aiohttp.ClientTimeout(total=5)) as r:
-                    resultado = r.status
-        except Exception as e:
-            resultado = type(e).__name__
-        print(json.dumps({"volume_espelho": corpo["percent"], "resultado": resultado}), flush=True)
-
     async def _avisar_bot(self, corpo):
         """POST /satellite_alert (Telegram do dono; cadastro_voz também vira entrega falada). Sem o add-on, fica só
         no journal."""
@@ -896,7 +891,7 @@ class Satelite:
         if cmd.get("acao") == "timer_cancelar":
             self._limpar_timer_voz()
         if self.volume.normal != volume_antes:
-            self.emissor.emitir("config", {"mudancas": {"volume": self.volume.normal}, "origem": "voz"})
+            self.emissor.emitir("config", {"mudancas": {"volume_pct": self.volume.normal}, "origem": "voz"})
         if "bip_volume" in efeitos:
             self.alto.tocar_wav(self._som("volume"))
         if cmd.get("acao") == "vozes_consultar" and resposta.get("ok") is not False:
@@ -953,8 +948,8 @@ class Satelite:
         antes = self.volume.normal
         self.volume.apertou(delta, time.monotonic())
         if self.volume.normal != antes:
-            self.emissor.emitir("config", {"mudancas": {"volume": self.volume.normal}, "origem": "botao"})
-        print(json.dumps({"botao_volume": delta, "posicao": self.volume.atual}), flush=True)
+            self.emissor.emitir("config", {"mudancas": {"volume_pct": self.volume.normal}, "origem": "botao"})
+        print(json.dumps({"botao_volume": delta, "posicao": self.volume.posicao, "pct": self.volume.atual}), flush=True)
 
     def _som_aprendizagem(self, nome):
         if nome == "bipe":
@@ -1155,7 +1150,7 @@ class Satelite:
         """O anel e o volume voltam ao que eram (no Jabra a contagem desenha com os LEDs de volume)."""
         self.anel.reapply()
         if self.volume.atual is not None:
-            self.mixer.escrever(self.volume.atual)
+            self.mixer_fino.reaplicar(self.volume.atual)
 
     def tique(self):
         if self.doa_trava is not None and self.doa_trava.travado:  # 17/11: teto de 90 s da trava de feixe
@@ -1208,10 +1203,9 @@ class Satelite:
         self.evento(nome, valor)
 
     def ao_mudar_config(self, novo):
-        mudancas = {k: v for k, v in novo.items() if k not in ("senha_porta_local", "volume_webhook_url")
-                    and self.cfg.get(k) != v}
+        mudancas = {k: v for k, v in novo.items() if k != "senha_porta_local" and self.cfg.get(k) != v}
         mudou_np = bool(novo.get("nao_perturbe")) != self.maestro.nao_perturbe
-        mudou_volume = novo.get("volume") is not None and novo.get("volume") != self.volume.normal
+        mudou_volume = novo.get("volume_pct") is not None and novo.get("volume_pct") != self.volume.normal
         mudou_mudo = bool(novo.get("mudo")) != bool(self.cfg.get("mudo"))
         self.cfg = novo
         if any(k in mudancas for k in cfgmod.CHAVES_DOIS_FEIXES):
@@ -1227,7 +1221,7 @@ class Satelite:
         self.volume.alertas_numero = novo["volume_alertas"]
         self.ducker.duck_percent, self.ducker.restore_s = novo["music_duck_percent"], novo["music_restore_s"]
         if mudou_volume:  # PUT /config (futura integração no HA)
-            self.volume.definir(novo["volume"])
+            self.volume.definir(novo["volume_pct"], time.monotonic())  # arraste no MA: grava quando parar
         if mudou_np:  # PUT /config pela porta local
             self.evento("nao_perturbe", bool(novo.get("nao_perturbe")))
 

@@ -1,6 +1,7 @@
 """Comandos que a Friday manda ao satélite dentro da conversa (spec 2026-10-12 §4). Lógica pura: devolve a
 resposta (que volta ao bot com o mesmo id) e os efeitos que o programa executa (ex.: tocar o bip de volume)."""
 import os, re
+import escala
 import volume as v
 import cadastro
 import palavras as pw
@@ -19,9 +20,12 @@ def _volume(cmd, ctl):
     if len(dados) != 1:
         raise ValueError("informe só um: numero, percentual ou ajuste")
     if "numero" in dados:
-        k = ctl.definir(v.posicao_de_numero(dados["numero"]))
+        k = ctl.definir(escala.grade(v.posicao_de_numero(dados["numero"])))
     elif "percentual" in dados:
-        k = ctl.definir(v.posicao_de_percentual(dados["percentual"]))
+        p = dados["percentual"]
+        if isinstance(p, bool) or not isinstance(p, (int, float)) or not 0 <= p <= 100:
+            raise ValueError("percentual de 0 a 100")
+        k = ctl.definir(int(round(p)))
     elif dados["ajuste"] in ("mais", "menos"):
         k = ctl.passo(+1 if dados["ajuste"] == "mais" else -1)
     else:

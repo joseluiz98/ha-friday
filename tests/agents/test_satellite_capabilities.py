@@ -1,5 +1,6 @@
 """Satellite agent: control mapping, program-down state, local event route."""
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -16,13 +17,31 @@ WW = [{"nome": "friday", "modo": "ativa", "limiar": 0.5, "principal": True, "tre
       {"nome": "sexta_feira", "modo": "sombra", "limiar": 0.35, "principal": False, "treinada": True}]
 
 
-def test_volume_percent_position_roundtrip():
-    assert cap.position_from_percent(0) == 1
-    assert cap.position_from_percent(100) == 11
-    assert cap.position_from_percent(50) == 6
-    assert cap.percent_from_position(11) == 100
-    assert cap.percent_from_position(6) == 55
-    assert cap.percent_from_position(0) == 0
+def test_volume_state_is_the_exact_percent():
+    cfg = dict(CFG, volume=8, volume_pct=70)
+    assert cap.Mapper().state(cfg, WW, None)["volume"] == 70
+    assert cap.Mapper().state(cfg, WW, {"estado": "parada", "volume_pct": 75})["volume"] == 75  # live wins
+    assert cap.Mapper().state(dict(CFG, volume=8), WW, None)["volume"] == 73  # old program
+    assert cap.Mapper().state(dict(CFG, volume=None), WW, {"estado": "parada", "volume": 11})["volume"] == 100
+
+
+def test_ha_volume_echo_with_both_keys_is_ha():
+    t = cap.Tracker(clock=lambda: 100.0)
+    t.mark_ha({"volume_pct": 70})
+    echo = {"mudancas": {"volume_pct": 70, "volume": 8}, "origem": "porta"}
+    assert t.on_event("config", echo)["origin"] == "ha"
+
+
+async def test_serialized_never_lets_a_slow_older_run_finish_last():
+    seen = []
+
+    async def work(delay, value):
+        await asyncio.sleep(delay)
+        seen.append(value)
+
+    run = cap.serialized(work)
+    await asyncio.gather(run(0.05, "old"), run(0, "new"))
+    assert seen == ["old", "new"]
 
 
 def _nums(c):
@@ -77,7 +96,7 @@ def test_ducking_switch_restores_last_level():
 
 def test_volume_set_and_unknown():
     m = cap.Mapper()
-    assert m.to_program(CFG, "volume", 100) == {"config": {"volume": 11}}
+    assert m.to_program(CFG, "volume", 70.0) == {"config": {"volume_pct": 70}}
     assert m.to_program(CFG, "do_not_disturb", True) == {"config": {"nao_perturbe": True}}
     assert m.to_program(CFG, "bogus", 1) is None
 
